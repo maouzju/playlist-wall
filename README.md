@@ -10,6 +10,7 @@
 
 - Windows 发布版统一放在 GitHub Releases: <https://github.com/maouzju/playlist-wall/releases>
 - 最新版本下载页: <https://github.com/maouzju/playlist-wall/releases/latest>
+- 发布物是一个可直接解压运行的 `.zip` 文件，不提供安装器；解压后运行文件夹中的 `Playlist Wall.exe` 即可。
 
 ## 非官方声明
 

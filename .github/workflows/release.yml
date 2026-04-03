@@ -35,7 +35,5 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            release/*.exe
-            release/latest*.yml
-            release/*.blockmap
+            release/*.zip
           generate_release_notes: true

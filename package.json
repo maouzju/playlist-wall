@@ -24,7 +24,7 @@
     "start": "node scripts/start-electron.js",
     "test:ui": "playwright test tests/electron-ui.spec.js --reporter=line",
     "third-party:notices": "node scripts/generate-third-party-notices.js",
-    "dist:win": "npm run third-party:notices && electron-builder --win nsis portable --publish never"
+    "dist:win": "npm run third-party:notices && electron-builder --win dir --x64 --publish never && node scripts/package-win-folder.js"
   },
   "dependencies": {
     "NeteaseCloudMusicApi": "^4.30.0"
@@ -59,30 +59,12 @@
       "signAndEditExecutable": false,
       "target": [
         {
-          "target": "nsis",
-          "arch": [
-            "x64"
-          ]
-        },
-        {
-          "target": "portable",
+          "target": "dir",
           "arch": [
             "x64"
           ]
         }
       ]
-    },
-    "nsis": {
-      "artifactName": "playlist-wall-${version}-setup-${arch}.${ext}",
-      "oneClick": false,
-      "perMachine": false,
-      "allowToChangeInstallationDirectory": true,
-      "createDesktopShortcut": true,
-      "createStartMenuShortcut": true,
-      "shortcutName": "Playlist Wall"
-    },
-    "portable": {
-      "artifactName": "playlist-wall-${version}-portable-${arch}.${ext}"
     }
   }
 }
