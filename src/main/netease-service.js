@@ -1,6 +1,7 @@
 const api = require('NeteaseCloudMusicApi')
 
 const PLAYLIST_PAGE_SIZE = 1000
+const EXPLORE_DETAIL_CONCURRENCY = 4
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -71,6 +72,69 @@ function normalizeTrackRecord(track, index = 0) {
     durationMs: Number(source?.dt || source?.duration || track?.durationMs || 0),
     position: Number(track?.position || source?.position || index + 1),
   }
+}
+
+function normalizePlaylistSummary(playlist, overrides = {}) {
+  const creator = playlist?.creator || {}
+
+  return {
+    id: Number(overrides.id || playlist?.id || 0),
+    sourcePlaylistId: Number(overrides.sourcePlaylistId || playlist?.sourcePlaylistId || playlist?.id || 0),
+    name: playlist?.name || '',
+    trackCount: Number(playlist?.trackCount || 0),
+    coverUrl: playlist?.coverImgUrl || playlist?.coverUrl || '',
+    specialType: Number(playlist?.specialType || 0),
+    subscribed: overrides.subscribed !== undefined
+      ? Boolean(overrides.subscribed)
+      : Boolean(playlist?.subscribed),
+    creatorId: Number(overrides.creatorId || creator?.userId || playlist?.creatorId || 0),
+    creatorName: overrides.creatorName || creator?.nickname || playlist?.creatorName || '',
+    playCount: Number(overrides.playCount || playlist?.playCount || 0),
+    copywriter: overrides.copywriter || playlist?.copywriter || '',
+    exploreSourceLabel: overrides.exploreSourceLabel || playlist?.exploreSourceLabel || '',
+    isExplore: overrides.isExplore !== undefined
+      ? Boolean(overrides.isExplore)
+      : Boolean(playlist?.isExplore),
+  }
+}
+
+function normalizeExplorePlaylistDetail(playlist, detail, overrides = {}) {
+  const summary = normalizePlaylistSummary(detail || playlist, {
+    ...overrides,
+    id: Number(playlist?.id || detail?.id || 0),
+    sourcePlaylistId: Number(playlist?.sourcePlaylistId || playlist?.id || detail?.id || 0),
+    isExplore: true,
+  })
+  const tracks = Array.isArray(detail?.tracks)
+    ? detail.tracks.map((track, index) => normalizeTrackRecord(track, index))
+    : []
+  const expectedTrackCount = Math.max(Number(detail?.trackCount || summary.trackCount || 0), tracks.length)
+
+  return {
+    ...summary,
+    trackCount: expectedTrackCount,
+    tracks,
+    tracksError: overrides.tracksError || '',
+    hydrated: tracks.length >= expectedTrackCount,
+    hydrating: false,
+  }
+}
+
+async function mapWithConcurrency(items, limit, mapper) {
+  const results = new Array(items.length)
+  let cursor = 0
+
+  async function worker() {
+    while (cursor < items.length) {
+      const index = cursor
+      cursor += 1
+      results[index] = await mapper(items[index], index)
+    }
+  }
+
+  const workerCount = Math.max(1, Math.min(limit, items.length))
+  await Promise.all(Array.from({ length: workerCount }, () => worker()))
+  return results
 }
 
 async function callApi(name, params, options = {}) {
@@ -346,6 +410,56 @@ class NeteaseService {
     ensureApiSuccess(response.body, '\u52a0\u5165\u6b4c\u5355\u5931\u8d25')
   }
 
+  async subscribePlaylist(playlistId) {
+    const response = await callApi('playlist_subscribe', {
+      cookie: this.cookie,
+      id: playlistId,
+      t: 1,
+    }, {
+      fallbackMessage: '\u6536\u85cf\u6b4c\u5355\u5931\u8d25',
+      codeMessages: {
+        301: '\u9700\u8981\u6709\u6548\u7684\u7f51\u6613\u4e91\u767b\u5f55\u6001\uff0c\u624d\u80fd\u6536\u85cf\u6b4c\u5355\u3002',
+      },
+    })
+
+    ensureApiSuccess(response.body, '\u6536\u85cf\u6b4c\u5355\u5931\u8d25')
+  }
+
+  async unsubscribePlaylist(playlistId) {
+    const response = await callApi('playlist_subscribe', {
+      cookie: this.cookie,
+      id: playlistId,
+      t: 2,
+    }, {
+      fallbackMessage: '\u5220\u9664\u6536\u85cf\u6b4c\u5355\u5931\u8d25',
+      codeMessages: {
+        301: '\u9700\u8981\u6709\u6548\u7684\u7f51\u6613\u4e91\u767b\u5f55\u6001\uff0c\u624d\u80fd\u5220\u9664\u6536\u85cf\u6b4c\u5355\u3002',
+      },
+    })
+
+    ensureApiSuccess(response.body, '\u5220\u9664\u6536\u85cf\u6b4c\u5355\u5931\u8d25')
+  }
+
+  async updatePlaylistTrackOrder(playlistId, trackIds) {
+    const normalizedTrackIds = [...new Set((trackIds || []).map((id) => Number(id)).filter((id) => id > 0))]
+    if (!normalizedTrackIds.length) {
+      throw new Error('\u66f4\u65b0\u6b4c\u5355\u987a\u5e8f\u5931\u8d25')
+    }
+
+    const response = await callApi('song_order_update', {
+      cookie: this.cookie,
+      pid: playlistId,
+      ids: JSON.stringify(normalizedTrackIds),
+    }, {
+      fallbackMessage: '\u66f4\u65b0\u6b4c\u5355\u987a\u5e8f\u5931\u8d25',
+      codeMessages: {
+        301: '\u9700\u8981\u6709\u6548\u7684\u7f51\u6613\u4e91\u767b\u5f55\u6001\uff0c\u624d\u80fd\u8c03\u6574\u6b4c\u5355\u987a\u5e8f\u3002',
+      },
+    })
+
+    ensureApiSuccess(response.body, '\u66f4\u65b0\u6b4c\u5355\u987a\u5e8f\u5931\u8d25')
+  }
+
   async getPlaylistRecommendations(seedTrackIds, count = 12) {
     const normalizedSeedTrackIds = [...new Set((seedTrackIds || []).map((id) => Number(id)).filter((id) => id > 0))]
     const seen = new Set()
@@ -388,6 +502,171 @@ class NeteaseService {
     }
 
     return tracks
+  }
+
+  async getExplorePlaylists(query = '', options = {}) {
+    const normalizedQuery = String(query || '').trim()
+    return normalizedQuery
+      ? this.searchExplorePlaylists(normalizedQuery, options)
+      : this.getDefaultExplorePlaylists(options)
+  }
+
+  async getDefaultExplorePlaylists(options = {}) {
+    const dailyLimit = Math.max(1, Number(options.dailyLimit || 6))
+    const communityLimit = Math.max(1, Number(options.communityLimit || 12))
+    const merged = []
+    let fallbackError = null
+
+    try {
+      const daily = await this.getDailyRecommendedPlaylistPreviews(dailyLimit)
+      merged.push(...daily)
+    } catch (error) {
+      fallbackError = error
+    }
+
+    try {
+      const community = await this.getCommunityPlaylistPreviews(communityLimit, options.cat || '全部')
+      merged.push(...community)
+    } catch (error) {
+      fallbackError = fallbackError || error
+    }
+
+    if (!merged.length && fallbackError) {
+      throw fallbackError
+    }
+
+    return [...new Map(
+      merged
+        .filter((playlist) => Number(playlist?.sourcePlaylistId || playlist?.id || 0) > 0)
+        .map((playlist) => [Number(playlist.sourcePlaylistId || playlist.id), playlist])
+    ).values()]
+  }
+
+  async searchExplorePlaylists(keywords, options = {}) {
+    const response = await callApi('search', {
+      cookie: this.cookie,
+      keywords,
+      type: 1000,
+      limit: Math.max(1, Number(options.limit || 18)),
+      offset: Math.max(0, Number(options.offset || 0)),
+    }, {
+      fallbackMessage: '搜索社区歌单失败',
+      codeMessages: {
+        301: '搜索社区歌单需要有效的网易云登录态，请刷新登录后再试。',
+      },
+    })
+
+    const playlists = response.body?.result?.playlists || []
+    return this.expandExplorePlaylistPreviews(
+      playlists.map((playlist) => normalizePlaylistSummary(playlist, {
+        sourcePlaylistId: Number(playlist?.id || 0),
+        exploreSourceLabel: '搜索结果',
+        isExplore: true,
+      })),
+      { exploreSourceLabel: '搜索结果' }
+    )
+  }
+
+  async getDailyRecommendedPlaylistPreviews(limit = 6) {
+    let playlists = []
+
+    try {
+      const response = await callApi('recommend_resource', {
+        cookie: this.cookie,
+      }, {
+        fallbackMessage: '获取每日推荐歌单失败',
+        codeMessages: {
+          301: '获取每日推荐歌单需要有效的网易云登录态，请刷新登录后再试。',
+        },
+      })
+      playlists = (response.body?.recommend || [])
+        .slice(0, limit)
+        .map((playlist) => normalizePlaylistSummary(playlist, {
+          sourcePlaylistId: Number(playlist?.id || 0),
+          exploreSourceLabel: playlist?.copywriter || '每日推荐',
+          isExplore: true,
+        }))
+    } catch (error) {
+      if (Number(error?.status || error?.body?.code || 0) !== 301) {
+        throw error
+      }
+    }
+
+    if (!playlists.length) {
+      const fallback = await callApi('personalized', {
+        cookie: this.cookie,
+        limit,
+      }, {
+        fallbackMessage: '获取推荐歌单失败',
+      })
+      playlists = (fallback.body?.result || [])
+        .slice(0, limit)
+        .map((playlist) => normalizePlaylistSummary(playlist, {
+          sourcePlaylistId: Number(playlist?.id || 0),
+          exploreSourceLabel: '推荐歌单',
+          isExplore: true,
+        }))
+    }
+
+    return this.expandExplorePlaylistPreviews(playlists, { exploreSourceLabel: '每日推荐' })
+  }
+
+  async getCommunityPlaylistPreviews(limit = 12, cat = '全部') {
+    const response = await callApi('top_playlist_highquality', {
+      cookie: this.cookie,
+      cat,
+      limit,
+    }, {
+      fallbackMessage: '获取社区歌单失败',
+    })
+
+    const playlists = (response.body?.playlists || [])
+      .slice(0, limit)
+      .map((playlist) => normalizePlaylistSummary(playlist, {
+        sourcePlaylistId: Number(playlist?.id || 0),
+        exploreSourceLabel: cat && cat !== '全部' ? `${cat} 社区精选` : '社区精选',
+        isExplore: true,
+      }))
+
+    return this.expandExplorePlaylistPreviews(playlists, {
+      exploreSourceLabel: cat && cat !== '全部' ? `${cat} 社区精选` : '社区精选',
+    })
+  }
+
+  async expandExplorePlaylistPreviews(playlists, overrides = {}) {
+    const normalizedPlaylists = [...new Map(
+      (playlists || [])
+        .map((playlist) => normalizePlaylistSummary(playlist, {
+          ...overrides,
+          sourcePlaylistId: Number(playlist?.sourcePlaylistId || playlist?.id || 0),
+          isExplore: true,
+        }))
+        .filter((playlist) => playlist.sourcePlaylistId > 0)
+        .map((playlist) => [playlist.sourcePlaylistId, playlist])
+    ).values()]
+
+    return mapWithConcurrency(normalizedPlaylists, EXPLORE_DETAIL_CONCURRENCY, async (playlist) => {
+      try {
+        const detail = await callApi('playlist_detail', {
+          cookie: this.cookie,
+          id: playlist.sourcePlaylistId,
+          s: 8,
+        }, {
+          fallbackMessage: '获取探索歌单详情失败',
+        })
+        return normalizeExplorePlaylistDetail(playlist, detail.body?.playlist || {}, {
+          exploreSourceLabel: playlist.exploreSourceLabel,
+        })
+      } catch (error) {
+        return {
+          ...normalizeExplorePlaylistDetail(playlist, {}, {
+            exploreSourceLabel: playlist.exploreSourceLabel,
+            tracksError: error.message || '该歌单暂时无法展开。',
+          }),
+          hydrated: true,
+        }
+      }
+    })
   }
 
   async logout() {

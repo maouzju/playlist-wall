@@ -7,6 +7,9 @@ const UI_SCALE_MIN = 80
 const UI_SCALE_MAX = 125
 const UI_SCALE_STEP = 5
 const UI_SCALE_DEFAULT = 100
+const LIKED_PLAYLIST_DISPLAY_MODE_ALL = 'all'
+const LIKED_PLAYLIST_DISPLAY_MODE_UNCOLLECTED = 'uncollected'
+const LIKED_PLAYLIST_DISPLAY_MODE_HIDDEN = 'hidden'
 
 function normalizeUiScale(input) {
   const numeric = Number(input)
@@ -20,10 +23,45 @@ function normalizeUiScale(input) {
   )
 }
 
+function normalizeLikedPlaylistDisplayMode(input) {
+  if (input === LIKED_PLAYLIST_DISPLAY_MODE_UNCOLLECTED) {
+    return LIKED_PLAYLIST_DISPLAY_MODE_UNCOLLECTED
+  }
+
+  if (input === LIKED_PLAYLIST_DISPLAY_MODE_HIDDEN) {
+    return LIKED_PLAYLIST_DISPLAY_MODE_HIDDEN
+  }
+
+  return LIKED_PLAYLIST_DISPLAY_MODE_ALL
+}
+
+function normalizeCollapsedPlaylistIds(input) {
+  if (!Array.isArray(input)) {
+    return []
+  }
+
+  const seen = new Set()
+  const ids = []
+
+  for (const value of input) {
+    const normalizedId = Math.trunc(Number(value || 0))
+    if (!Number.isSafeInteger(normalizedId) || normalizedId === 0 || seen.has(normalizedId)) {
+      continue
+    }
+
+    seen.add(normalizedId)
+    ids.push(normalizedId)
+  }
+
+  return ids.sort((left, right) => left - right)
+}
+
 function normalizePreferences(input = {}) {
   return {
     theme: input?.theme === 'dark' ? 'dark' : 'light',
     showPlaylistRecommendations: Boolean(input?.showPlaylistRecommendations),
+    likedPlaylistDisplayMode: normalizeLikedPlaylistDisplayMode(input?.likedPlaylistDisplayMode),
+    collapsedPlaylistIds: normalizeCollapsedPlaylistIds(input?.collapsedPlaylistIds),
     uiScale: normalizeUiScale(input?.uiScale),
   }
 }

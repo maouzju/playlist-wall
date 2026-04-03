@@ -1,6 +1,6 @@
 {
   "name": "playlist-wall",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Unofficial Playlist Wall desktop organizer for NetEase Cloud Music / 非官方网易云音乐歌单整理工具",
   "type": "commonjs",
   "main": "src/main/main.js",
@@ -22,6 +22,7 @@
   ],
   "scripts": {
     "start": "node scripts/start-electron.js",
+    "test:node": "node --test tests/safe-console.test.js",
     "test:ui": "playwright test tests/electron-ui.spec.js --reporter=line",
     "third-party:notices": "node scripts/generate-third-party-notices.js",
     "dist:win": "npm run third-party:notices && electron-builder --win dir --x64 --publish never && node scripts/package-win-folder.js"

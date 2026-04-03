@@ -56,6 +56,28 @@
               <span class="tab-btn__count" id="tab-subscribed-count">0</span>
             </span>
           </button>
+          <button class="tab-btn tab-btn--icon" id="tab-explore" type="button" role="tab" aria-selected="false" aria-label="探索歌单">
+            <span class="tab-btn__content">
+              <svg class="icon-stroke tab-btn__icon" viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="11" cy="11" r="6"></circle>
+                <path d="M16 16l4 4"></path>
+                <path d="M11 8.5v5"></path>
+                <path d="M8.5 11h5"></path>
+              </svg>
+              <span class="tab-btn__count" id="tab-explore-count">0</span>
+            </span>
+          </button>
+          <button class="tab-btn tab-btn--icon" id="tab-artists" type="button" role="tab" aria-selected="false" aria-label="鑹轰汉姝屽崟">
+            <span class="tab-btn__content">
+              <svg class="icon-stroke tab-btn__icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M12 4v11"></path>
+                <path d="M12 8c2.9-1.8 5.6-2.5 8-2v8c-2.4-.5-5.1.2-8 2"></path>
+                <path d="M12 8c-2.9-1.8-5.6-2.5-8-2v8c2.4-.5 5.1.2 8 2"></path>
+                <circle cx="12" cy="18" r="1.75"></circle>
+              </svg>
+              <span class="tab-btn__count" id="tab-artists-count">0</span>
+            </span>
+          </button>
         </div>
 
         <label class="search-shell" for="search-input">
@@ -96,6 +118,10 @@
 
     <main id="content">
       <section id="wall-view">
+        <div id="explore-loading-indicator" class="explore-loading-indicator hidden" role="status" aria-live="polite" aria-atomic="true">
+          <span class="explore-loading-indicator__spinner" aria-hidden="true"></span>
+          <span class="explore-loading-indicator__text" id="explore-loading-text">正在加载探索歌单...</span>
+        </div>
         <div id="wall-scroll">
           <div id="wall-columns"></div>
           <div id="wall-empty" class="hidden">
@@ -218,6 +244,17 @@
       </div>
       <input id="playlist-recommendations-toggle" type="checkbox">
     </label>
+    <label class="settings-row" for="liked-playlist-display-mode-select">
+      <div class="settings-copy">
+        <div class="settings-label">&#x7231;&#x5FC3;&#x6B4C;&#x5355;&#x5982;&#x4F55;&#x5C55;&#x73B0;</div>
+        <div class="settings-hint">&#x5B8C;&#x6574;&#x663E;&#x793A;&#x6216;&#x53EA;&#x4FDD;&#x7559;&#x8FD8;&#x6CA1;&#x88AB;&#x5176;&#x4ED6;&#x81EA;&#x5EFA;&#x6B4C;&#x5355;&#x6536;&#x5F55;&#x7684;&#x66F2;&#x76EE;&#x3002;</div>
+      </div>
+      <select id="liked-playlist-display-mode-select" class="settings-select">
+        <option value="all">&#x5B8C;&#x6574;&#x663E;&#x793A;</option>
+        <option value="uncollected">&#x4EC5;&#x663E;&#x793A;&#x672A;&#x88AB;&#x6B4C;&#x5355;&#x6536;&#x5F55;&#x7684;</option>
+        <option value="hidden">&#x9690;&#x85CF;</option>
+      </select>
+    </label>
     <div class="settings-row settings-row--actions">
       <div class="settings-copy">
         <div class="settings-label">账号</div>
@@ -235,6 +272,7 @@
     <img id="album-hover-preview-image" alt="">
   </div>
 
+  <div id="playlist-undo-layer" aria-live="polite"></div>
   <div id="toast-wrap"></div>
   <audio id="audio" preload="none"></audio>
   <script src="app.js"></script>

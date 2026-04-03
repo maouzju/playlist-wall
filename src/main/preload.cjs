@@ -16,8 +16,13 @@ contextBridge.exposeInMainWorld('bridge', {
   getSongUrl: (songId) => ipcRenderer.invoke('getSongUrl', songId),
   recordTrackPlay: (userId, trackId) => ipcRenderer.invoke('recordTrackPlay', userId, trackId),
   getPlaylistRecommendations: (playlistId, seedTrackIds, count) => ipcRenderer.invoke('getPlaylistRecommendations', playlistId, seedTrackIds, count),
+  getExplorePlaylists: (options) => ipcRenderer.invoke('getExplorePlaylists', options),
+  subscribePlaylist: (playlist) => ipcRenderer.invoke('subscribePlaylist', playlist),
   addTrackToPlaylist: (playlistId, track) => ipcRenderer.invoke('addTrackToPlaylist', playlistId, track),
   removeTrackFromPlaylist: (playlistId, trackId) => ipcRenderer.invoke('removeTrackFromPlaylist', playlistId, trackId),
+  removeSubscribedPlaylist: (playlistId) => ipcRenderer.invoke('removeSubscribedPlaylist', playlistId),
+  restoreSubscribedPlaylist: (playlist) => ipcRenderer.invoke('restoreSubscribedPlaylist', playlist),
+  commitPlaylistTrackMove: (payload) => ipcRenderer.invoke('commitPlaylistTrackMove', payload),
   onProgress: (callback) => bind('progress', callback),
   onPlaylistPatch: (callback) => bind('playlist-patch', callback),
 })

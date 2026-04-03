@@ -1,3 +1,7 @@
+const { installSafeConsole } = require('./safe-console')
+
+installSafeConsole()
+
 const fs = require('fs')
 const path = require('path')
 const { app, BrowserWindow, ipcMain } = require('electron')
@@ -24,6 +28,8 @@ const TEXT = {
   privatePlaylist: '\u8be5\u6b4c\u5355\u662f\u79c1\u5bc6\u6b4c\u5355\uff0c\u6682\u65f6\u65e0\u6cd5\u5c55\u5f00\u3002',
   playlistUnavailable: '\u8be5\u6b4c\u5355\u6682\u65f6\u65e0\u6cd5\u5c55\u5f00\u3002',
   partialPlaylistUnavailable: '\u5269\u4f59\u66f2\u76ee\u6682\u65f6\u65e0\u6cd5\u5c55\u5f00\u3002',
+  removeSubscribedPlaylistFailed: '\u5220\u9664\u6536\u85cf\u6b4c\u5355\u5931\u8d25',
+  restoreSubscribedPlaylistFailed: '\u64a4\u9500\u5220\u9664\u6b4c\u5355\u5931\u8d25',
 }
 
 let win = null
@@ -123,6 +129,20 @@ function clearSessionAndCaches() {
   clearPlaylistCaches()
 }
 
+function ensureServiceReady() {
+  if (svc) {
+    return svc
+  }
+
+  const session = readSession()
+  if (!session?.cookie) {
+    throw new Error(TEXT.serviceNotReady)
+  }
+
+  svc = new NeteaseService(session.cookie)
+  return svc
+}
+
 function normalizeAccount(account) {
   return {
     userId: Number(account?.userId || 0),
@@ -134,6 +154,7 @@ function normalizeAccount(account) {
 function normalizePlaylistMeta(playlist) {
   return {
     id: Number(playlist?.id || 0),
+    sourcePlaylistId: Number(playlist?.sourcePlaylistId || playlist?.id || 0),
     name: playlist?.name || '',
     trackCount: Number(playlist?.trackCount || 0),
     coverUrl: playlist?.coverUrl || playlist?.coverImgUrl || '',
@@ -145,6 +166,11 @@ function normalizePlaylistMeta(playlist) {
       || playlist?.creator?.userId
       || 0
     ),
+    creatorName: playlist?.creatorName || playlist?.creator?.nickname || '',
+    playCount: Number(playlist?.playCount || 0),
+    copywriter: playlist?.copywriter || '',
+    exploreSourceLabel: playlist?.exploreSourceLabel || '',
+    isExplore: Boolean(playlist?.isExplore),
   }
 }
 
@@ -159,6 +185,16 @@ function normalizeTracks(tracks) {
     durationMs: Number(track?.durationMs || 0),
     position: Number(track?.position || index + 1),
   })).filter((track) => track.id > 0)
+}
+
+function normalizePlaylistPayload(playlist) {
+  return {
+    ...normalizePlaylistMeta(playlist),
+    tracks: normalizeTracks(playlist?.tracks || []),
+    tracksError: playlist?.tracksError || '',
+    hydrated: Boolean(playlist?.hydrated),
+    hydrating: Boolean(playlist?.hydrating) && !playlist?.hydrated,
+  }
 }
 
 function mergePlaylists(livePlaylists, cachedPlaylists) {
@@ -277,6 +313,56 @@ function savePlaylistDetailCache(playlist, tracks) {
   })
 }
 
+function replacePlaylistTracksInCache(playlistId, tracks) {
+  const normalizedPlaylistId = Number(playlistId || 0)
+  if (normalizedPlaylistId <= 0) {
+    return
+  }
+
+  const normalizedTracks = normalizeTracks(tracks).map((track, index) => ({
+    ...track,
+    position: index + 1,
+  }))
+
+  const bootstrap = readJsonCache('playlists-current.json')
+  const bootstrapPlaylists = Array.isArray(bootstrap?.playlists) ? bootstrap.playlists : []
+  const bootstrapPlaylist = bootstrapPlaylists.find((playlist) => Number(playlist?.id) === normalizedPlaylistId) || null
+
+  if (bootstrap && bootstrapPlaylists.length) {
+    bootstrap.playlists = bootstrapPlaylists.map((playlist) => {
+      if (Number(playlist?.id) !== normalizedPlaylistId) {
+        return playlist
+      }
+      return {
+        ...playlist,
+        trackCount: normalizedTracks.length,
+      }
+    })
+    writeJsonCache('playlists-current.json', bootstrap)
+  }
+
+  const detailFileName = `playlist-detail-${normalizedPlaylistId}.json`
+  const detail = readJsonCache(detailFileName) || {}
+  const detailPlaylist = detail.playlist || {}
+
+  detail.ok = true
+  detail.updatedAt = new Date().toISOString()
+  detail.playlist = {
+    ...detailPlaylist,
+    id: normalizedPlaylistId,
+    name: detailPlaylist.name || bootstrapPlaylist?.name || '',
+    trackCount: normalizedTracks.length,
+    coverImgUrl: detailPlaylist.coverImgUrl || bootstrapPlaylist?.coverUrl || '',
+  }
+  detail.tracks = normalizedTracks
+
+  if (Array.isArray(detail.playlist.tracks)) {
+    detail.playlist.tracks = normalizedTracks
+  }
+
+  writeJsonCache(detailFileName, detail)
+}
+
 function addTrackToCache(playlistId, track) {
   const normalizedTrack = normalizeTracks([track])[0]
   if (!normalizedTrack) {
@@ -352,6 +438,54 @@ function removeTrackFromCache(playlistId, trackId) {
     }
   }
   writeJsonCache(`playlist-detail-${playlistId}.json`, detail)
+}
+
+function removePlaylistFromCache(playlistId) {
+  const normalizedPlaylistId = Number(playlistId || 0)
+  if (normalizedPlaylistId <= 0) {
+    return
+  }
+
+  const bootstrap = readJsonCache('playlists-current.json')
+  if (bootstrap && Array.isArray(bootstrap.playlists)) {
+    bootstrap.playlists = bootstrap.playlists.filter((playlist) => Number(playlist?.id || 0) !== normalizedPlaylistId)
+    bootstrap.updatedAt = new Date().toISOString()
+    writeJsonCache('playlists-current.json', bootstrap)
+  }
+
+  deleteJsonCache(`playlist-detail-${normalizedPlaylistId}.json`)
+}
+
+function upsertPlaylistInCache(playlist) {
+  const normalizedPlaylist = normalizePlaylistPayload(playlist)
+  if (normalizedPlaylist.id <= 0) {
+    return
+  }
+
+  const bootstrap = readJsonCache('playlists-current.json') || {
+    ok: true,
+    updatedAt: new Date().toISOString(),
+    account: null,
+    playlists: [],
+  }
+  const currentPlaylists = Array.isArray(bootstrap.playlists) ? bootstrap.playlists : []
+  const playlistSummary = {
+    id: normalizedPlaylist.id,
+    name: normalizedPlaylist.name,
+    trackCount: normalizedPlaylist.trackCount,
+    coverUrl: normalizedPlaylist.coverUrl,
+    specialType: normalizedPlaylist.specialType,
+    subscribed: normalizedPlaylist.subscribed,
+    creatorUserId: normalizedPlaylist.creatorId,
+  }
+  const existingIndex = currentPlaylists.findIndex((item) => Number(item?.id || 0) === normalizedPlaylist.id)
+
+  bootstrap.playlists = existingIndex === -1
+    ? [...currentPlaylists, playlistSummary]
+    : currentPlaylists.map((item, index) => index === existingIndex ? { ...item, ...playlistSummary } : item)
+  bootstrap.updatedAt = new Date().toISOString()
+  writeJsonCache('playlists-current.json', bootstrap)
+  savePlaylistDetailCache(normalizedPlaylist, normalizedPlaylist.tracks)
 }
 
 function describePlaylistError(error, hasCachedTracks = false) {
@@ -725,6 +859,159 @@ function registerIpc() {
     }
   })
 
+  ipcMain.handle('subscribePlaylist', async (_event, playlist) => {
+    try {
+      if (!svc) {
+        throw new Error(TEXT.serviceNotReady)
+      }
+
+      const normalizedSourcePlaylistId = Number(playlist?.sourcePlaylistId || playlist?.id || 0)
+      if (normalizedSourcePlaylistId <= 0) {
+        throw new Error('\u6536\u85cf\u6b4c\u5355\u5931\u8d25')
+      }
+
+      await svc.subscribePlaylist(normalizedSourcePlaylistId)
+
+      const subscribedPlaylist = normalizePlaylistPayload({
+        ...playlist,
+        id: normalizedSourcePlaylistId,
+        sourcePlaylistId: normalizedSourcePlaylistId,
+        isExplore: false,
+        subscribed: true,
+        hydrated: Boolean(playlist?.hydrated !== false),
+        hydrating: false,
+      })
+
+      upsertPlaylistInCache(subscribedPlaylist)
+
+      return {
+        ok: true,
+        playlist: subscribedPlaylist,
+      }
+    } catch (error) {
+      return { ok: false, error: error.message || String(error) }
+    }
+  })
+
+  ipcMain.handle('removeSubscribedPlaylist', async (_event, playlistId) => {
+    try {
+      if (!svc) {
+        throw new Error(TEXT.serviceNotReady)
+      }
+
+      const normalizedPlaylistId = Number(playlistId || 0)
+      if (normalizedPlaylistId <= 0) {
+        throw new Error(TEXT.removeSubscribedPlaylistFailed)
+      }
+
+      await svc.unsubscribePlaylist(normalizedPlaylistId)
+      removePlaylistFromCache(normalizedPlaylistId)
+      return { ok: true }
+    } catch (error) {
+      return { ok: false, error: error.message || String(error) }
+    }
+  })
+
+  ipcMain.handle('restoreSubscribedPlaylist', async (_event, playlist) => {
+    try {
+      if (!svc) {
+        throw new Error(TEXT.serviceNotReady)
+      }
+
+      const normalizedPlaylistId = Number(playlist?.sourcePlaylistId || playlist?.id || 0)
+      if (normalizedPlaylistId <= 0) {
+        throw new Error(TEXT.restoreSubscribedPlaylistFailed)
+      }
+
+      await svc.subscribePlaylist(normalizedPlaylistId)
+      upsertPlaylistInCache({
+        ...playlist,
+        id: normalizedPlaylistId,
+        sourcePlaylistId: normalizedPlaylistId,
+        subscribed: true,
+        isExplore: false,
+        hydrated: Boolean(playlist?.hydrated !== false),
+        hydrating: false,
+      })
+      return { ok: true }
+    } catch (error) {
+      return { ok: false, error: error.message || String(error) }
+    }
+  })
+
+  ipcMain.handle('commitPlaylistTrackMove', async (_event, payload) => {
+    let targetTrackAdded = false
+
+    try {
+      if (!svc) {
+        throw new Error(TEXT.serviceNotReady)
+      }
+
+      const sourcePlaylistId = Number(payload?.sourcePlaylistId || 0)
+      const targetPlaylistId = Number(payload?.targetPlaylistId || 0)
+      const trackId = Number(payload?.track?.id || 0)
+      const keepSource = Boolean(payload?.keepSource)
+      const sourceTracks = Array.isArray(payload?.sourceTracks) ? normalizeTracks(payload.sourceTracks) : null
+      const targetTracks = Array.isArray(payload?.targetTracks) ? normalizeTracks(payload.targetTracks) : null
+
+      if (sourcePlaylistId <= 0 || targetPlaylistId <= 0 || trackId <= 0 || !targetTracks?.length) {
+        throw new Error('\u79fb\u52a8\u6b4c\u66f2\u5931\u8d25')
+      }
+
+      if (!targetTracks.some((track) => track.id === trackId)) {
+        throw new Error('\u79fb\u52a8\u6b4c\u66f2\u5931\u8d25')
+      }
+
+      if (sourcePlaylistId === targetPlaylistId) {
+        await svc.updatePlaylistTrackOrder(targetPlaylistId, targetTracks.map((track) => track.id))
+        replacePlaylistTracksInCache(targetPlaylistId, targetTracks)
+        return { ok: true }
+      }
+
+      await svc.addTrackToPlaylist(targetPlaylistId, trackId)
+      targetTrackAdded = true
+      await svc.updatePlaylistTrackOrder(targetPlaylistId, targetTracks.map((track) => track.id))
+
+      if (!keepSource) {
+        await svc.removeTrackFromPlaylist(sourcePlaylistId, trackId)
+      }
+
+      replacePlaylistTracksInCache(targetPlaylistId, targetTracks)
+      if (!keepSource && sourceTracks) {
+        replacePlaylistTracksInCache(sourcePlaylistId, sourceTracks)
+      } else if (!keepSource) {
+        removeTrackFromCache(sourcePlaylistId, trackId)
+      }
+
+      return { ok: true }
+    } catch (error) {
+      const sourcePlaylistId = Number(payload?.sourcePlaylistId || 0)
+      const targetPlaylistId = Number(payload?.targetPlaylistId || 0)
+      const trackId = Number(payload?.track?.id || 0)
+
+      if (
+        targetTrackAdded
+        && sourcePlaylistId > 0
+        && targetPlaylistId > 0
+        && sourcePlaylistId !== targetPlaylistId
+        && trackId > 0
+      ) {
+        try {
+          await svc.removeTrackFromPlaylist(targetPlaylistId, trackId)
+        } catch (rollbackError) {
+          console.warn('failed to rollback playlist move after error', {
+            sourcePlaylistId,
+            targetPlaylistId,
+            trackId,
+            rollbackError,
+          })
+        }
+      }
+
+      return { ok: false, error: error.message || String(error) }
+    }
+  })
+
   ipcMain.handle('getPlaylistRecommendations', async (_event, _playlistId, seedTrackIds, count = 12) => {
     try {
       if (!svc) {
@@ -739,6 +1026,23 @@ function registerIpc() {
         error: error.message || String(error),
         code: Number(error?.status || error?.body?.code || 0),
         tracks: [],
+      }
+    }
+  })
+
+  ipcMain.handle('getExplorePlaylists', async (_event, options = {}) => {
+    try {
+      const service = ensureServiceReady()
+      const playlists = await service.getExplorePlaylists(options?.query || '', options)
+      return {
+        ok: true,
+        playlists: (playlists || []).map(normalizePlaylistPayload),
+      }
+    } catch (error) {
+      return {
+        ok: false,
+        error: error.message || String(error),
+        playlists: [],
       }
     }
   })
