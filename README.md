@@ -3,8 +3,8 @@
 把网易云音乐里分散、难翻、难搜的歌单，摊成一整面真正适合管理的“歌单墙”。
 
 核心目标不是做另一个播放器，而是把“找歌”和“整理歌单”这件事做得更舒服。
+<img width="3334" height="1888" alt="image" src="https://github.com/user-attachments/assets/d3b6b936-7297-4428-b092-82e6db2533d5" />
 
-![img_v3_0210d_677347b2-96bb-4afb-b345-20321a47e27g](https://github.com/user-attachments/assets/58c4dd8f-c7a9-47b8-be46-9e729bc51750)
 
 ## v0.2.0 更新
 
