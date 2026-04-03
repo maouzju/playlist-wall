@@ -13,7 +13,7 @@ contextBridge.exposeInMainWorld('bridge', {
   startQrLogin: () => ipcRenderer.invoke('startQrLogin'),
   checkQrLogin: (key) => ipcRenderer.invoke('checkQrLogin', key),
   logout: () => ipcRenderer.invoke('logout'),
-  getSongUrl: (songId) => ipcRenderer.invoke('getSongUrl', songId),
+  getSongUrl: (songId, options) => ipcRenderer.invoke('getSongUrl', songId, options),
   getArtistSongs: (artistId, maxCount) => ipcRenderer.invoke('getArtistSongs', artistId, maxCount),
   recordTrackPlay: (userId, trackId) => ipcRenderer.invoke('recordTrackPlay', userId, trackId),
   getPlaylistRecommendations: (playlistId, seedTrackIds, count) => ipcRenderer.invoke('getPlaylistRecommendations', playlistId, seedTrackIds, count),

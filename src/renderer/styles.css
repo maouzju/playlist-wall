@@ -547,8 +547,20 @@ button:focus-visible,
   border-width: 2px;
 }
 
+.playlist-card.is-playlist-dragging {
+  opacity: 0.64;
+}
+
 .playlist-card.is-drop-target {
   box-shadow: 0 0 0 2px var(--text);
+}
+
+.playlist-card.is-playlist-drop-before {
+  box-shadow: inset 0 2px 0 var(--text), 0 0 0 2px var(--text);
+}
+
+.playlist-card.is-playlist-drop-after {
+  box-shadow: inset 0 -2px 0 var(--text), 0 0 0 2px var(--text);
 }
 
 .playlist-card.is-drop-target-start .playlist-header {
@@ -629,6 +641,14 @@ button:focus-visible,
   cursor: pointer;
 }
 
+.playlist-header-main[draggable="true"] {
+  cursor: grab;
+}
+
+.playlist-card.is-playlist-dragging .playlist-header-main {
+  cursor: grabbing;
+}
+
 .playlist-header-main:focus-visible {
   outline: 2px solid var(--text);
   outline-offset: 2px;
@@ -675,6 +695,32 @@ button:focus-visible,
   font-weight: 800;
   line-height: 1;
   cursor: pointer;
+}
+
+.playlist-header-action--artist-toggle {
+  width: calc(24px * var(--ui-scale));
+  height: calc(24px * var(--ui-scale));
+}
+
+.playlist-header-action--artist-toggle.is-expanded {
+  background: rgba(16, 128, 64, 0.88);
+  border-color: rgba(255, 255, 255, 0.16);
+  color: #ffffff;
+}
+
+.playlist-header:not(.has-cover) .playlist-header-action--artist-toggle.is-expanded {
+  border-color: rgba(16, 128, 64, 0.4);
+}
+
+.playlist-header-action-icon {
+  width: calc(12px * var(--ui-scale));
+  height: calc(12px * var(--ui-scale));
+  display: block;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .playlist-header:not(.has-cover) .playlist-header-action {

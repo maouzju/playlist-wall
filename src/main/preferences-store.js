@@ -10,6 +10,10 @@ const UI_SCALE_DEFAULT = 100
 const LIKED_PLAYLIST_DISPLAY_MODE_ALL = 'all'
 const LIKED_PLAYLIST_DISPLAY_MODE_UNCOLLECTED = 'uncollected'
 const LIKED_PLAYLIST_DISPLAY_MODE_HIDDEN = 'hidden'
+const AUDIO_QUALITY_BEST = 'best'
+const AUDIO_QUALITY_LOSSLESS = 'lossless'
+const AUDIO_QUALITY_EXHIGH = 'exhigh'
+const AUDIO_QUALITY_STANDARD = 'standard'
 const ARTIST_TRACK_DISPLAY_LIMIT_MIN = 20
 const ARTIST_TRACK_DISPLAY_LIMIT_MAX = 1000
 const ARTIST_TRACK_DISPLAY_LIMIT_DEFAULT = 100
@@ -36,6 +40,22 @@ function normalizeLikedPlaylistDisplayMode(input) {
   }
 
   return LIKED_PLAYLIST_DISPLAY_MODE_ALL
+}
+
+function normalizeAudioQualityPreference(input) {
+  if (input === AUDIO_QUALITY_LOSSLESS) {
+    return AUDIO_QUALITY_LOSSLESS
+  }
+
+  if (input === AUDIO_QUALITY_EXHIGH) {
+    return AUDIO_QUALITY_EXHIGH
+  }
+
+  if (input === AUDIO_QUALITY_STANDARD) {
+    return AUDIO_QUALITY_STANDARD
+  }
+
+  return AUDIO_QUALITY_BEST
 }
 
 function normalizeArtistTrackDisplayLimit(input) {
@@ -71,13 +91,37 @@ function normalizeCollapsedPlaylistIds(input) {
   return ids.sort((left, right) => left - right)
 }
 
+function normalizePlaylistOrderIds(input) {
+  if (!Array.isArray(input)) {
+    return []
+  }
+
+  const seen = new Set()
+  const ids = []
+
+  for (const value of input) {
+    const normalizedId = Math.trunc(Number(value || 0))
+    if (!Number.isSafeInteger(normalizedId) || normalizedId === 0 || seen.has(normalizedId)) {
+      continue
+    }
+
+    seen.add(normalizedId)
+    ids.push(normalizedId)
+  }
+
+  return ids
+}
+
 function normalizePreferences(input = {}) {
   return {
     theme: input?.theme === 'dark' ? 'dark' : 'light',
     showPlaylistRecommendations: Boolean(input?.showPlaylistRecommendations),
     likedPlaylistDisplayMode: normalizeLikedPlaylistDisplayMode(input?.likedPlaylistDisplayMode),
+    defaultAudioQuality: normalizeAudioQualityPreference(input?.defaultAudioQuality),
+    autoAdjustAudioQuality: input?.autoAdjustAudioQuality !== false,
     artistTrackDisplayLimit: normalizeArtistTrackDisplayLimit(input?.artistTrackDisplayLimit),
     collapsedPlaylistIds: normalizeCollapsedPlaylistIds(input?.collapsedPlaylistIds),
+    ownedPlaylistOrderIds: normalizePlaylistOrderIds(input?.ownedPlaylistOrderIds),
     uiScale: normalizeUiScale(input?.uiScale),
   }
 }
@@ -115,5 +159,7 @@ module.exports = {
   readPreferences,
   writePreferences,
   normalizePreferences,
+  normalizeAudioQualityPreference,
   normalizeArtistTrackDisplayLimit,
+  normalizePlaylistOrderIds,
 }

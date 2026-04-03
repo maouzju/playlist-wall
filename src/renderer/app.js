@@ -16,6 +16,7 @@ const ALBUM_HOVER_ROW_GAP = 8
 const ALBUM_HOVER_PADDING = 8
 const THEME_STORAGE_KEY = 'playlist-wall-theme'
 const SETTINGS_STORAGE_KEY = 'playlist-wall-settings'
+const SESSION_LAYOUT_STORAGE_KEY = 'playlist-wall-session-layout'
 const PATCH_COALESCE_MS = 300
 const RECOMMENDATION_COUNT = 4
 const RECOMMENDATION_FETCH_COUNT = Math.max(RECOMMENDATION_COUNT * 3, 12)
@@ -31,11 +32,21 @@ const UI_SCALE_DEFAULT = 100
 const LIKED_PLAYLIST_DISPLAY_MODE_ALL = 'all'
 const LIKED_PLAYLIST_DISPLAY_MODE_UNCOLLECTED = 'uncollected'
 const LIKED_PLAYLIST_DISPLAY_MODE_HIDDEN = 'hidden'
+const AUDIO_QUALITY_BEST = 'best'
+const AUDIO_QUALITY_LOSSLESS = 'lossless'
+const AUDIO_QUALITY_EXHIGH = 'exhigh'
+const AUDIO_QUALITY_STANDARD = 'standard'
 const ARTIST_TRACK_DISPLAY_LIMIT_MIN = 20
 const ARTIST_TRACK_DISPLAY_LIMIT_MAX = 1000
 const ARTIST_TRACK_DISPLAY_LIMIT_DEFAULT = 100
 const ARTIST_TRACK_HYDRATION_CONCURRENCY = 2
 const ARTIST_PLAYLIST_ID_OFFSET = 1000000000000
+const ARTIST_SUMMARY_TRACK_COUNT_MIN = 3
+const ARTIST_SUMMARY_TRACK_COUNT_MAX = 20
+const AUDIO_SOURCE_WAIT_TIMEOUT_MS = 4000
+const AUDIO_QUALITY_SWITCH_DEBOUNCE_MS = 180
+const AUDIO_QUALITY_REFRESH_REASON_SETTINGS = 'settings'
+const AUDIO_QUALITY_REFRESH_REASON_NETWORK = 'network'
 
 const TEXT = {
   tabOwned: '\u81ea\u5df1\u521b\u5efa',
@@ -62,6 +73,8 @@ const TEXT = {
   searchLibraryPlaceholder: '\u641c\u7d22\u6b4c\u5355\u3001\u6b4c\u66f2\u3001\u4e13\u8f91\u3001\u6b4c\u624b',
   collapsePlaylist: '\u538b\u7f29\u6b4c\u5355',
   expandPlaylist: '\u5c55\u5f00\u6b4c\u5355',
+  expandArtistTracks: '\u6269\u5927',
+  shrinkArtistTracks: '\u7f29\u5c0f',
   emptyPlaylist: '\u8fd9\u5f20\u6b4c\u5355\u6682\u65f6\u6ca1\u6709\u53ef\u5c55\u5f00\u7684\u66f2\u76ee\u3002',
   hydratingPlaylist: '\u6b63\u5728\u7ee7\u7eed\u5c55\u5f00\u8fd9\u5f20\u6b4c\u5355...',
   unavailableTrack: '\u8fd9\u9996\u6b4c\u73b0\u5728\u64ad\u4e0d\u4e86\uff0c\u8bd5\u8bd5\u4e0b\u4e00\u9996\u3002',
@@ -159,6 +172,7 @@ const state = {
   playToken: 0,
   theme: loadStoredTheme(),
   settings: loadStoredSettings(),
+  uiSession: loadUiSessionState(),
   layout: { columns: 1 },
   localPlayCounts: new Map(),
   cloudPlayCounts: new Map(),
@@ -169,6 +183,8 @@ const state = {
   artistPlaylistIdByKey: new Map(),
   artistRemoteTracksByKey: new Map(),
   totalOwnedPlaylistCount: 0,
+  currentPlaybackRequestedQuality: '',
+  currentPlaybackResolvedLevel: '',
   tabScrollPositions: {
     owned: 0,
     subscribed: 0,
@@ -198,6 +214,7 @@ const renderRuntime = {
   recommendationGlobalError: '',
   recommendationQueue: [],
   recommendationInFlight: 0,
+  expandedArtistTrackKeys: new Set(),
   artistHydrationSessionId: 0,
   artistHydrationQueue: [],
   artistHydrationInFlight: 0,
@@ -223,16 +240,32 @@ const renderRuntime = {
   dragState: null,
   dragSourceRow: null,
   dragIndicator: null,
+  playlistDragState: null,
+  playlistDragSourceCard: null,
+  playlistDragIndicator: null,
   playlistMutationPending: false,
   playlistRemovalPendingIds: new Set(),
   playlistUndoNotice: null,
   playlistUndoTimer: 0,
   focusFlashTrackKey: '',
   focusFlashTimer: 0,
+  audioQualityRefreshTimer: 0,
+  pendingAudioQualityRefreshReason: '',
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-  void bootstrapApp()
+  void bootstrapApp().catch((error) => {
+    console.error('bootstrap error:', error)
+    renderFatalBootstrapError(error)
+  })
+})
+
+window.addEventListener('error', (event) => {
+  console.error('window error:', event.error || event.message || 'unknown error')
+})
+
+window.addEventListener('unhandledrejection', (event) => {
+  console.error('window unhandledrejection:', event.reason)
 })
 
 async function bootstrapApp() {
@@ -245,6 +278,31 @@ async function bootstrapApp() {
   wireBridge()
   silentlyPreloadExplorePlaylists()
   await init()
+}
+
+function renderFatalBootstrapError(error) {
+  const message = String(error?.message || error || TEXT.initFailed)
+
+  try {
+    const loading = document.getElementById('loading')
+    const loadingStage = document.getElementById('loading-stage')
+    const progressBar = document.getElementById('progress-bar')
+    const authScreen = document.getElementById('auth-screen')
+    const app = document.getElementById('app')
+
+    if (loadingStage) {
+      loadingStage.textContent = `${TEXT.loadingFailed}${message}`
+    }
+
+    if (progressBar) {
+      progressBar.style.background = '#111111'
+      progressBar.style.width = '100%'
+    }
+
+    loading?.classList.remove('hidden')
+    authScreen?.classList.add('hidden')
+    app?.classList.add('hidden')
+  } catch {}
 }
 
 function resolveBridge() {
@@ -290,8 +348,11 @@ function createMockBridge() {
     theme: window.localStorage.getItem(THEME_STORAGE_KEY) || 'light',
     showPlaylistRecommendations: Boolean(storedSettings.showPlaylistRecommendations),
     likedPlaylistDisplayMode: normalizeLikedPlaylistDisplayMode(storedSettings.likedPlaylistDisplayMode),
+    defaultAudioQuality: normalizeAudioQualityPreference(storedSettings.defaultAudioQuality),
+    autoAdjustAudioQuality: storedSettings.autoAdjustAudioQuality !== false,
     artistTrackDisplayLimit: normalizeArtistTrackDisplayLimit(storedSettings.artistTrackDisplayLimit),
     collapsedPlaylistIds: normalizeCollapsedPlaylistIds(storedSettings.collapsedPlaylistIds),
+    ownedPlaylistOrderIds: normalizePlaylistOrderIds(storedSettings.ownedPlaylistOrderIds),
     uiScale: normalizeUiScale(storedSettings.uiScale),
   }
   const basePlaylists = huge
@@ -347,8 +408,11 @@ function createMockBridge() {
         theme: storedPreferences.theme === 'dark' ? 'dark' : 'light',
         showPlaylistRecommendations: Boolean(storedPreferences.showPlaylistRecommendations),
         likedPlaylistDisplayMode: normalizeLikedPlaylistDisplayMode(storedPreferences.likedPlaylistDisplayMode),
+        defaultAudioQuality: normalizeAudioQualityPreference(storedPreferences.defaultAudioQuality),
+        autoAdjustAudioQuality: storedPreferences.autoAdjustAudioQuality !== false,
         artistTrackDisplayLimit: normalizeArtistTrackDisplayLimit(storedPreferences.artistTrackDisplayLimit),
         collapsedPlaylistIds: normalizeCollapsedPlaylistIds(storedPreferences.collapsedPlaylistIds),
+        ownedPlaylistOrderIds: normalizePlaylistOrderIds(storedPreferences.ownedPlaylistOrderIds),
         uiScale: normalizeUiScale(storedPreferences.uiScale),
       },
     }),
@@ -359,11 +423,20 @@ function createMockBridge() {
         likedPlaylistDisplayMode: normalizeLikedPlaylistDisplayMode(
           preferences?.likedPlaylistDisplayMode ?? storedPreferences.likedPlaylistDisplayMode
         ),
+        defaultAudioQuality: normalizeAudioQualityPreference(
+          preferences?.defaultAudioQuality ?? storedPreferences.defaultAudioQuality
+        ),
+        autoAdjustAudioQuality: preferences?.autoAdjustAudioQuality !== undefined
+          ? preferences.autoAdjustAudioQuality !== false
+          : storedPreferences.autoAdjustAudioQuality !== false,
         artistTrackDisplayLimit: normalizeArtistTrackDisplayLimit(
           preferences?.artistTrackDisplayLimit ?? storedPreferences.artistTrackDisplayLimit
         ),
         collapsedPlaylistIds: normalizeCollapsedPlaylistIds(
           preferences?.collapsedPlaylistIds ?? storedPreferences.collapsedPlaylistIds
+        ),
+        ownedPlaylistOrderIds: normalizePlaylistOrderIds(
+          preferences?.ownedPlaylistOrderIds ?? storedPreferences.ownedPlaylistOrderIds
         ),
         uiScale: normalizeUiScale(preferences?.uiScale ?? storedPreferences.uiScale),
       }
@@ -373,8 +446,11 @@ function createMockBridge() {
           theme: storedPreferences.theme === 'dark' ? 'dark' : 'light',
           showPlaylistRecommendations: Boolean(storedPreferences.showPlaylistRecommendations),
           likedPlaylistDisplayMode: normalizeLikedPlaylistDisplayMode(storedPreferences.likedPlaylistDisplayMode),
+          defaultAudioQuality: normalizeAudioQualityPreference(storedPreferences.defaultAudioQuality),
+          autoAdjustAudioQuality: storedPreferences.autoAdjustAudioQuality !== false,
           artistTrackDisplayLimit: normalizeArtistTrackDisplayLimit(storedPreferences.artistTrackDisplayLimit),
           collapsedPlaylistIds: normalizeCollapsedPlaylistIds(storedPreferences.collapsedPlaylistIds),
+          ownedPlaylistOrderIds: normalizePlaylistOrderIds(storedPreferences.ownedPlaylistOrderIds),
           uiScale: normalizeUiScale(storedPreferences.uiScale),
         },
       }
@@ -450,15 +526,34 @@ function createMockBridge() {
       qrChecks = 0
       return { ok: true }
     },
-    getSongUrl: async () => ({ ok: false, error: '\u6a21\u62df\u6a21\u5f0f\u4e0d\u63d0\u4f9b\u97f3\u9891\u94fe\u63a5' }),
+    getSongUrl: async (songId, options = {}) => {
+      window.__mockLastSongUrlRequest = {
+        songId: Number(songId || 0),
+        options: {
+          preferredQuality: normalizeAudioQualityPreference(options?.preferredQuality),
+        },
+      }
+      return { ok: false, error: '\u6a21\u62df\u6a21\u5f0f\u4e0d\u63d0\u4f9b\u97f3\u9891\u94fe\u63a5' }
+    },
     getArtistSongs: async (artistId, maxCount) => {
       artistRequestCount += 1
       updateMockStats()
       const normalizedArtistId = Number(artistId || 0)
-      const normalizedLimit = normalizeArtistTrackDisplayLimit(maxCount)
+      const normalizedArtistName = normalizeQuery(
+        normalizedArtistId > 0 ? '' : String(artistId || '')
+      )
+      const resolvedArtistId = normalizedArtistId > 0
+        ? normalizedArtistId
+        : Number(artistTrackStore.byName.get(normalizedArtistName) || 0)
+      const numericMaxCount = Number(maxCount)
+      const normalizedLimit = Number.isFinite(numericMaxCount) && numericMaxCount > 0
+        ? Math.max(1, Math.round(numericMaxCount))
+        : 0
+      const sourceTracks = artistTrackStore.byId.get(resolvedArtistId) || []
       return {
         ok: true,
-        tracks: (artistTrackStore.get(normalizedArtistId) || []).slice(0, normalizedLimit),
+        artistId: resolvedArtistId,
+        tracks: normalizedLimit > 0 ? sourceTracks.slice(0, normalizedLimit) : sourceTracks.slice(),
       }
     },
     recordTrackPlay: async (_userId, trackId) => {
@@ -772,7 +867,10 @@ function buildMockArtistSongStore(playlists) {
     }
   }
 
-  const store = new Map()
+  const store = {
+    byId: new Map(),
+    byName: new Map(),
+  }
   for (const [artistId, trackMap] of grouped.entries()) {
     const artistName = trackMap.values().next().value?.artistEntries?.find((artist) => Number(artist.id || 0) === artistId)?.name
       || `\u827a\u672f\u5bb6 ${artistId}`
@@ -789,7 +887,8 @@ function buildMockArtistSongStore(playlists) {
       albumCoverUrl: buildMockCover(artistId * 10 + index + 1),
       durationMs: 180000 + ((index % 7) * 8000),
     }))
-    store.set(artistId, [...localTracks, ...fillerTracks])
+    store.byId.set(artistId, [...localTracks, ...fillerTracks])
+    store.byName.set(normalizeQuery(artistName), artistId)
   }
 
   return store
@@ -912,6 +1011,22 @@ function normalizeLikedPlaylistDisplayMode(input) {
   return LIKED_PLAYLIST_DISPLAY_MODE_ALL
 }
 
+function normalizeAudioQualityPreference(input) {
+  if (input === AUDIO_QUALITY_LOSSLESS) {
+    return AUDIO_QUALITY_LOSSLESS
+  }
+
+  if (input === AUDIO_QUALITY_EXHIGH) {
+    return AUDIO_QUALITY_EXHIGH
+  }
+
+  if (input === AUDIO_QUALITY_STANDARD) {
+    return AUDIO_QUALITY_STANDARD
+  }
+
+  return AUDIO_QUALITY_BEST
+}
+
 function normalizeArtistTrackDisplayLimit(input) {
   const numeric = Number(input)
   if (!Number.isFinite(numeric)) {
@@ -946,6 +1061,131 @@ function normalizeCollapsedPlaylistIds(input) {
   return ids.sort((left, right) => left - right)
 }
 
+function normalizePlaylistOrderIds(input) {
+  if (!Array.isArray(input)) {
+    return []
+  }
+
+  const seen = new Set()
+  const ids = []
+
+  for (const value of input) {
+    const normalizedId = Math.trunc(Number(value || 0))
+    if (!Number.isSafeInteger(normalizedId) || normalizedId === 0 || seen.has(normalizedId)) {
+      continue
+    }
+
+    seen.add(normalizedId)
+    ids.push(normalizedId)
+  }
+
+  return ids
+}
+
+function normalizePlaylistOrderByTab(input = {}) {
+  return {
+    owned: normalizePlaylistOrderIds(input?.owned),
+    subscribed: normalizePlaylistOrderIds(input?.subscribed),
+    explore: normalizePlaylistOrderIds(input?.explore),
+    artists: normalizePlaylistOrderIds(input?.artists),
+  }
+}
+
+function normalizeUiSessionState(input = {}) {
+  return {
+    playlistOrderByTab: normalizePlaylistOrderByTab(input?.playlistOrderByTab),
+    collapsedPlaylistIds: normalizeCollapsedPlaylistIds(input?.collapsedPlaylistIds),
+  }
+}
+
+function arraysEqual(left, right) {
+  if (left === right) {
+    return true
+  }
+
+  if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) {
+    return false
+  }
+
+  return left.every((value, index) => value === right[index])
+}
+
+function getAudioQualityRank(quality) {
+  switch (normalizeAudioQualityPreference(quality)) {
+    case AUDIO_QUALITY_STANDARD:
+      return 0
+    case AUDIO_QUALITY_EXHIGH:
+      return 1
+    case AUDIO_QUALITY_LOSSLESS:
+      return 2
+    default:
+      return 3
+  }
+}
+
+function capAudioQualityPreference(preferredQuality, capQuality) {
+  const preferred = normalizeAudioQualityPreference(preferredQuality)
+  const cap = normalizeAudioQualityPreference(capQuality)
+  return getAudioQualityRank(preferred) <= getAudioQualityRank(cap)
+    ? preferred
+    : cap
+}
+
+function getNavigatorConnection() {
+  return window.__mockConnection
+    || navigator.connection
+    || navigator.mozConnection
+    || navigator.webkitConnection
+    || null
+}
+
+function getNetworkAudioQualityCap() {
+  if (navigator.onLine === false) {
+    return AUDIO_QUALITY_STANDARD
+  }
+
+  const connection = getNavigatorConnection()
+  if (!connection) {
+    return AUDIO_QUALITY_BEST
+  }
+
+  if (connection.saveData) {
+    return AUDIO_QUALITY_STANDARD
+  }
+
+  const effectiveType = String(connection.effectiveType || '').toLowerCase()
+  const downlink = Number(connection.downlink || 0)
+
+  if (effectiveType === 'slow-2g' || effectiveType === '2g') {
+    return AUDIO_QUALITY_STANDARD
+  }
+
+  if (effectiveType === '3g') {
+    return AUDIO_QUALITY_EXHIGH
+  }
+
+  if (Number.isFinite(downlink) && downlink > 0) {
+    if (downlink < 1) {
+      return AUDIO_QUALITY_STANDARD
+    }
+
+    if (downlink < 2.5) {
+      return AUDIO_QUALITY_EXHIGH
+    }
+  }
+
+  return AUDIO_QUALITY_BEST
+}
+
+function getRequestedAudioQualityPreference(preferredQuality = state.settings.defaultAudioQuality) {
+  const normalizedPreferredQuality = normalizeAudioQualityPreference(preferredQuality)
+  if (!state.settings.autoAdjustAudioQuality) {
+    return normalizedPreferredQuality
+  }
+
+  return capAudioQualityPreference(normalizedPreferredQuality, getNetworkAudioQualityCap())
+}
+
 function getUiScaleFactor() {
   return normalizeUiScale(state.settings.uiScale) / 100
 }
@@ -964,7 +1204,12 @@ function isPlaylistCollapsed(playlistOrId) {
     return false
   }
 
-  return normalizeCollapsedPlaylistIds(state.settings.collapsedPlaylistIds).includes(playlistId)
+  const tab = getPlaylistTab(playlistOrId)
+  if (!tab) {
+    return false
+  }
+
+  return getCollapsedPlaylistIdsForTab(tab).includes(playlistId)
 }
 
 function getRenderablePlaylistTracks(playlist) {
@@ -1016,12 +1261,12 @@ function cacheRefs() {
   refs.settingsBtn = document.getElementById('settings-btn')
   refs.settingsPanel = document.getElementById('settings-panel')
   refs.settingsBackdrop = document.getElementById('settings-backdrop')
-  refs.settingsCloseBtn = document.getElementById('settings-close-btn')
   refs.uiScaleRange = document.getElementById('ui-scale-range')
   refs.uiScaleValue = document.getElementById('ui-scale-value')
   refs.playlistRecommendationsToggle = document.getElementById('playlist-recommendations-toggle')
   refs.likedPlaylistDisplayModeSelect = document.getElementById('liked-playlist-display-mode-select')
-  refs.artistTrackDisplayLimitInput = document.getElementById('artist-track-display-limit-input')
+  refs.defaultAudioQualitySelect = document.getElementById('default-audio-quality-select')
+  refs.autoAdjustAudioQualityToggle = document.getElementById('auto-adjust-audio-quality-toggle')
   refs.settingsLogoutBtn = document.getElementById('settings-logout-btn')
   refs.contextMenu = document.getElementById('context-menu')
   refs.contextRemoveTrackBtn = document.getElementById('context-remove-track-btn')
@@ -1070,13 +1315,13 @@ function bindEvents() {
   refs.themeToggleBtn.addEventListener('click', toggleTheme)
   refs.locateCurrentBtn.addEventListener('click', locateCurrentTrack)
   refs.settingsBtn.addEventListener('click', toggleSettingsPanel)
-  refs.settingsCloseBtn.addEventListener('click', closeSettingsPanel)
   refs.settingsBackdrop.addEventListener('click', closeSettingsPanel)
   refs.uiScaleRange.addEventListener('input', handleUiScaleInput)
   refs.uiScaleRange.addEventListener('change', handleUiScaleCommit)
   refs.playlistRecommendationsToggle.addEventListener('change', handleSettingsChange)
   refs.likedPlaylistDisplayModeSelect.addEventListener('change', handleSettingsChange)
-  refs.artistTrackDisplayLimitInput.addEventListener('change', handleSettingsChange)
+  refs.defaultAudioQualitySelect.addEventListener('change', handleSettingsChange)
+  refs.autoAdjustAudioQualityToggle.addEventListener('change', handleSettingsChange)
   refs.settingsLogoutBtn.addEventListener('click', () => {
     void handleLogout()
   })
@@ -1155,13 +1400,21 @@ function bindEvents() {
     scheduleWallRender()
     renderPlaylistUndoNotice()
   })
+  window.addEventListener('online', () => scheduleAudioQualityRefresh(AUDIO_QUALITY_REFRESH_REASON_NETWORK))
+  window.addEventListener('offline', () => scheduleAudioQualityRefresh(AUDIO_QUALITY_REFRESH_REASON_NETWORK))
+  const connection = getNavigatorConnection()
+  if (connection && typeof connection.addEventListener === 'function') {
+    connection.addEventListener('change', () => scheduleAudioQualityRefresh(AUDIO_QUALITY_REFRESH_REASON_NETWORK))
+  }
   window.addEventListener('blur', closeContextMenu)
   window.addEventListener('blur', hideAlbumHoverPreview)
+  window.addEventListener('blur', clearPlaylistDragState)
   window.addEventListener('blur', clearTrackDragState)
   document.addEventListener('keydown', handleKeydown)
   document.addEventListener('mousedown', handleDocumentPointerDown, true)
   document.addEventListener('mouseup', scheduleTrackDragStateRecovery, true)
   document.addEventListener('pointerup', scheduleTrackDragStateRecovery, true)
+  document.addEventListener('dragend', clearPlaylistDragState, true)
   document.addEventListener('dragend', scheduleTrackDragStateCleanup, true)
   document.addEventListener('drop', scheduleTrackDragStateCleanup)
   document.addEventListener('visibilitychange', handleDocumentVisibilityChange)
@@ -1247,6 +1500,16 @@ function silentlyPreloadExplorePlaylists() {
   }
 
   void loadExplorePlaylists(normalizedQuery)
+}
+
+function silentlyPreloadArtistPlaylists() {
+  if (!appBridge || typeof appBridge.getArtistSongs !== 'function') {
+    return
+  }
+
+  for (const playlist of state.artistPlaylists) {
+    queueArtistPlaylistHydration(playlist.id, { includeCollapsed: true })
+  }
 }
 
 async function loadExplorePlaylists(query = '', { force = false } = {}) {
@@ -1457,6 +1720,7 @@ function resetAppState() {
   state.artistPlaylistIdByKey = new Map()
   state.artistRemoteTracksByKey = new Map()
   state.totalOwnedPlaylistCount = 0
+  renderRuntime.expandedArtistTrackKeys = new Set()
   renderRuntime.artistHydrationSessionId += 1
   renderRuntime.artistHydrationQueue = []
   renderRuntime.artistHydrationInFlight = 0
@@ -1476,6 +1740,9 @@ function resetAppState() {
   renderRuntime.subscribingPlaylistIds = new Set()
   renderRuntime.playlistRemovalPendingIds = new Set()
   renderRuntime.playlistUndoNotice = null
+  renderRuntime.playlistDragState = null
+  renderRuntime.playlistDragSourceCard = null
+  renderRuntime.playlistDragIndicator = null
   refs.searchInput.value = ''
   refs.playlistUndoLayer.replaceChildren()
   refs.wallColumns.replaceChildren()
@@ -1483,6 +1750,8 @@ function resetAppState() {
   refs.audio.pause()
   refs.audio.removeAttribute('src')
   refs.audio.load()
+  state.currentPlaybackRequestedQuality = ''
+  state.currentPlaybackResolvedLevel = ''
   renderPlayer()
 }
 
@@ -1680,6 +1949,10 @@ function compareArtistTracks(left, right) {
     || Number(left.id || 0) - Number(right.id || 0)
 }
 
+function isArtistPlaylistExpanded(artistKey) {
+  return Boolean(artistKey && renderRuntime.expandedArtistTrackKeys.has(String(artistKey)))
+}
+
 function toArtistTrackOutput(track, position = 0) {
   const artistEntries = normalizeTrackArtistEntries(track?.artistEntries, track?.artists || [])
   return {
@@ -1709,14 +1982,12 @@ function getArtistTrackStats(entry) {
     }))
 }
 
-function buildArtistPlaylistTracks(entry, trackStats) {
-  const limit = normalizeArtistTrackDisplayLimit(state.settings.artistTrackDisplayLimit)
+function buildArtistTrackPool(entry, trackStats) {
   const remoteState = state.artistRemoteTracksByKey.get(entry.key)
   const localTracks = trackStats.slice().sort(compareArtistTracks)
 
   if (!Array.isArray(remoteState?.tracks) || remoteState.tracks.length === 0) {
     return localTracks
-      .slice(0, limit)
       .map((track, index) => toArtistTrackOutput(track, index + 1))
   }
 
@@ -1745,19 +2016,51 @@ function buildArtistPlaylistTracks(entry, trackStats) {
     .map((track) => toArtistTrackOutput(track))
 
   return [...remoteTracks, ...localOnlyTracks]
-    .slice(0, limit)
     .map((track, index) => ({
       ...track,
       position: index + 1,
     }))
 }
 
+function computeArtistSummaryTrackCount(entry, artistStats, allTracks) {
+  const knownTrackCount = Math.max(
+    0,
+    Number(allTracks?.length || 0),
+    Number(entry?.trackMap?.size || 0)
+  )
+  if (knownTrackCount <= 0) {
+    return 0
+  }
+
+  const hardCap = Math.min(ARTIST_SUMMARY_TRACK_COUNT_MAX, knownTrackCount)
+  if (hardCap <= ARTIST_SUMMARY_TRACK_COUNT_MIN) {
+    return hardCap
+  }
+
+  const rawScore = (
+    (Math.log10(Number(artistStats?.importance || 0) + 10) * 1.35)
+    + (Math.log10(Number(artistStats?.totalPlayCount || 0) + 1) * 1.6)
+    + (Math.log10(Number(artistStats?.topTrackPlayCount || 0) + 1) * 0.9)
+    + (Math.min(Number(artistStats?.likedTrackCount || 0), 6) * 1.45)
+    + (Math.min(Number(artistStats?.ownedTrackCount || 0), 10) * 0.45)
+    + (Math.min(Number(artistStats?.sourcePlaylistCount || 0), 8) * 0.5)
+    + (Math.min(Number(entry?.occurrenceCount || 0), 18) * 0.2)
+  )
+
+  const computedCount = ARTIST_SUMMARY_TRACK_COUNT_MIN + Math.round(rawScore)
+  return clamp(computedCount, Math.min(ARTIST_SUMMARY_TRACK_COUNT_MIN, hardCap), hardCap)
+}
+
 function buildArtistPlaylistFromEntry(entry) {
   const trackStats = getArtistTrackStats(entry)
   const artistStats = computeArtistImportance(entry, trackStats)
-  const tracks = buildArtistPlaylistTracks(entry, trackStats)
+  const allTracks = buildArtistTrackPool(entry, trackStats)
   const remoteState = state.artistRemoteTracksByKey.get(entry.key)
-  const trackCount = tracks.length
+  const artistId = Number(entry.artistId || remoteState?.artistId || 0)
+  const summaryTrackCount = computeArtistSummaryTrackCount(entry, artistStats, allTracks)
+  const expanded = isArtistPlaylistExpanded(entry.key)
+  const tracks = expanded ? allTracks.slice() : allTracks.slice(0, summaryTrackCount)
+  const knownTrackCount = allTracks.length
 
   return normalizePlaylist({
     id: buildArtistPlaylistId(entry.key),
@@ -1768,7 +2071,7 @@ function buildArtistPlaylistFromEntry(entry) {
     subscribed: false,
     isArtist: true,
     artistKey: entry.key,
-    artistId: Number(entry.artistId || 0),
+    artistId,
     artistName: entry.name,
     artistImportance: artistStats.importance,
     artistPlayScore: artistStats.playScore,
@@ -1781,9 +2084,14 @@ function buildArtistPlaylistFromEntry(entry) {
     artistOccurrenceCount: entry.occurrenceCount,
     artistHydrating: Boolean(remoteState?.loading),
     artistTracksSource: Array.isArray(remoteState?.tracks) && remoteState.tracks.length ? 'remote' : 'library',
-    artistTrackDisplayLimit: normalizeArtistTrackDisplayLimit(state.settings.artistTrackDisplayLimit),
-    trackCount,
-    coverUrl: resolveDominantAlbumCover(tracks, tracks[0]?.albumCoverUrl || ''),
+    artistExpanded: expanded,
+    artistSummaryTrackCount: summaryTrackCount,
+    artistDisplayedTrackCount: tracks.length,
+    artistTotalTrackCount: knownTrackCount,
+    artistAllTracksComplete: Boolean(remoteState?.complete),
+    artistAllTracks: allTracks,
+    trackCount: knownTrackCount,
+    coverUrl: resolveDominantAlbumCover(allTracks, allTracks[0]?.albumCoverUrl || ''),
     tracks,
     hydrated: true,
     hydrating: false,
@@ -1937,6 +2245,10 @@ function normalizePlaylist(playlist) {
   const sourcePlaylistId = Number(playlist.sourcePlaylistId || playlist.id || 0)
   const isExplore = Boolean(playlist.isExplore)
   const isArtist = Boolean(playlist.isArtist)
+  const normalizedArtistAllTracks = isArtist
+    ? (playlist.artistAllTracks || playlist.tracks || []).map((track, index) => normalizePlaylistTrack(track, index))
+      .filter((track) => track.id > 0)
+    : []
   const tracks = (playlist.tracks || []).map((track, index) => normalizePlaylistTrack(track, index))
     .filter((track) => track.id > 0)
 
@@ -1970,9 +2282,21 @@ function normalizePlaylist(playlist) {
     artistOccurrenceCount: Number(playlist.artistOccurrenceCount || 0),
     artistHydrating: Boolean(playlist.artistHydrating),
     artistTracksSource: playlist.artistTracksSource || '',
+    artistExpanded: Boolean(playlist.artistExpanded),
+    artistSummaryTrackCount: Number(playlist.artistSummaryTrackCount || 0),
+    artistDisplayedTrackCount: Number(playlist.artistDisplayedTrackCount || tracks.length || 0),
+    artistTotalTrackCount: Number(
+      playlist.artistTotalTrackCount
+      || normalizedArtistAllTracks.length
+      || playlist.trackCount
+      || tracks.length
+      || 0
+    ),
+    artistAllTracksComplete: Boolean(playlist.artistAllTracksComplete),
     artistTrackDisplayLimit: normalizeArtistTrackDisplayLimit(
       playlist.artistTrackDisplayLimit ?? state.settings.artistTrackDisplayLimit
     ),
+    artistAllTracks: normalizedArtistAllTracks,
     tracks,
     profile: buildPlaylistProfile(playlist.name || '', tracks),
     tracksError: playlist.tracksError || '',
@@ -2034,12 +2358,30 @@ function refreshArtistPlaylistByKey(artistKey, { rerender = false } = {}) {
   return true
 }
 
+function toggleArtistTrackExpansion(playlistId) {
+  const playlist = getPlaylistById(playlistId)
+  if (!playlist?.isArtist || !playlist.artistKey) {
+    return
+  }
+
+  if (isArtistPlaylistExpanded(playlist.artistKey)) {
+    renderRuntime.expandedArtistTrackKeys.delete(playlist.artistKey)
+    refreshArtistPlaylistByKey(playlist.artistKey, { rerender: state.activeTab === 'artists' })
+    return
+  }
+
+  renderRuntime.expandedArtistTrackKeys.add(playlist.artistKey)
+  refreshArtistPlaylistByKey(playlist.artistKey, { rerender: state.activeTab === 'artists' })
+  queueArtistPlaylistHydration(playlist.id, { includeCollapsed: true, force: true })
+}
+
 function setPlaylists(playlists) {
   state.playlists = playlists
   rebuildTrackPlayTiers()
   rebuildArtistIndex()
   rebuildArtistPlaylists()
   refreshPlaylistMap()
+  silentlyPreloadArtistPlaylists()
   refreshAllRecommendationTracks()
 }
 
@@ -2158,20 +2500,26 @@ function syncQueueWithPlaylists() {
 
 function getOwnedPlaylists() {
   const accountId = Number(state.account?.userId || 0)
-  return state.playlists.filter((playlist) => Number(playlist.creatorId || 0) === accountId)
+  return applyStoredPlaylistOrder(
+    state.playlists.filter((playlist) => Number(playlist.creatorId || 0) === accountId),
+    'owned'
+  )
 }
 
 function getSubscribedPlaylists() {
   const accountId = Number(state.account?.userId || 0)
-  return state.playlists.filter((playlist) => Number(playlist.creatorId || 0) !== accountId)
+  return applyStoredPlaylistOrder(
+    state.playlists.filter((playlist) => Number(playlist.creatorId || 0) !== accountId),
+    'subscribed'
+  )
 }
 
 function getExplorePlaylists() {
-  return state.explorePlaylists
+  return applyStoredPlaylistOrder(state.explorePlaylists, 'explore')
 }
 
 function getArtistPlaylists() {
-  return state.artistPlaylists
+  return applyStoredPlaylistOrder(state.artistPlaylists, 'artists')
 }
 
 function getLibraryPlaylistBySourceId(sourcePlaylistId) {
@@ -2246,6 +2594,126 @@ function getSourcePlaylists() {
     return getArtistPlaylists()
   }
   return state.activeTab === 'owned' ? getOwnedPlaylists() : getSubscribedPlaylists()
+}
+
+function getPlaylistTab(playlistOrId) {
+  const playlist = playlistOrId && typeof playlistOrId === 'object'
+    ? playlistOrId
+    : getPlaylistById(playlistOrId)
+
+  if (!playlist) {
+    return ''
+  }
+
+  if (playlist.isExplore) {
+    return 'explore'
+  }
+
+  if (playlist.isArtist) {
+    return 'artists'
+  }
+
+  return isOwnedPlaylist(playlist) ? 'owned' : 'subscribed'
+}
+
+function shouldPersistPlaylistOrderForTab(tab) {
+  return tab === 'owned'
+}
+
+function shouldPersistCollapsedStateForTab(tab) {
+  return tab === 'owned' || tab === 'subscribed'
+}
+
+function getPlaylistOrderIdsForTab(tab) {
+  if (shouldPersistPlaylistOrderForTab(tab)) {
+    return normalizePlaylistOrderIds(state.settings.ownedPlaylistOrderIds)
+  }
+
+  return normalizePlaylistOrderIds(state.uiSession?.playlistOrderByTab?.[tab])
+}
+
+function setPlaylistOrderIdsForTab(tab, orderIds, { persist = true } = {}) {
+  const normalizedOrderIds = normalizePlaylistOrderIds(orderIds)
+  if (shouldPersistPlaylistOrderForTab(tab)) {
+    const currentOrderIds = normalizePlaylistOrderIds(state.settings.ownedPlaylistOrderIds)
+    if (arraysEqual(currentOrderIds, normalizedOrderIds)) {
+      return false
+    }
+
+    state.settings.ownedPlaylistOrderIds = normalizedOrderIds
+    if (persist) {
+      saveSettings()
+    }
+    return true
+  }
+
+  const currentOrderIds = normalizePlaylistOrderIds(state.uiSession?.playlistOrderByTab?.[tab])
+  if (arraysEqual(currentOrderIds, normalizedOrderIds)) {
+    return false
+  }
+
+  state.uiSession.playlistOrderByTab = {
+    ...normalizePlaylistOrderByTab(state.uiSession.playlistOrderByTab),
+    [tab]: normalizedOrderIds,
+  }
+  if (persist) {
+    saveUiSessionState()
+  }
+  return true
+}
+
+function getCollapsedPlaylistIdsForTab(tab) {
+  return shouldPersistCollapsedStateForTab(tab)
+    ? normalizeCollapsedPlaylistIds(state.settings.collapsedPlaylistIds)
+    : normalizeCollapsedPlaylistIds(state.uiSession.collapsedPlaylistIds)
+}
+
+function setCollapsedPlaylistIdsForTab(tab, collapsedPlaylistIds, { persist = true } = {}) {
+  const normalizedIds = normalizeCollapsedPlaylistIds(collapsedPlaylistIds)
+  if (shouldPersistCollapsedStateForTab(tab)) {
+    const currentIds = normalizeCollapsedPlaylistIds(state.settings.collapsedPlaylistIds)
+    if (arraysEqual(currentIds, normalizedIds)) {
+      return false
+    }
+
+    state.settings.collapsedPlaylistIds = normalizedIds
+    if (persist) {
+      saveSettings()
+    }
+    return true
+  }
+
+  const currentIds = normalizeCollapsedPlaylistIds(state.uiSession.collapsedPlaylistIds)
+  if (arraysEqual(currentIds, normalizedIds)) {
+    return false
+  }
+
+  state.uiSession.collapsedPlaylistIds = normalizedIds
+  if (persist) {
+    saveUiSessionState()
+  }
+  return true
+}
+
+function applyStoredPlaylistOrder(playlists, tab) {
+  const orderIds = getPlaylistOrderIdsForTab(tab)
+  if (!orderIds.length) {
+    return playlists.slice()
+  }
+
+  const indexById = new Map(orderIds.map((id, index) => [id, index]))
+  return playlists
+    .map((playlist, index) => ({ playlist, index }))
+    .sort((left, right) => {
+      const leftRank = indexById.has(left.playlist.id)
+        ? indexById.get(left.playlist.id)
+        : Number.MAX_SAFE_INTEGER
+      const rightRank = indexById.has(right.playlist.id)
+        ? indexById.get(right.playlist.id)
+        : Number.MAX_SAFE_INTEGER
+      return leftRank - rightRank || left.index - right.index
+    })
+    .map((entry) => entry.playlist)
 }
 
 function rememberTabScrollPosition(tab = state.activeTab) {
@@ -2403,7 +2871,10 @@ function applyFilters({ syncAll = false } = {}) {
     }
 
     const playlistMatch = playlist.searchText.includes(query)
-    const matchedTracks = playlistMatch ? wallTracks : wallTracks.filter((track) => trackMatches(track, query))
+    const searchableTracks = playlist.isArtist && Array.isArray(playlist.artistAllTracks) && playlist.artistAllTracks.length
+      ? playlist.artistAllTracks
+      : wallTracks
+    const matchedTracks = playlistMatch ? wallTracks : searchableTracks.filter((track) => trackMatches(track, query))
     if (!playlistMatch && !matchedTracks.length) {
       return []
     }
@@ -2790,6 +3261,9 @@ function renderPlaylistCard(placement, rowWindow) {
 
 function getPlaylistHeaderRenderKey(playlist, totalCount) {
   const collapsedState = isPlaylistCollapsed(playlist) ? 'collapsed' : 'expanded'
+  const artistExpansionState = playlist.isArtist
+    ? (playlist.artistExpanded ? 'artist-expanded' : 'artist-collapsed')
+    : ''
   const subscribeState = playlist.isExplore
     ? isExplorePlaylistSubscribed(playlist)
       ? 'subscribed'
@@ -2808,6 +3282,7 @@ function getPlaylistHeaderRenderKey(playlist, totalCount) {
     describePlaylistMeta(playlist, totalCount),
     playlist.dominantAlbumCoverUrl || '',
     collapsedState,
+    artistExpansionState,
     subscribeState,
     removeState,
   ].join('|')
@@ -2826,6 +3301,8 @@ function renderPlaylistHeader(playlist, totalCount) {
         class="playlist-header-main"
         type="button"
         data-toggle-playlist-collapse="${playlist.id}"
+        data-drag-playlist="${playlist.id}"
+        draggable="true"
         title="${escapeHtml(collapseLabel)}"
         aria-label="${escapeHtml(collapseLabel)}"
         aria-expanded="${collapsed ? 'false' : 'true'}"
@@ -2841,6 +3318,23 @@ function renderPlaylistHeader(playlist, totalCount) {
 }
 
 function renderPlaylistHeaderAction(playlist) {
+  if (playlist?.isArtist) {
+    const expanded = Boolean(playlist.artistExpanded)
+    const label = expanded ? TEXT.shrinkArtistTracks : TEXT.expandArtistTracks
+    return `
+      <div class="playlist-header-actions">
+        <button
+          class="playlist-header-action playlist-header-action--artist-toggle${expanded ? ' is-expanded' : ''}"
+          type="button"
+          data-toggle-artist-track-expansion="${playlist.id}"
+          title="${escapeHtml(label)}"
+          aria-label="${escapeHtml(label)}"
+          aria-pressed="${expanded ? 'true' : 'false'}"
+        >${renderArtistTrackExpansionIcon(expanded)}</button>
+      </div>
+    `
+  }
+
   if (state.activeTab === 'subscribed' && canRemoveSubscribedPlaylist(playlist)) {
     const removing = isSubscribedPlaylistRemoving(playlist)
     const label = TEXT.removeSubscribedPlaylist
@@ -2890,10 +3384,50 @@ function renderPlaylistHeaderAction(playlist) {
   `
 }
 
+function renderArtistTrackExpansionIcon(expanded) {
+  const paths = expanded
+    ? [
+      'M2.5 5.5V2.5H5.5',
+      'M10.5 2.5H13.5V5.5',
+      'M13.5 10.5V13.5H10.5',
+      'M5.5 13.5H2.5V10.5',
+      'M6 6 2.5 2.5',
+      'M10 6 13.5 2.5',
+      'M10 10 13.5 13.5',
+      'M6 10 2.5 13.5',
+    ]
+    : [
+      'M5.5 2.5H2.5V5.5',
+      'M13.5 5.5V2.5H10.5',
+      'M10.5 13.5H13.5V10.5',
+      'M2.5 10.5V13.5H5.5',
+      'M2.5 2.5 6 6',
+      'M13.5 2.5 10 6',
+      'M13.5 13.5 10 10',
+      'M2.5 13.5 6 10',
+    ]
+
+  return `
+    <svg class="playlist-header-action-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+      ${paths.map((path) => `<path d="${path}"></path>`).join('')}
+    </svg>
+  `
+}
+
 function describePlaylistMeta(playlist, totalCount) {
   if (playlist.isArtist) {
+    const displayedCount = Number(playlist.artistDisplayedTrackCount || playlist.tracks?.length || 0)
+    const knownTotalCount = Math.max(
+      displayedCount,
+      Number(playlist.artistTotalTrackCount || totalCount || 0)
+    )
+    const countLabel = !playlist.artistExpanded
+      && Boolean(playlist.artistAllTracksComplete)
+      && knownTotalCount > displayedCount
+      ? `${formatNumber(displayedCount)}/${formatNumber(knownTotalCount)} \u9996`
+      : `${formatNumber(displayedCount || knownTotalCount)} \u9996`
     const parts = [
-      `${formatNumber(totalCount)} \u9996`,
+      countLabel,
       playlist.artistSourcePlaylistCount ? `${formatNumber(playlist.artistSourcePlaylistCount)} \u5f20\u6b4c\u5355` : '',
       playlist.artistPlayCount ? `${formatNumber(playlist.artistPlayCount)} \u6b21\u64ad\u653e` : '',
     ].filter(Boolean)
@@ -3140,7 +3674,7 @@ function getPlaylistRowWindow(placement) {
   const showRecommendations = recommendationHeight > 0 && end >= totalRows
 
   return {
-    key: `${start}:${end}:${showRecommendations ? 1 : 0}`,
+    key: `${start}:${end}:${totalRows}:${showRecommendations ? 1 : 0}`,
     start,
     end,
     topSpacer: start * metrics.rowHeight,
@@ -3233,34 +3767,58 @@ function primeVisibleArtistPlaylists() {
   }
 }
 
-function queueArtistPlaylistHydration(playlistId) {
+function resolveArtistHydrationRef(playlist, remoteState = null) {
+  const artistId = Number(playlist?.artistId || remoteState?.artistId || 0)
+  if (artistId > 0) {
+    return {
+      artistId,
+      artistRef: artistId,
+    }
+  }
+
+  const artistName = String(playlist?.artistName || playlist?.name || '').trim()
+  return {
+    artistId: 0,
+    artistRef: artistName,
+  }
+}
+
+function queueArtistPlaylistHydration(playlistId, options = {}) {
   const playlist = getPlaylistById(playlistId)
-  if (!playlist?.isArtist || isPlaylistCollapsed(playlist)) {
+  const includeCollapsed = options.includeCollapsed === true
+  const force = options.force === true
+  if (!playlist?.isArtist || (!includeCollapsed && isPlaylistCollapsed(playlist))) {
     return
   }
 
   const artistKey = playlist.artistKey || ''
-  const artistId = Number(playlist.artistId || 0)
-  const requestedLimit = normalizeArtistTrackDisplayLimit(state.settings.artistTrackDisplayLimit)
-  if (!artistKey || artistId <= 0 || requestedLimit <= 0) {
+  const remoteState = state.artistRemoteTracksByKey.get(artistKey)
+  const artistRequest = resolveArtistHydrationRef(playlist, remoteState)
+  const expanded = isArtistPlaylistExpanded(artistKey)
+  const requestedMaxCount = expanded ? 0 : ARTIST_SUMMARY_TRACK_COUNT_MAX
+  if (!artistKey || !artistRequest.artistRef) {
     return
   }
 
-  const remoteState = state.artistRemoteTracksByKey.get(artistKey)
   const currentTrackCount = Array.isArray(remoteState?.tracks) ? remoteState.tracks.length : 0
-  const isCovered = currentTrackCount >= requestedLimit
+  const isCovered = expanded
+    ? Boolean(remoteState?.complete)
+    : currentTrackCount >= ARTIST_SUMMARY_TRACK_COUNT_MAX
   const isAlreadyQueued = renderRuntime.artistHydrationQueue.includes(artistKey)
-  const isAlreadyLoading = Boolean(remoteState?.loading) && Number(remoteState?.requestedLimit || 0) >= requestedLimit
-  const hasMatchingError = Boolean(remoteState?.error) && Number(remoteState?.requestedLimit || 0) >= requestedLimit
-  if (isCovered || isAlreadyQueued || isAlreadyLoading || hasMatchingError) {
+  const isAlreadyLoading = Boolean(remoteState?.loading)
+    && (expanded ? remoteState?.requestedAll === true : Number(remoteState?.requestedMaxCount || 0) >= ARTIST_SUMMARY_TRACK_COUNT_MAX)
+  const hasMatchingError = Boolean(remoteState?.error)
+    && (expanded ? remoteState?.requestedAll === true : Number(remoteState?.requestedMaxCount || 0) >= ARTIST_SUMMARY_TRACK_COUNT_MAX)
+  if (!force && (isCovered || isAlreadyQueued || isAlreadyLoading || hasMatchingError)) {
     return
   }
 
   state.artistRemoteTracksByKey.set(artistKey, {
     ...(remoteState || {}),
-    artistId,
+    artistId: artistRequest.artistId,
     loading: true,
-    requestedLimit,
+    requestedAll: expanded,
+    requestedMaxCount,
   })
   refreshArtistPlaylistByKey(artistKey)
 
@@ -3294,25 +3852,33 @@ async function hydrateArtistPlaylistTracks(artistKey, sessionId) {
   }
 
   const playlist = state.artistPlaylists.find((item) => item.artistKey === artistKey) || null
-  const requestedLimit = normalizeArtistTrackDisplayLimit(state.settings.artistTrackDisplayLimit)
-  const artistId = Number(playlist?.artistId || 0)
-  if (!playlist || artistId <= 0) {
+  const previousState = state.artistRemoteTracksByKey.get(artistKey) || {}
+  const artistRequest = resolveArtistHydrationRef(playlist, previousState)
+  const expanded = isArtistPlaylistExpanded(artistKey)
+  const requestedMaxCount = expanded ? 0 : ARTIST_SUMMARY_TRACK_COUNT_MAX
+  if (!playlist || !artistRequest.artistRef) {
     return
   }
 
-  const result = await appBridge.getArtistSongs(artistId, requestedLimit)
+  const result = await appBridge.getArtistSongs(artistRequest.artistRef, requestedMaxCount)
   if (sessionId !== renderRuntime.artistHydrationSessionId) {
     return
   }
 
-  const previousState = state.artistRemoteTracksByKey.get(artistKey) || {}
+  if (!state.artistPlaylistEntriesByKey.has(artistKey)) {
+    return
+  }
+
+  const resolvedArtistId = Number(result?.artistId || artistRequest.artistId || previousState?.artistId || 0)
+
   if (!result?.ok) {
     state.artistRemoteTracksByKey.set(artistKey, {
       ...previousState,
-      artistId,
+      artistId: resolvedArtistId,
       loading: false,
       error: result?.error || TEXT.goToArtistPlaylistFailed,
-      requestedLimit,
+      requestedAll: expanded,
+      requestedMaxCount,
     })
     refreshArtistPlaylistByKey(artistKey, { rerender: state.activeTab === 'artists' })
     return
@@ -3320,10 +3886,13 @@ async function hydrateArtistPlaylistTracks(artistKey, sessionId) {
 
   state.artistRemoteTracksByKey.set(artistKey, {
     ...previousState,
-    artistId,
+    artistId: resolvedArtistId,
     loading: false,
     error: '',
-    requestedLimit,
+    requestedAll: expanded,
+    requestedMaxCount,
+    complete: requestedMaxCount <= 0
+      || (requestedMaxCount > 0 && (result.tracks || []).length < requestedMaxCount),
     tracks: (result.tracks || []).map((track, index) => normalizePlaylistTrack(track, index)),
   })
   refreshArtistPlaylistByKey(artistKey, { rerender: state.activeTab === 'artists' })
@@ -3891,6 +4460,11 @@ function handleWallClick(event) {
   const subscribeButton = target ? target.closest('[data-subscribe-playlist]') : null
   if (subscribeButton) {
     void subscribeExplorePlaylistFromCard(Number(subscribeButton.getAttribute('data-subscribe-playlist')))
+    return
+  }
+  const artistExpansionButton = target ? target.closest('[data-toggle-artist-track-expansion]') : null
+  if (artistExpansionButton) {
+    toggleArtistTrackExpansion(Number(artistExpansionButton.getAttribute('data-toggle-artist-track-expansion')))
     return
   }
   const collapseButton = target ? target.closest('[data-toggle-playlist-collapse]') : null
@@ -5124,6 +5698,76 @@ async function commitTrackMovePlan(plan) {
   showToast(`${plan.keepSource ? TEXT.copyToPlaylistDone : TEXT.moveToPlaylistDone}\uff1a${plan.targetPlaylist.name}`)
 }
 
+function reorderPlaylistCollection(playlists, sourcePlaylistId, targetPlaylistId, position) {
+  const nextPlaylists = (playlists || []).slice()
+  const sourceIndex = nextPlaylists.findIndex((playlist) => playlist.id === Number(sourcePlaylistId))
+  const targetIndex = nextPlaylists.findIndex((playlist) => playlist.id === Number(targetPlaylistId))
+  if (sourceIndex === -1 || targetIndex === -1) {
+    return null
+  }
+
+  const [movedPlaylist] = nextPlaylists.splice(sourceIndex, 1)
+  const targetOffset = position === 'after' ? 1 : 0
+  const insertionIndex = clamp(
+    sourceIndex < targetIndex ? (targetIndex - 1) + targetOffset : targetIndex + targetOffset,
+    0,
+    nextPlaylists.length
+  )
+  nextPlaylists.splice(insertionIndex, 0, movedPlaylist)
+
+  const changed = nextPlaylists.some((playlist, index) => playlist.id !== playlists[index]?.id)
+  return changed ? nextPlaylists : null
+}
+
+function buildPlaylistMovePlan({ sourcePlaylistId, targetPlaylistId, position }) {
+  const tab = state.activeTab
+  const nextPlaylists = reorderPlaylistCollection(getSourcePlaylists(), sourcePlaylistId, targetPlaylistId, position)
+  if (!nextPlaylists) {
+    return null
+  }
+
+  return {
+    tab,
+    sourcePlaylistId: Number(sourcePlaylistId),
+    targetPlaylistId: Number(targetPlaylistId),
+    position,
+    orderIds: nextPlaylists.map((playlist) => playlist.id),
+  }
+}
+
+function applyPlaylistMovePlan(plan) {
+  if (!setPlaylistOrderIdsForTab(plan.tab, plan.orderIds)) {
+    return
+  }
+
+  applyFilters({ syncAll: true })
+}
+
+function clearPlaylistDragIndicator() {
+  if (renderRuntime.playlistDragIndicator?.playlistId) {
+    const card = refs.wallColumns.querySelector(`.playlist-card[data-playlist-id="${renderRuntime.playlistDragIndicator.playlistId}"]`)
+    card?.classList.remove('is-playlist-drop-before', 'is-playlist-drop-after')
+  }
+
+  renderRuntime.playlistDragIndicator = null
+}
+
+function setPlaylistDragIndicator(indicator) {
+  const current = renderRuntime.playlistDragIndicator
+  if (current?.playlistId === indicator?.playlistId && current?.position === indicator?.position) {
+    return
+  }
+
+  clearPlaylistDragIndicator()
+  if (!indicator) {
+    return
+  }
+
+  const card = refs.wallColumns.querySelector(`.playlist-card[data-playlist-id="${indicator.playlistId}"]`)
+  card?.classList.add(indicator.position === 'before' ? 'is-playlist-drop-before' : 'is-playlist-drop-after')
+  renderRuntime.playlistDragIndicator = indicator
+}
+
 function clearDragIndicator() {
   if (renderRuntime.dragIndicator?.type === 'row') {
     const row = refs.wallColumns.querySelector(
@@ -5188,6 +5832,7 @@ function scheduleTrackDragStateRecovery() {
 
 function handleDocumentVisibilityChange() {
   if (document.hidden) {
+    clearPlaylistDragState()
     clearTrackDragState()
   }
 }
@@ -5214,6 +5859,53 @@ function clearTrackDragState() {
   renderRuntime.dragSourceRow = null
   clearDragIndicator()
   renderRuntime.dragState = null
+}
+
+function clearPlaylistDragState() {
+  if (renderRuntime.playlistDragSourceCard instanceof HTMLElement) {
+    renderRuntime.playlistDragSourceCard.classList.remove('is-playlist-dragging')
+  }
+
+  refs.wallColumns?.querySelectorAll?.('.playlist-card.is-playlist-dragging').forEach((card) => {
+    card.classList.remove('is-playlist-dragging')
+  })
+
+  renderRuntime.playlistDragSourceCard = null
+  clearPlaylistDragIndicator()
+  renderRuntime.playlistDragState = null
+}
+
+function resolvePlaylistDropTarget(event) {
+  const dragState = renderRuntime.playlistDragState
+  if (!dragState || dragState.tab !== state.activeTab) {
+    return null
+  }
+
+  const target = event.target instanceof Element ? event.target : null
+  const card = target?.closest('.playlist-card[data-playlist-id]')
+  if (!card) {
+    return null
+  }
+
+  const targetPlaylistId = Number(card.getAttribute('data-playlist-id'))
+  const rect = card.getBoundingClientRect()
+  const position = event.clientY < rect.top + (rect.height / 2) ? 'before' : 'after'
+  const plan = buildPlaylistMovePlan({
+    sourcePlaylistId: dragState.sourcePlaylistId,
+    targetPlaylistId,
+    position,
+  })
+  if (!plan) {
+    return null
+  }
+
+  return {
+    indicator: {
+      playlistId: targetPlaylistId,
+      position,
+    },
+    plan,
+  }
 }
 
 function getDraggedTrackIdsForRow(playlistId, trackId) {
@@ -5336,8 +6028,42 @@ function resolveTrackDropTarget(event) {
   return null
 }
 
+function handlePlaylistHeaderDragStart(event, handle) {
+  const sourcePlaylistId = Number(handle.getAttribute('data-drag-playlist'))
+  const playlist = getPlaylistById(sourcePlaylistId)
+  const tab = getPlaylistTab(playlist)
+  if (!playlist || !tab || tab !== state.activeTab) {
+    event.preventDefault()
+    return
+  }
+
+  clearTrackDragState()
+  clearPlaylistDragState()
+  renderRuntime.playlistDragState = {
+    tab,
+    sourcePlaylistId,
+  }
+
+  const sourceCard = handle.closest('.playlist-card[data-playlist-id]')
+  renderRuntime.playlistDragSourceCard = sourceCard instanceof HTMLElement ? sourceCard : null
+  renderRuntime.playlistDragSourceCard?.classList.add('is-playlist-dragging')
+  closeContextMenu()
+  hideAlbumHoverPreview()
+
+  if (event.dataTransfer) {
+    event.dataTransfer.effectAllowed = 'move'
+    event.dataTransfer.setData('text/plain', `playlist:${tab}:${sourcePlaylistId}`)
+  }
+}
+
 function handleWallDragStart(event) {
   const target = event.target instanceof Element ? event.target : null
+  const playlistHandle = target?.closest('[data-drag-playlist]')
+  if (playlistHandle) {
+    handlePlaylistHeaderDragStart(event, playlistHandle)
+    return
+  }
+
   const row = target?.closest('.track-row[data-play-track]')
 
   if (!row || renderRuntime.playlistMutationPending) {
@@ -5356,6 +6082,7 @@ function handleWallDragStart(event) {
   }
 
   clearTrackSelection()
+  clearPlaylistDragState()
   clearTrackDragState()
   renderRuntime.dragState = {
     sourcePlaylistId,
@@ -5381,6 +6108,21 @@ function handleWallDragStart(event) {
 }
 
 function handleWallDragOver(event) {
+  if (renderRuntime.playlistDragState) {
+    const playlistDropTarget = resolvePlaylistDropTarget(event)
+    if (!playlistDropTarget) {
+      clearPlaylistDragIndicator()
+      return
+    }
+
+    event.preventDefault()
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = 'move'
+    }
+    setPlaylistDragIndicator(playlistDropTarget.indicator)
+    return
+  }
+
   if (!renderRuntime.dragState || renderRuntime.playlistMutationPending) {
     return
   }
@@ -5399,6 +6141,19 @@ function handleWallDragOver(event) {
 }
 
 function handleWallDrop(event) {
+  if (renderRuntime.playlistDragState) {
+    const playlistDropTarget = resolvePlaylistDropTarget(event)
+    clearPlaylistDragState()
+
+    if (!playlistDropTarget) {
+      return
+    }
+
+    event.preventDefault()
+    applyPlaylistMovePlan(playlistDropTarget.plan)
+    return
+  }
+
   if (!renderRuntime.dragState || renderRuntime.playlistMutationPending) {
     return
   }
@@ -5415,6 +6170,7 @@ function handleWallDrop(event) {
 }
 
 function handleWallDragEnd() {
+  clearPlaylistDragState()
   clearTrackDragState()
 }
 
@@ -5431,6 +6187,8 @@ function clearCurrentPlayback() {
   state.isPlaying = false
   state.isResolving = false
   state.isPreview = false
+  state.currentPlaybackRequestedQuality = ''
+  state.currentPlaybackResolvedLevel = ''
 }
 
 async function transferTrackFromContextMenu(targetPlaylistId) {
@@ -5713,10 +6471,84 @@ async function playRecommendedTrack(playlistId, trackId) {
   await playQueueIndex(queueIndex)
 }
 
-async function playQueueIndex(index) {
-  if (!state.queue.length || index < 0 || index >= state.queue.length) return
-  state.queueIndex = index
-  const track = state.queue[index]
+function waitForAudioMetadata(timeoutMs = AUDIO_SOURCE_WAIT_TIMEOUT_MS) {
+  return new Promise((resolve, reject) => {
+    let settled = false
+    let timer = 0
+
+    const cleanup = () => {
+      refs.audio.removeEventListener('loadedmetadata', handleLoadedMetadata)
+      refs.audio.removeEventListener('error', handleError)
+      if (timer) {
+        window.clearTimeout(timer)
+        timer = 0
+      }
+    }
+
+    const handleLoadedMetadata = () => {
+      if (settled) {
+        return
+      }
+
+      settled = true
+      cleanup()
+      resolve()
+    }
+
+    const handleError = () => {
+      if (settled) {
+        return
+      }
+
+      settled = true
+      cleanup()
+      reject(new Error(TEXT.unavailableTrack))
+    }
+
+    refs.audio.addEventListener('loadedmetadata', handleLoadedMetadata)
+    refs.audio.addEventListener('error', handleError)
+    timer = window.setTimeout(() => {
+      if (settled) {
+        return
+      }
+
+      settled = true
+      cleanup()
+      reject(new Error(TEXT.playbackFailed))
+    }, timeoutMs)
+  })
+}
+
+async function loadResolvedAudioSource(url, { resumeAtSeconds = 0, autoplay = true } = {}) {
+  const needsMetadata = resumeAtSeconds > 0 || !autoplay
+  refs.audio.src = url
+
+  if (needsMetadata) {
+    const metadataReady = waitForAudioMetadata()
+    refs.audio.load()
+    await metadataReady
+
+    if (resumeAtSeconds > 0 && Number.isFinite(refs.audio.duration) && refs.audio.duration > 0) {
+      refs.audio.currentTime = Math.min(
+        resumeAtSeconds,
+        Math.max(0, refs.audio.duration - 0.25)
+      )
+    }
+  }
+
+  if (autoplay) {
+    await refs.audio.play()
+  }
+}
+
+async function resolveQueueTrackSource(track, options = {}) {
+  const requestedQuality = getRequestedAudioQualityPreference(
+    options?.preferredQuality ?? state.settings.defaultAudioQuality
+  )
+  const autoplay = options?.autoplay !== false
+  const resumeAtSeconds = Math.max(0, Number(options?.resumeAtSeconds || 0) || 0)
+  const shouldRecordPlay = Boolean(options?.recordPlay)
+
   state.currentTrackId = track.id
   state.isResolving = true
   state.isPreview = false
@@ -5724,28 +6556,93 @@ async function playQueueIndex(index) {
   renderPlayer()
 
   const token = ++state.playToken
-  const result = await appBridge.getSongUrl(track.id)
-  if (token !== state.playToken) return
+  const result = await appBridge.getSongUrl(track.id, {
+    preferredQuality: requestedQuality,
+  })
+  if (token !== state.playToken) {
+    return { ok: false, cancelled: true }
+  }
+
   state.isResolving = false
 
   if (!result.ok || !result.url) {
+    if (!refs.audio.src || state.currentTrackId === track.id) {
+      state.currentPlaybackRequestedQuality = ''
+      state.currentPlaybackResolvedLevel = ''
+    }
     showToast(result.error || TEXT.noPlayableUrl, 'error')
     renderPlayer()
     syncWallPlaybackState()
-    return
+    return { ok: false }
   }
 
   try {
     state.isPreview = isPreviewByDuration(track.durationMs, result.streamDurationMs)
-    refs.audio.src = result.url
-    await refs.audio.play()
-    void recordTrackPlay(track.id)
+    await loadResolvedAudioSource(result.url, {
+      resumeAtSeconds,
+      autoplay,
+    })
+    state.currentPlaybackRequestedQuality = requestedQuality
+    state.currentPlaybackResolvedLevel = String(result.level || '')
+    if (shouldRecordPlay) {
+      void recordTrackPlay(track.id)
+    }
   } catch (error) {
-    showToast(error.message || TEXT.playbackFailed, 'error')
+    if ((error.message || '') !== TEXT.unavailableTrack) {
+      showToast(error.message || TEXT.playbackFailed, 'error')
+    }
+    return { ok: false }
+  } finally {
+    renderPlayer()
+    syncWallPlaybackState()
   }
 
-  renderPlayer()
-  syncWallPlaybackState()
+  return { ok: true }
+}
+
+function scheduleAudioQualityRefresh(reason = AUDIO_QUALITY_REFRESH_REASON_SETTINGS) {
+  renderRuntime.pendingAudioQualityRefreshReason = reason === AUDIO_QUALITY_REFRESH_REASON_NETWORK
+    && renderRuntime.pendingAudioQualityRefreshReason === AUDIO_QUALITY_REFRESH_REASON_SETTINGS
+    ? AUDIO_QUALITY_REFRESH_REASON_SETTINGS
+    : reason
+  window.clearTimeout(renderRuntime.audioQualityRefreshTimer)
+  renderRuntime.audioQualityRefreshTimer = window.setTimeout(() => {
+    const refreshReason = renderRuntime.pendingAudioQualityRefreshReason || reason
+    renderRuntime.audioQualityRefreshTimer = 0
+    renderRuntime.pendingAudioQualityRefreshReason = ''
+    void refreshCurrentTrackAudioQuality(refreshReason)
+  }, AUDIO_QUALITY_SWITCH_DEBOUNCE_MS)
+}
+
+async function refreshCurrentTrackAudioQuality(reason = AUDIO_QUALITY_REFRESH_REASON_SETTINGS) {
+  const track = getCurrentTrack()
+  if (!track || !refs.audio.src || state.isResolving || navigator.onLine === false) {
+    return
+  }
+
+  const nextRequestedQuality = getRequestedAudioQualityPreference()
+  if (nextRequestedQuality === state.currentPlaybackRequestedQuality) {
+    return
+  }
+
+  // Keep passive connection telemetry from interrupting the current song mid-playback.
+  if (reason === AUDIO_QUALITY_REFRESH_REASON_NETWORK && state.isPlaying) {
+    return
+  }
+
+  await resolveQueueTrackSource(track, {
+    preferredQuality: state.settings.defaultAudioQuality,
+    resumeAtSeconds: Number.isFinite(refs.audio.currentTime) ? refs.audio.currentTime : 0,
+    autoplay: !refs.audio.paused,
+    recordPlay: false,
+  })
+}
+
+async function playQueueIndex(index) {
+  if (!state.queue.length || index < 0 || index >= state.queue.length) return
+  state.queueIndex = index
+  const track = state.queue[index]
+  await resolveQueueTrackSource(track, { recordPlay: true })
 }
 
 async function recordTrackPlay(trackId) {
@@ -5941,9 +6838,10 @@ function renderSettings() {
   refs.likedPlaylistDisplayModeSelect.value = normalizeLikedPlaylistDisplayMode(
     state.settings.likedPlaylistDisplayMode
   )
-  refs.artistTrackDisplayLimitInput.value = String(
-    normalizeArtistTrackDisplayLimit(state.settings.artistTrackDisplayLimit)
+  refs.defaultAudioQualitySelect.value = normalizeAudioQualityPreference(
+    state.settings.defaultAudioQuality
   )
+  refs.autoAdjustAudioQualityToggle.checked = state.settings.autoAdjustAudioQuality !== false
 }
 
 function toggleSettingsPanel() {
@@ -5961,27 +6859,27 @@ function handleSettingsChange() {
   const nextLikedPlaylistDisplayMode = normalizeLikedPlaylistDisplayMode(
     refs.likedPlaylistDisplayModeSelect.value
   )
-  const nextArtistTrackDisplayLimit = normalizeArtistTrackDisplayLimit(
-    refs.artistTrackDisplayLimitInput.value
+  const nextDefaultAudioQuality = normalizeAudioQualityPreference(
+    refs.defaultAudioQualitySelect.value
   )
+  const nextAutoAdjustAudioQuality = refs.autoAdjustAudioQualityToggle.checked
   const recommendationsChanged = nextShowPlaylistRecommendations !== state.settings.showPlaylistRecommendations
-  const artistTrackDisplayLimitChanged = nextArtistTrackDisplayLimit !== state.settings.artistTrackDisplayLimit
+  const audioQualityChanged = nextDefaultAudioQuality !== state.settings.defaultAudioQuality
+    || nextAutoAdjustAudioQuality !== state.settings.autoAdjustAudioQuality
 
   state.settings.showPlaylistRecommendations = nextShowPlaylistRecommendations
   state.settings.likedPlaylistDisplayMode = nextLikedPlaylistDisplayMode
-  state.settings.artistTrackDisplayLimit = nextArtistTrackDisplayLimit
-  refs.artistTrackDisplayLimitInput.value = String(nextArtistTrackDisplayLimit)
+  state.settings.defaultAudioQuality = nextDefaultAudioQuality
+  state.settings.autoAdjustAudioQuality = nextAutoAdjustAudioQuality
 
   if (recommendationsChanged) {
     resetRecommendationRuntime()
   }
 
-  if (artistTrackDisplayLimitChanged) {
-    rebuildArtistPlaylists()
-    refreshPlaylistMap()
-  }
-
   saveSettings()
+  if (audioQualityChanged) {
+    scheduleAudioQualityRefresh(AUDIO_QUALITY_REFRESH_REASON_SETTINGS)
+  }
   applyFilters({ syncAll: true })
 }
 
@@ -6020,6 +6918,21 @@ function saveSettings() {
   void persistPreferences()
 }
 
+function loadUiSessionState() {
+  try {
+    const raw = window.sessionStorage.getItem(SESSION_LAYOUT_STORAGE_KEY) || '{}'
+    return normalizeUiSessionState(JSON.parse(raw))
+  } catch {
+    return normalizeUiSessionState()
+  }
+}
+
+function saveUiSessionState() {
+  try {
+    window.sessionStorage.setItem(SESSION_LAYOUT_STORAGE_KEY, JSON.stringify(state.uiSession))
+  } catch {}
+}
+
 function loadStoredTheme() {
   try {
     const value = window.localStorage.getItem(THEME_STORAGE_KEY)
@@ -6036,16 +6949,22 @@ function loadStoredSettings() {
     return {
       showPlaylistRecommendations: Boolean(parsed.showPlaylistRecommendations),
       likedPlaylistDisplayMode: normalizeLikedPlaylistDisplayMode(parsed.likedPlaylistDisplayMode),
+      defaultAudioQuality: normalizeAudioQualityPreference(parsed.defaultAudioQuality),
+      autoAdjustAudioQuality: parsed.autoAdjustAudioQuality !== false,
       artistTrackDisplayLimit: normalizeArtistTrackDisplayLimit(parsed.artistTrackDisplayLimit),
       collapsedPlaylistIds: normalizeCollapsedPlaylistIds(parsed.collapsedPlaylistIds),
+      ownedPlaylistOrderIds: normalizePlaylistOrderIds(parsed.ownedPlaylistOrderIds),
       uiScale: normalizeUiScale(parsed.uiScale),
     }
   } catch {
     return {
       showPlaylistRecommendations: false,
       likedPlaylistDisplayMode: LIKED_PLAYLIST_DISPLAY_MODE_ALL,
+      defaultAudioQuality: AUDIO_QUALITY_BEST,
+      autoAdjustAudioQuality: true,
       artistTrackDisplayLimit: ARTIST_TRACK_DISPLAY_LIMIT_DEFAULT,
       collapsedPlaylistIds: [],
+      ownedPlaylistOrderIds: [],
       uiScale: UI_SCALE_DEFAULT,
     }
   }
@@ -6068,11 +6987,18 @@ async function hydrateStoredPreferences() {
   state.settings.likedPlaylistDisplayMode = normalizeLikedPlaylistDisplayMode(
     result.preferences.likedPlaylistDisplayMode
   )
+  state.settings.defaultAudioQuality = normalizeAudioQualityPreference(
+    result.preferences.defaultAudioQuality
+  )
+  state.settings.autoAdjustAudioQuality = result.preferences.autoAdjustAudioQuality !== false
   state.settings.artistTrackDisplayLimit = normalizeArtistTrackDisplayLimit(
     result.preferences.artistTrackDisplayLimit
   )
   state.settings.collapsedPlaylistIds = normalizeCollapsedPlaylistIds(
     result.preferences.collapsedPlaylistIds
+  )
+  state.settings.ownedPlaylistOrderIds = normalizePlaylistOrderIds(
+    result.preferences.ownedPlaylistOrderIds
   )
   state.settings.uiScale = normalizeUiScale(result.preferences.uiScale)
 
@@ -6091,8 +7017,11 @@ async function persistPreferences() {
     theme: state.theme,
     showPlaylistRecommendations: Boolean(state.settings.showPlaylistRecommendations),
     likedPlaylistDisplayMode: normalizeLikedPlaylistDisplayMode(state.settings.likedPlaylistDisplayMode),
+    defaultAudioQuality: normalizeAudioQualityPreference(state.settings.defaultAudioQuality),
+    autoAdjustAudioQuality: state.settings.autoAdjustAudioQuality !== false,
     artistTrackDisplayLimit: normalizeArtistTrackDisplayLimit(state.settings.artistTrackDisplayLimit),
     collapsedPlaylistIds: normalizeCollapsedPlaylistIds(state.settings.collapsedPlaylistIds),
+    ownedPlaylistOrderIds: normalizePlaylistOrderIds(state.settings.ownedPlaylistOrderIds),
     uiScale: normalizeUiScale(state.settings.uiScale),
   })
 }
@@ -6232,19 +7161,24 @@ function setPlaylistCollapsed(playlistId, collapsed, options = {}) {
     return false
   }
 
+  const playlistTab = getPlaylistTab(playlistId)
+  if (!playlistTab) {
+    return false
+  }
+
   const {
     persist = true,
     rerender = true,
     syncAll = true,
   } = options
 
-  const currentIds = normalizeCollapsedPlaylistIds(state.settings.collapsedPlaylistIds)
+  const currentIds = getCollapsedPlaylistIdsForTab(playlistTab)
   const alreadyCollapsed = currentIds.includes(normalizedPlaylistId)
   if (collapsed === alreadyCollapsed) {
     return false
   }
 
-  state.settings.collapsedPlaylistIds = collapsed
+  const nextIds = collapsed
     ? normalizeCollapsedPlaylistIds([...currentIds, normalizedPlaylistId])
     : currentIds.filter((id) => id !== normalizedPlaylistId)
 
@@ -6252,9 +7186,7 @@ function setPlaylistCollapsed(playlistId, collapsed, options = {}) {
     clearTrackSelection()
   }
 
-  if (persist) {
-    saveSettings()
-  }
+  setCollapsedPlaylistIdsForTab(playlistTab, nextIds, { persist })
 
   if (rerender) {
     scheduleWallRenderWithOptions({ immediate: true, syncAll })

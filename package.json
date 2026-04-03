@@ -28,7 +28,7 @@
     "dist:win": "npm run third-party:notices && electron-builder --win dir --x64 --publish never && node scripts/package-win-folder.js"
   },
   "dependencies": {
-    "NeteaseCloudMusicApi": "^4.30.0"
+    "NeteaseCloudMusicApi": "4.30.0"
   },
   "devDependencies": {
     "electron": "^33.4.11",

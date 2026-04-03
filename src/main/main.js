@@ -38,6 +38,69 @@ let svc = null
 let hydrationRunId = 0
 let flushingPendingSubscribedPlaylistRemovals = false
 const pendingSubscribedPlaylistRemovals = new Map()
+let mainProcessDiagnosticsRegistered = false
+
+function logRuntimeDiagnostic(label, payload) {
+  if (payload === undefined) {
+    console.error(`[runtime] ${label}`)
+    return
+  }
+
+  console.error(`[runtime] ${label}`, payload)
+}
+
+function registerMainProcessDiagnostics() {
+  if (mainProcessDiagnosticsRegistered) {
+    return
+  }
+
+  mainProcessDiagnosticsRegistered = true
+
+  process.on('uncaughtException', (error) => {
+    logRuntimeDiagnostic('main uncaughtException', error)
+  })
+
+  process.on('unhandledRejection', (reason) => {
+    logRuntimeDiagnostic('main unhandledRejection', reason)
+  })
+}
+
+function attachWindowDiagnostics(targetWindow) {
+  if (!targetWindow?.webContents) {
+    return
+  }
+
+  targetWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+    logRuntimeDiagnostic('renderer did-fail-load', {
+      errorCode,
+      errorDescription,
+      validatedURL,
+      isMainFrame,
+    })
+  })
+
+  targetWindow.webContents.on('render-process-gone', (_event, details) => {
+    logRuntimeDiagnostic('renderer render-process-gone', details)
+  })
+
+  targetWindow.webContents.on('unresponsive', () => {
+    logRuntimeDiagnostic('renderer unresponsive')
+  })
+
+  targetWindow.webContents.on('did-finish-load', () => {
+    console.log('[runtime] renderer did-finish-load')
+  })
+
+  targetWindow.webContents.on('console-message', (_event, level, message, line, sourceId) => {
+    const prefix = `[renderer:${level}] ${sourceId || 'unknown'}:${Number(line || 0)}`
+    if (level >= 2) {
+      console.error(prefix, message)
+      return
+    }
+
+    console.log(prefix, message)
+  })
+}
 
 function send(channel, data) {
   if (win && !win.isDestroyed()) {
@@ -731,6 +794,8 @@ async function hydratePlaylistsInBackground(account, playlists) {
 }
 
 function createWindow() {
+  registerMainProcessDiagnostics()
+
   win = new BrowserWindow({
     width: 1680,
     height: 980,
@@ -748,6 +813,7 @@ function createWindow() {
     },
   })
 
+  attachWindowDiagnostics(win)
   win.loadFile(path.join(__dirname, '../renderer/index.html'))
   win.once('ready-to-show', () => win.show())
   win.on('closed', () => {
@@ -934,13 +1000,13 @@ function registerIpc() {
     return { ok: true }
   })
 
-  ipcMain.handle('getSongUrl', async (_event, songId) => {
+  ipcMain.handle('getSongUrl', async (_event, songId, options = {}) => {
     try {
       if (!svc) {
         throw new Error(TEXT.serviceNotReady)
       }
 
-      const source = await svc.getSongUrl(songId)
+      const source = await svc.getSongUrl(songId, options)
       return { ok: true, ...source }
     } catch (error) {
       return { ok: false, error: error.message || String(error) }
@@ -953,10 +1019,14 @@ function registerIpc() {
         throw new Error(TEXT.serviceNotReady)
       }
 
-      const tracks = await svc.getArtistSongs(artistId, maxCount)
-      return { ok: true, tracks }
+      const result = await svc.getArtistSongs(artistId, maxCount, { includeArtistId: true })
+      return {
+        ok: true,
+        artistId: Number(result?.artistId || 0),
+        tracks: Array.isArray(result?.tracks) ? result.tracks : [],
+      }
     } catch (error) {
-      return { ok: false, error: error.message || String(error), tracks: [] }
+      return { ok: false, error: error.message || String(error), artistId: 0, tracks: [] }
     }
   })
 

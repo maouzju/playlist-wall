@@ -223,10 +223,6 @@
 
   <div id="settings-backdrop" class="hidden"></div>
   <aside id="settings-panel" aria-label="设置">
-    <div class="settings-header">
-      <div class="settings-title">界面设置</div>
-      <button class="settings-close-btn" id="settings-close-btn" type="button">关闭</button>
-    </div>
     <label class="settings-row" for="ui-scale-range">
       <div class="settings-copy">
         <div class="settings-label">&#x754C;&#x9762;&#x7F29;&#x653E;</div>
@@ -255,12 +251,24 @@
         <option value="hidden">&#x9690;&#x85CF;</option>
       </select>
     </label>
-    <label class="settings-row" for="artist-track-display-limit-input">
+    <label class="settings-row" for="default-audio-quality-select">
       <div class="settings-copy">
-        <div class="settings-label">&#x827A;&#x4EBA;&#x6700;&#x591A;&#x663E;&#x793A;&#x66F2;&#x6570;</div>
-        <div class="settings-hint">&#x827A;&#x4EBA;&#x6B4C;&#x5355;&#x4F1A;&#x6309;&#x70ED;&#x5EA6;&#x964D;&#x5E8F;&#x8865;&#x5168;&#x66F2;&#x76EE;&#xFF0C;&#x8FD9;&#x4E2A;&#x4E0A;&#x9650;&#x7528;&#x6765;&#x63A7;&#x5236;&#x6BCF;&#x4E2A;&#x827A;&#x4EBA;&#x5361;&#x7247;&#x6700;&#x591A;&#x5C55;&#x793A;&#x591A;&#x5C11;&#x9996;&#x3002;</div>
+        <div class="settings-label">默认音质</div>
+        <div class="settings-hint">默认优先使用这个档位；“最佳可用”会按可用性依次尝试更高音质后再回退。</div>
       </div>
-      <input id="artist-track-display-limit-input" class="settings-number-input" type="number" min="20" max="1000" step="10" value="100">
+      <select id="default-audio-quality-select" class="settings-select">
+        <option value="best">最佳可用</option>
+        <option value="lossless">无损</option>
+        <option value="exhigh">极高</option>
+        <option value="standard">标准</option>
+      </select>
+    </label>
+    <label class="settings-row" for="auto-adjust-audio-quality-toggle">
+      <div class="settings-copy">
+        <div class="settings-label">根据网络自动切换音质</div>
+        <div class="settings-hint">开启后会在弱网或省流量模式下降档，网络恢复后回到默认音质。</div>
+      </div>
+      <input id="auto-adjust-audio-quality-toggle" type="checkbox" checked>
     </label>
     <div class="settings-row settings-row--actions">
       <div class="settings-copy">

@@ -5,8 +5,20 @@ const EXPLORE_DETAIL_CONCURRENCY = 4
 const API_REQUEST_TIMEOUT_MS = 15000
 const API_MAX_ATTEMPTS = 5
 const API_RETRY_DELAY_MS = 2000
-const PLAYLIST_SUBSCRIPTION_TIMEOUT_MS = 8000
 const API_TIMEOUT_MESSAGE = '\u8bf7\u6c42\u8d85\u65f6\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5'
+const AUDIO_QUALITY_BEST = 'best'
+const AUDIO_QUALITY_LOSSLESS = 'lossless'
+const AUDIO_QUALITY_EXHIGH = 'exhigh'
+const AUDIO_QUALITY_STANDARD = 'standard'
+const AUDIO_QUALITY_LEVELS_BEST = [
+  'jymaster',
+  'sky',
+  'jyeffect',
+  'hires',
+  'lossless',
+  'exhigh',
+  'standard',
+]
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -83,6 +95,40 @@ function normalizeSongSource(data, level) {
   }
 }
 
+function normalizeAudioQualityPreference(input) {
+  if (input === AUDIO_QUALITY_LOSSLESS) {
+    return AUDIO_QUALITY_LOSSLESS
+  }
+
+  if (input === AUDIO_QUALITY_EXHIGH) {
+    return AUDIO_QUALITY_EXHIGH
+  }
+
+  if (input === AUDIO_QUALITY_STANDARD) {
+    return AUDIO_QUALITY_STANDARD
+  }
+
+  return AUDIO_QUALITY_BEST
+}
+
+function buildSongUrlLevelCandidates(input) {
+  const preference = normalizeAudioQualityPreference(input)
+
+  if (preference === AUDIO_QUALITY_LOSSLESS) {
+    return ['lossless', 'exhigh', 'standard']
+  }
+
+  if (preference === AUDIO_QUALITY_EXHIGH) {
+    return ['exhigh', 'standard']
+  }
+
+  if (preference === AUDIO_QUALITY_STANDARD) {
+    return ['standard']
+  }
+
+  return [...AUDIO_QUALITY_LEVELS_BEST]
+}
+
 function normalizeArtistEntries(source) {
   const artists = source?.ar || source?.artists || source?.artistNames || []
   if (Array.isArray(artists)) {
@@ -113,6 +159,36 @@ function normalizeArtistEntries(source) {
 
 function normalizeArtists(source) {
   return normalizeArtistEntries(source).map((artist) => artist.name)
+}
+
+function normalizeArtistLookupText(input) {
+  return String(input || '').trim().toLowerCase()
+}
+
+function getArtistSearchCandidateNames(artist) {
+  return [
+    artist?.name,
+    ...(Array.isArray(artist?.alias) ? artist.alias : []),
+    ...(Array.isArray(artist?.alia) ? artist.alia : []),
+    ...(Array.isArray(artist?.transNames) ? artist.transNames : []),
+    artist?.trans,
+  ]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)
+}
+
+function pickBestArtistSearchMatch(artists, artistName) {
+  const normalizedArtistName = normalizeArtistLookupText(artistName)
+  if (!normalizedArtistName) {
+    return Array.isArray(artists) && artists.length ? artists[0] : null
+  }
+
+  const exactMatch = (artists || []).find((artist) =>
+    getArtistSearchCandidateNames(artist)
+      .some((candidate) => normalizeArtistLookupText(candidate) === normalizedArtistName)
+  )
+
+  return exactMatch || ((artists || [])[0] || null)
 }
 
 function normalizeTrackIds(trackIds) {
@@ -236,7 +312,7 @@ async function callApi(name, params, options = {}) {
       const body = error && error.body ? error.body : null
       const bodyMsg = body && (body.msg || body.message) ? (body.msg || body.message) : ''
       const status = (error && error.status) || (body && body.code) || 0
-      const retryable = /(ETIMEDOUT|timeout|502|ECONNRESET|405|\u9891\u7e41)/i.test(`${errorCode} ${msg} ${bodyMsg} ${status}`)
+      const retryable = /(ETIMEDOUT|timeout|502|ECONNRESET)/i.test(`${errorCode} ${msg} ${bodyMsg} ${status}`)
       if (!retryable || attempt === maxAttempts) {
         throw createApiError(
           error,
@@ -270,6 +346,46 @@ function normalizeSongs(body) {
 class NeteaseService {
   constructor(cookie) {
     this.cookie = cookie
+  }
+
+  async resolveArtistReference(artistRef) {
+    const normalizedArtistId = Number(artistRef || 0)
+    if (normalizedArtistId > 0) {
+      return {
+        artistId: normalizedArtistId,
+        artistName: '',
+      }
+    }
+
+    const artistName = String(artistRef || '').trim()
+    if (!artistName) {
+      throw new Error('\u827a\u4eba\u4e0d\u5b58\u5728')
+    }
+
+    const response = await callApi('search', {
+      cookie: this.cookie,
+      keywords: artistName,
+      type: 100,
+      limit: 10,
+      offset: 0,
+    }, {
+      fallbackMessage: '\u641c\u7d22\u827a\u4eba\u5931\u8d25',
+    })
+
+    ensureApiSuccess(response.body, '\u641c\u7d22\u827a\u4eba\u5931\u8d25')
+    const artists = Array.isArray(response.body?.result?.artists)
+      ? response.body.result.artists
+      : []
+    const matchedArtist = pickBestArtistSearchMatch(artists, artistName)
+    const resolvedArtistId = Number(matchedArtist?.id || 0)
+    if (resolvedArtistId <= 0) {
+      throw new Error('\u827a\u4eba\u4e0d\u5b58\u5728')
+    }
+
+    return {
+      artistId: resolvedArtistId,
+      artistName: String(matchedArtist?.name || artistName).trim(),
+    }
   }
 
   async createQrLogin() {
@@ -440,9 +556,12 @@ class NeteaseService {
     }))
   }
 
-  async getArtistSongs(artistId, maxCount = 100) {
-    const normalizedArtistId = Number(artistId || 0)
-    const normalizedMaxCount = Math.max(1, Math.round(Number(maxCount || 0) || 0))
+  async getArtistSongs(artistRef, maxCount = 100, options = {}) {
+    const resolvedArtist = await this.resolveArtistReference(artistRef)
+    const normalizedArtistId = Number(resolvedArtist.artistId || 0)
+    const numericMaxCount = Number(maxCount)
+    const fetchAll = !Number.isFinite(numericMaxCount) || numericMaxCount <= 0
+    const normalizedMaxCount = fetchAll ? 0 : Math.max(1, Math.round(numericMaxCount))
     if (normalizedArtistId <= 0) {
       throw new Error('\u827a\u4eba\u4e0d\u5b58\u5728')
     }
@@ -451,8 +570,8 @@ class NeteaseService {
     const seen = new Set()
     let offset = 0
 
-    while (tracks.length < normalizedMaxCount) {
-      const pageLimit = Math.min(100, normalizedMaxCount - tracks.length)
+    while (fetchAll || tracks.length < normalizedMaxCount) {
+      const pageLimit = fetchAll ? 100 : Math.min(100, normalizedMaxCount - tracks.length)
       const response = await callApi('artist_songs', {
         cookie: this.cookie,
         id: normalizedArtistId,
@@ -477,7 +596,7 @@ class NeteaseService {
 
         seen.add(track.id)
         tracks.push(track)
-        if (tracks.length >= normalizedMaxCount) {
+        if (!fetchAll && tracks.length >= normalizedMaxCount) {
           break
         }
       }
@@ -489,29 +608,43 @@ class NeteaseService {
       offset += songs.length
     }
 
-    return tracks.map((track, index) => ({
+    const normalizedTracks = tracks.map((track, index) => ({
       ...track,
       position: index + 1,
     }))
-  }
 
-  async getSongUrl(songId) {
-    const high = await callApi('song_url_v1', {
-      cookie: this.cookie,
-      id: songId,
-      level: 'exhigh',
-    })
-    const highData = high.body?.data?.[0]
-    if (highData?.url) {
-      return normalizeSongSource(highData, 'exhigh')
+    if (options?.includeArtistId) {
+      return {
+        artistId: normalizedArtistId,
+        artistName: resolvedArtist.artistName,
+        tracks: normalizedTracks,
+      }
     }
 
-    const standard = await callApi('song_url_v1', {
-      cookie: this.cookie,
-      id: songId,
-      level: 'standard',
-    })
-    return normalizeSongSource(standard.body?.data?.[0], 'standard')
+    return normalizedTracks
+  }
+
+  async getSongUrl(songId, options = {}) {
+    const levels = buildSongUrlLevelCandidates(options?.preferredQuality)
+    let fallbackSource = null
+
+    for (const level of levels) {
+      const response = await callApi('song_url_v1', {
+        cookie: this.cookie,
+        id: songId,
+        level,
+      })
+      const data = response.body?.data?.[0]
+      if (data?.url) {
+        return normalizeSongSource(data, level)
+      }
+
+      if (!fallbackSource && data) {
+        fallbackSource = normalizeSongSource(data, level)
+      }
+    }
+
+    return fallbackSource || normalizeSongSource(null, levels[levels.length - 1] || 'standard')
   }
 
   async removeTrackFromPlaylist(playlistId, trackIds) {
@@ -563,11 +696,9 @@ class NeteaseService {
       t: 1,
     }, {
       fallbackMessage: '\u6536\u85cf\u6b4c\u5355\u5931\u8d25',
-      timeoutMs: PLAYLIST_SUBSCRIPTION_TIMEOUT_MS,
-      maxAttempts: 1,
-      retryDelayMs: 0,
       codeMessages: {
         301: '\u9700\u8981\u6709\u6548\u7684\u7f51\u6613\u4e91\u767b\u5f55\u6001\uff0c\u624d\u80fd\u6536\u85cf\u6b4c\u5355\u3002',
+        405: '\u7f51\u6613\u4e91\u8fd4\u56de 405\uff1a\u64cd\u4f5c\u8fc7\u4e8e\u9891\u7e41\uff0c\u8bf7\u7a0d\u540e\u518d\u8bd5\u3002\u82e5\u6301\u7eed\u5931\u8d25\uff0c\u53ef\u5148\u5728\u7f51\u6613\u4e91\u5b98\u65b9\u5ba2\u6237\u7aef\u6216\u7f51\u9875\u5b8c\u6210\u6536\u85cf\u3002',
       },
     })
 
@@ -581,11 +712,9 @@ class NeteaseService {
       t: 2,
     }, {
       fallbackMessage: '\u5220\u9664\u6536\u85cf\u6b4c\u5355\u5931\u8d25',
-      timeoutMs: PLAYLIST_SUBSCRIPTION_TIMEOUT_MS,
-      maxAttempts: 1,
-      retryDelayMs: 0,
       codeMessages: {
         301: '\u9700\u8981\u6709\u6548\u7684\u7f51\u6613\u4e91\u767b\u5f55\u6001\uff0c\u624d\u80fd\u5220\u9664\u6536\u85cf\u6b4c\u5355\u3002',
+        405: '\u7f51\u6613\u4e91\u8fd4\u56de 405\uff1a\u64cd\u4f5c\u8fc7\u4e8e\u9891\u7e41\uff0c\u8bf7\u7a0d\u540e\u518d\u8bd5\u3002\u82e5\u6301\u7eed\u5931\u8d25\uff0c\u53ef\u5148\u5728\u7f51\u6613\u4e91\u5b98\u65b9\u5ba2\u6237\u7aef\u6216\u7f51\u9875\u5b8c\u6210\u53d6\u6d88\u6536\u85cf\u3002',
       },
     })
 
@@ -840,7 +969,9 @@ class NeteaseService {
 module.exports = {
   NeteaseService,
   __testing: {
+    buildSongUrlLevelCandidates,
     callApi,
+    normalizeAudioQualityPreference,
     withTimeout,
   },
 }

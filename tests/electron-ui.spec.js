@@ -1,4 +1,4 @@
-const path = require('path')
+﻿const path = require('path')
 const { test, expect } = require('playwright/test')
 
 const rendererPath = path.resolve(__dirname, '../src/renderer/index.html').replace(/\\/g, '/')
@@ -16,6 +16,11 @@ test.use({
 async function waitForWall(page, url = PAGE_URL) {
   await page.goto(url)
   await page.waitForSelector('.playlist-card')
+}
+
+async function closeSettingsPanel(page) {
+  await page.keyboard.press('Escape')
+  await expect(page.locator('#settings-panel')).not.toHaveClass(/is-open/)
 }
 
 async function dragTrack(page, sourceSelector, targetSelector, placement = 'after') {
@@ -67,6 +72,55 @@ async function dragTrack(page, sourceSelector, targetSelector, placement = 'afte
   }, { sourceSelector, targetSelector, placement })
 }
 
+async function dragPlaylistHeader(page, sourcePlaylistId, targetPlaylistId, placement = 'after') {
+  await page.evaluate(({ sourcePlaylistId, targetPlaylistId, placement }) => {
+    const source = document.querySelector(`.playlist-card[data-playlist-id="${sourcePlaylistId}"] [data-drag-playlist="${sourcePlaylistId}"]`)
+    const target = document.querySelector(`.playlist-card[data-playlist-id="${targetPlaylistId}"]`)
+    if (!source || !target) {
+      throw new Error(`playlist drag target missing: ${sourcePlaylistId} -> ${targetPlaylistId}`)
+    }
+
+    const sourceRect = source.getBoundingClientRect()
+    const targetRect = target.getBoundingClientRect()
+    const clientX = Math.round(targetRect.left + Math.min(40, Math.max(16, targetRect.width / 2)))
+    const clientY = placement === 'before'
+      ? Math.round(targetRect.top + 2)
+      : Math.round(targetRect.bottom - 2)
+    const sourceX = Math.round(sourceRect.left + Math.min(40, Math.max(16, sourceRect.width / 2)))
+    const sourceY = Math.round(sourceRect.top + (sourceRect.height / 2))
+    const dataTransfer = new DataTransfer()
+
+    source.dispatchEvent(new DragEvent('dragstart', {
+      bubbles: true,
+      cancelable: true,
+      clientX: sourceX,
+      clientY: sourceY,
+      dataTransfer,
+    }))
+    target.dispatchEvent(new DragEvent('dragover', {
+      bubbles: true,
+      cancelable: true,
+      clientX,
+      clientY,
+      dataTransfer,
+    }))
+    target.dispatchEvent(new DragEvent('drop', {
+      bubbles: true,
+      cancelable: true,
+      clientX,
+      clientY,
+      dataTransfer,
+    }))
+    source.dispatchEvent(new DragEvent('dragend', {
+      bubbles: true,
+      cancelable: true,
+      clientX,
+      clientY,
+      dataTransfer,
+    }))
+  }, { sourcePlaylistId, targetPlaylistId, placement })
+}
+
 async function scrollWallTo(page, top) {
   await page.locator('#wall-scroll').evaluate((node, nextTop) => {
     node.scrollTop = nextTop
@@ -75,12 +129,25 @@ async function scrollWallTo(page, top) {
   return page.locator('#wall-scroll').evaluate((node) => node.scrollTop)
 }
 
+async function getVisiblePlaylistOrder(page) {
+  return page.evaluate(() => {
+    return Array.from(document.querySelectorAll('.playlist-card[data-playlist-id]'))
+      .map((node) => ({
+        id: node.getAttribute('data-playlist-id'),
+        top: Math.round(node.getBoundingClientRect().top),
+        left: Math.round(node.getBoundingClientRect().left),
+      }))
+      .sort((left, right) => left.top - right.top || left.left - right.left)
+      .map((entry) => entry.id)
+  })
+}
+
 test('shows qr login before entering the wall', async ({ page }) => {
   await page.goto(AUTH_PAGE_URL)
 
   await expect(page.locator('#auth-screen')).toBeVisible()
   await expect(page.locator('#auth-qr-image')).toBeVisible()
-  await expect(page.locator('#auth-stage')).toContainText('扫码')
+  await expect(page.locator('#auth-stage')).toContainText(/\u626b\u7801|\u767b\u5f55\u6210\u529f/)
 
   await expect(page.locator('#app')).toBeVisible({ timeout: 10000 })
   await expect(page.locator('#auth-screen')).toBeHidden()
@@ -135,13 +202,22 @@ test('explore preload starts before app init finishes', async ({ page }) => {
   await expect(page.locator('#tab-explore-count')).not.toHaveText('0')
 })
 
+test('artist playlists preload silently after app init', async ({ page }) => {
+  await waitForWall(page)
+
+  await expect(page.locator('#tab-owned')).toHaveClass(/is-active/)
+  await expect.poll(async () => {
+    return page.evaluate(() => window.__mockStats?.artistRequestCount || 0)
+  }, { timeout: 2500 }).toBeGreaterThan(0)
+})
+
 test('explore tab loads discovery playlists and supports remote playlist search', async ({ page }) => {
   await waitForWall(page)
 
   await page.click('#tab-explore')
   await expect(page.locator('#tab-explore')).toHaveClass(/is-active/)
   await expect(page.locator('.playlist-card').first()).toBeVisible()
-  await expect(page.locator('.playlist-card').first().locator('.playlist-meta')).toContainText(/推送|推荐|精选/)
+  await expect(page.locator('.playlist-card').first().locator('.playlist-meta')).toContainText(/\u63a8\u9001|\u63a8\u8350|\u7cbe\u9009/)
 
   await page.fill('#search-input', 'Jazz')
   await expect(page.locator('.playlist-card')).toHaveCount(1)
@@ -175,17 +251,63 @@ test('switching tabs restores each tab scroll position', async ({ page }) => {
   }).toBeLessThanOrEqual(2)
 })
 
+test('playlist headers can drag-sort subscribed playlists and keep that order within the session', async ({ page }) => {
+  await waitForWall(page)
+
+  await page.click('#tab-subscribed')
+  await expect(page.locator('#tab-subscribed')).toHaveClass(/is-active/)
+  await expect.poll(async () => getVisiblePlaylistOrder(page)).toEqual(['202', '201', '203'])
+
+  await dragPlaylistHeader(page, 203, 201, 'before')
+
+  await expect.poll(async () => getVisiblePlaylistOrder(page)).toEqual(['202', '203', '201'])
+
+  await page.click('#tab-owned')
+  await page.click('#tab-subscribed')
+  await expect.poll(async () => getVisiblePlaylistOrder(page)).toEqual(['202', '203', '201'])
+})
+
+test('owned playlist header order persists after reload', async ({ page }) => {
+  await waitForWall(page)
+  await expect.poll(async () => getVisiblePlaylistOrder(page)).toEqual(['101', '102', '103'])
+
+  await dragPlaylistHeader(page, 103, 102, 'before')
+  await expect.poll(async () => getVisiblePlaylistOrder(page)).toEqual(['101', '103', '102'])
+
+  await page.reload()
+  await page.waitForSelector('.playlist-card')
+  await expect.poll(async () => getVisiblePlaylistOrder(page)).toEqual(['101', '103', '102'])
+})
+
+test('owned and subscribed collapsed playlists persist after reload', async ({ page }) => {
+  await waitForWall(page)
+
+  await page.click('.playlist-card[data-playlist-id="102"] [data-toggle-playlist-collapse="102"]')
+  await expect(page.locator('.playlist-card[data-playlist-id="102"]')).toHaveClass(/is-collapsed/)
+
+  await page.click('#tab-subscribed')
+  await page.click('.playlist-card[data-playlist-id="201"] [data-toggle-playlist-collapse="201"]')
+  await expect(page.locator('.playlist-card[data-playlist-id="201"]')).toHaveClass(/is-collapsed/)
+
+  await page.reload()
+  await page.waitForSelector('.playlist-card')
+  await expect(page.locator('.playlist-card[data-playlist-id="102"]')).toHaveClass(/is-collapsed/)
+
+  await page.click('#tab-subscribed')
+  await expect(page.locator('.playlist-card[data-playlist-id="201"]')).toHaveClass(/is-collapsed/)
+})
+
 test('explore tab shows loading feedback while community playlists are fetching', async ({ page }) => {
   await waitForWall(page, EXPLORE_DELAY_PAGE_URL)
 
   await page.click('#tab-explore')
   await expect(page.locator('#explore-loading-indicator')).toBeVisible()
-  await expect(page.locator('#explore-loading-indicator')).toContainText('加载探索歌单')
+  await expect(page.locator('#explore-loading-indicator')).toContainText('\u52a0\u8f7d\u63a2\u7d22\u6b4c\u5355')
   await expect(page.locator('#wall-empty')).toHaveClass(/hidden/)
   await expect(page.locator('.playlist-card[data-playlist-id="102"]')).toHaveCount(1)
 
   await expect(page.locator('#explore-loading-indicator')).toHaveClass(/hidden/)
-  await expect(page.locator('.playlist-card').first().locator('.playlist-meta')).toContainText(/推送|推荐|精选/)
+  await expect(page.locator('.playlist-card').first().locator('.playlist-meta')).toContainText(/\u63a8\u9001|\u63a8\u8350|\u7cbe\u9009/)
 })
 
 test('explore playlist header plus subscribes the playlist into subscribed tab', async ({ page }) => {
@@ -202,7 +324,7 @@ test('explore playlist header plus subscribes the playlist into subscribed tab',
   await subscribeButton.click()
 
   await expect(subscribeButton).toBeDisabled()
-  await expect(subscribeButton).toContainText('✓')
+  await expect(subscribeButton).toContainText('\u2713')
   await expect(page.locator('#tab-subscribed-count')).toHaveText(String(subscribedCountBefore + 1))
 
   await page.click('#tab-subscribed')
@@ -218,18 +340,18 @@ test('artist tab groups artists by importance and context menu can jump to the m
   await page.click('#tab-artists')
   await expect(page.locator('#tab-artists')).toHaveClass(/is-active/)
   await expect(page.locator('#tab-artists-count')).toHaveText('5')
-  await expect(page.locator('.playlist-card').first().locator('.playlist-title')).toContainText('艺术家 1')
-  await expect(page.locator('.playlist-card').first().locator('.playlist-meta')).toContainText('次播放')
+  await expect(page.locator('.playlist-card').first().locator('.playlist-title')).toContainText('\u827a\u672f\u5bb6 1')
+  await expect(page.locator('.playlist-card').first().locator('.playlist-meta')).toContainText('\u6b21\u64ad\u653e')
 
-  await page.fill('#search-input', '艺术家 3')
+  await page.fill('#search-input', '\u827a\u672f\u5bb6 3')
   await expect(page.locator('.playlist-card')).toHaveCount(1)
-  await expect(page.locator('.playlist-card').first().locator('.playlist-title')).toContainText('艺术家 3')
+  await expect(page.locator('.playlist-card').first().locator('.playlist-title')).toContainText('\u827a\u672f\u5bb6 3')
 
   await page.fill('#search-input', '')
   await expect(page.locator('#search-input')).toHaveValue('')
 
   await page.click('#tab-owned')
-  await page.fill('#search-input', '艺术家 5')
+  await page.fill('#search-input', '\u827a\u672f\u5bb6 5')
   const sourceRow = page.locator('.playlist-card[data-playlist-id="102"] .track-row[data-track-id="102005"]')
   await expect(sourceRow).toBeVisible()
   await sourceRow.click({ button: 'right' })
@@ -241,7 +363,7 @@ test('artist tab groups artists by importance and context menu can jump to the m
   await expect(page.locator('#tab-artists')).toHaveClass(/is-active/)
   await expect(page.locator('#search-input')).toHaveValue('')
   const targetCard = page.locator('.playlist-card', {
-    has: page.locator('.playlist-title', { hasText: '艺术家 5' }),
+    has: page.locator('.playlist-title', { hasText: '\u827a\u672f\u5bb6 5' }),
   }).first()
   await expect(targetCard).toBeVisible()
   const targetRow = targetCard.locator('.track-row[data-track-id="102005"]')
@@ -251,7 +373,7 @@ test('artist tab groups artists by importance and context menu can jump to the m
   const position = await page.evaluate(() => {
     const container = document.getElementById('wall-scroll')
     const cards = Array.from(document.querySelectorAll('.playlist-card'))
-    const card = cards.find((node) => node.querySelector('.playlist-title')?.textContent?.includes('艺术家 5'))
+    const card = cards.find((node) => node.querySelector('.playlist-title')?.textContent?.includes('\u827a\u672f\u5bb6 5'))
     const containerRect = container.getBoundingClientRect()
     const rowRect = card?.querySelector('.track-row[data-track-id="102005"]')?.getBoundingClientRect()
     return {
@@ -268,26 +390,162 @@ test('artist tab groups artists by importance and context menu can jump to the m
   expect(position.bottom).toBeLessThan(position.containerBottom + 1)
 })
 
-test('artist track display limit controls hydrated artist song counts and persists across reload', async ({ page }) => {
+test('artist playlists show a computed summary and can expand to all tracks', async ({ page }) => {
   await waitForWall(page)
 
   await page.click('#tab-artists')
-  const firstArtistMeta = page.locator('.playlist-card').first().locator('.playlist-meta')
-  await expect(firstArtistMeta).toContainText('100 首')
+  const firstCard = page.locator('.playlist-card').first()
+  const firstArtistMeta = firstCard.locator('.playlist-meta')
+  const expansionButton = firstCard.locator('[data-toggle-artist-track-expansion]')
+
+  await expect(expansionButton).toHaveAttribute('aria-label', '扩大')
+  await expect(expansionButton.locator('svg')).toHaveCount(1)
+
+  const summaryInfo = await page.evaluate(() => {
+    const text = document.querySelector('.playlist-card .playlist-meta')?.textContent || ''
+    const match = text.match(/(\d+)(?:\/(\d+))?\s*首/)
+    return {
+      displayed: Number(match?.[1] || 0),
+      total: Number(match?.[2] || 0),
+    }
+  })
+
+  expect(summaryInfo.displayed).toBeGreaterThanOrEqual(3)
+  expect(summaryInfo.displayed).toBeLessThanOrEqual(20)
+  expect(summaryInfo.total).toBeLessThanOrEqual(20)
+
+  await expansionButton.click()
+  await expect(expansionButton).toHaveAttribute('aria-label', '缩小')
+  await expect(firstArtistMeta).toContainText('160 首')
+
+  await expansionButton.click()
+  await expect(expansionButton).toHaveAttribute('aria-label', '扩大')
+  await expect.poll(async () => {
+    return page.evaluate(() => {
+      const text = document.querySelector('.playlist-card .playlist-meta')?.textContent || ''
+      const match = text.match(/(\d+)\/(\d+)\s*首/)
+      return {
+        displayed: Number(match?.[1] || 0),
+        total: Number(match?.[2] || 0),
+      }
+    })
+  }).toEqual({
+    displayed: summaryInfo.displayed,
+    total: 160,
+  })
+})
+
+test('audio quality settings affect playback requests and persist across reload', async ({ page }) => {
+  await waitForWall(page)
+
+  await page.locator('.track-row').first().click()
+  await expect.poll(async () => {
+    return page.evaluate(() => window.__mockLastSongUrlRequest?.options?.preferredQuality || '')
+  }).toBe('best')
+
+  await page.evaluate(() => {
+    window.__mockConnection = {
+      effectiveType: '4g',
+      downlink: 10,
+      saveData: true,
+      addEventListener() {},
+    }
+  })
+
+  await page.locator('.track-row').nth(1).click()
+  await expect.poll(async () => {
+    return page.evaluate(() => window.__mockLastSongUrlRequest?.options?.preferredQuality || '')
+  }).toBe('standard')
 
   await page.click('#settings-btn')
   await expect(page.locator('#settings-panel')).toHaveClass(/is-open/)
-  await page.fill('#artist-track-display-limit-input', '30')
-  await page.locator('#artist-track-display-limit-input').dispatchEvent('change')
-  await expect(firstArtistMeta).toContainText('30 首')
+  await page.selectOption('#default-audio-quality-select', 'exhigh')
+  await page.uncheck('#auto-adjust-audio-quality-toggle')
+  await closeSettingsPanel(page)
+
+  await page.locator('.track-row').nth(2).click()
+  await expect.poll(async () => {
+    return page.evaluate(() => window.__mockLastSongUrlRequest?.options?.preferredQuality || '')
+  }).toBe('exhigh')
 
   await page.reload()
   await page.waitForSelector('.playlist-card')
-  await page.click('#tab-artists')
-  await expect(page.locator('.playlist-card').first().locator('.playlist-meta')).toContainText('30 首')
-
   await page.click('#settings-btn')
-  await expect(page.locator('#artist-track-display-limit-input')).toHaveValue('30')
+  await expect(page.locator('#default-audio-quality-select')).toHaveValue('exhigh')
+  await expect(page.locator('#auto-adjust-audio-quality-toggle')).not.toBeChecked()
+})
+
+test('network auto quality changes do not reload the current track mid-playback', async ({ page }) => {
+  await page.addInitScript(() => {
+    let lastRequest = null
+    let requestCount = 0
+
+    Object.defineProperty(window, '__mockLastSongUrlRequest', {
+      configurable: true,
+      get() {
+        return lastRequest
+      },
+      set(value) {
+        lastRequest = value
+        requestCount += 1
+        window.__mockSongUrlRequestCount = requestCount
+      },
+    })
+
+    window.__mockSongUrlRequestCount = 0
+  })
+
+  await waitForWall(page)
+
+  await page.locator('.track-row').first().click()
+  await expect.poll(async () => {
+    return page.evaluate(() => window.__mockSongUrlRequestCount || 0)
+  }).toBe(1)
+
+  await page.evaluate(() => {
+    function createSilentWavUrl(durationSeconds = 2, sampleRate = 8000) {
+      const sampleCount = Math.max(1, Math.round(durationSeconds * sampleRate))
+      const dataLength = sampleCount * 2
+      const buffer = new ArrayBuffer(44 + dataLength)
+      const view = new DataView(buffer)
+      const writeString = (offset, value) => {
+        for (let index = 0; index < value.length; index += 1) {
+          view.setUint8(offset + index, value.charCodeAt(index))
+        }
+      }
+
+      writeString(0, 'RIFF')
+      view.setUint32(4, 36 + dataLength, true)
+      writeString(8, 'WAVE')
+      writeString(12, 'fmt ')
+      view.setUint32(16, 16, true)
+      view.setUint16(20, 1, true)
+      view.setUint16(22, 1, true)
+      view.setUint32(24, sampleRate, true)
+      view.setUint32(28, sampleRate * 2, true)
+      view.setUint16(32, 2, true)
+      view.setUint16(34, 16, true)
+      writeString(36, 'data')
+      view.setUint32(40, dataLength, true)
+
+      return URL.createObjectURL(new Blob([buffer], { type: 'audio/wav' }))
+    }
+
+    const audio = document.getElementById('audio')
+    audio.src = createSilentWavUrl()
+    audio.dispatchEvent(new Event('play'))
+    window.__mockConnection = {
+      effectiveType: '4g',
+      downlink: 10,
+      saveData: true,
+    }
+    window.scheduleAudioQualityRefresh('network')
+  })
+
+  await page.waitForTimeout(350)
+  await expect.poll(async () => {
+    return page.evaluate(() => window.__mockSongUrlRequestCount || 0)
+  }).toBe(1)
 })
 
 test('artist track rows stay stable while hovered', async ({ page }) => {
@@ -499,7 +757,7 @@ test('liked playlist display mode can show only uncollected tracks', async ({ pa
   await page.click('#settings-btn')
   await expect(page.locator('#settings-panel')).toHaveClass(/is-open/)
   await page.selectOption('#liked-playlist-display-mode-select', 'uncollected')
-  await page.click('#settings-close-btn')
+  await closeSettingsPanel(page)
 
   await expect(likedCard.locator('.track-row[data-track-id="101001"]')).toHaveCount(1)
   await expect(likedCard.locator('.track-row[data-track-id="101002"]')).toHaveCount(0)
@@ -513,7 +771,7 @@ test('liked playlist can be hidden and setting persists across reload', async ({
   await page.click('#settings-btn')
   await expect(page.locator('#settings-panel')).toHaveClass(/is-open/)
   await page.selectOption('#liked-playlist-display-mode-select', 'hidden')
-  await page.click('#settings-close-btn')
+  await closeSettingsPanel(page)
 
   await expect(page.locator('.playlist-card[data-playlist-id="101"]')).toHaveCount(0)
 
@@ -579,7 +837,7 @@ test('locate jumps to the active track and restores the right tab', async ({ pag
   await expect(page.locator(`.track-row[data-track-id="${trackId}"]`)).toHaveClass(/is-playing/)
 
   await page.click('#tab-owned')
-  await page.fill('#search-input', '不会命中的关键词')
+  await page.fill('#search-input', 'no-hit-keyword-locate')
   await expect(page.locator('#wall-empty')).toBeVisible()
 
   await page.click('#locate-current-btn')
@@ -609,7 +867,7 @@ test('locate jumps to the current recommendation inside its source playlist', as
   await page.click('#settings-btn')
   await expect(page.locator('#settings-panel')).toHaveClass(/is-open/)
   await page.check('#playlist-recommendations-toggle')
-  await page.click('#settings-close-btn')
+  await closeSettingsPanel(page)
 
   const firstRecommendationSection = page.locator('.playlist-recommendations').first()
   await expect(firstRecommendationSection).toBeVisible()
@@ -622,7 +880,7 @@ test('locate jumps to the current recommendation inside its source playlist', as
   await expect(page.locator('#locate-current-btn')).toBeEnabled()
 
   await page.click('#tab-subscribed')
-  await page.fill('#search-input', '涓嶄細鍛戒腑鐨勬帹鑽愬叧閿瘝')
+  await page.fill('#search-input', 'no-hit-keyword-recommend')
   await expect(page.locator('#wall-empty')).toBeVisible()
 
   await page.click('#locate-current-btn')
@@ -654,7 +912,7 @@ test('progressive hydration opens the wall before tracks finish expanding', asyn
   await page.goto(PROGRESSIVE_PAGE_URL)
   await expect(page.locator('#app')).toBeVisible()
   await expect(page.locator('#loading')).toHaveClass(/hidden/)
-  await expect(page.locator('.playlist-placeholder')).toContainText('正在继续展开')
+  await expect(page.locator('.playlist-placeholder')).toContainText('\u6b63\u5728\u7ee7\u7eed\u5c55\u5f00')
   await expect(page.locator('.wall-column')).toHaveCount(7)
 
   await expect(page.locator('.playlist-placeholder')).toHaveCount(0)
@@ -670,7 +928,7 @@ test('recommended tracks can be added into a playlist', async ({ page }) => {
   await page.click('#settings-btn')
   await expect(page.locator('#settings-panel')).toHaveClass(/is-open/)
   await page.check('#playlist-recommendations-toggle')
-  await page.click('#settings-close-btn')
+  await closeSettingsPanel(page)
 
   const firstRecommendationSection = page.locator('.playlist-recommendations').first()
   await expect(firstRecommendationSection).toBeVisible()
@@ -686,7 +944,7 @@ test('recommended tracks can be added into a playlist', async ({ page }) => {
   const addedTrackId = beforeTrackIds[0]
 
   await recommendationSection.locator('.recommendation-play-btn').first().click()
-  await expect(page.locator('#player-title')).toContainText('推荐')
+  await expect(page.locator('#player-title')).toContainText('\u63a8\u8350')
   await expect(page.locator('#player-cover')).toBeVisible()
   await expect(page.locator('#player-cover-image')).toHaveAttribute('src', /.+/)
 
@@ -853,7 +1111,7 @@ test('recommended tracks support the context menu add flow', async ({ page }) =>
   await page.click('#settings-btn')
   await expect(page.locator('#settings-panel')).toHaveClass(/is-open/)
   await page.check('#playlist-recommendations-toggle')
-  await page.click('#settings-close-btn')
+  await closeSettingsPanel(page)
 
   const recommendationSection = page.locator('.playlist-recommendations').first()
   await expect(recommendationSection).toBeVisible()
@@ -1256,7 +1514,7 @@ test('compact single-line labels keep enough line height for descenders', async 
     node.dispatchEvent(new Event('change', { bubbles: true }))
   })
   await page.check('#playlist-recommendations-toggle')
-  await page.click('#settings-close-btn')
+  await closeSettingsPanel(page)
 
   await expect(page.locator('.playlist-recommendations').first()).toBeVisible()
 
@@ -1292,7 +1550,7 @@ test('wall can reach the bottom after recommendations expand', async ({ page }) 
 
   await page.click('#settings-btn')
   await page.check('#playlist-recommendations-toggle')
-  await page.click('#settings-close-btn')
+  await closeSettingsPanel(page)
 
   await page.locator('#wall-scroll').evaluate((node) => {
     node.scrollTop = node.scrollHeight
@@ -1341,3 +1599,6 @@ test('huge datasets keep one card per playlist and bound row DOM size', async ({
   })
   expect(new Set(midPlaylistIds).size).toBe(midPlaylistIds.length)
 })
+
+
+
