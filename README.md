@@ -1,4 +1,4 @@
-![img_v3_0210d_677347b2-96bb-4afb-b345-20321a47e27g](https://github.com/user-attachments/assets/7be90186-2f3a-4fc5-8a90-f050841dbe25)# 歌单墙 / Playlist Wall
+# 歌单墙 / Playlist Wall
 
 把网易云音乐里分散、难翻、难搜的歌单，摊成一整面真正适合管理的"歌单墙"。
 
