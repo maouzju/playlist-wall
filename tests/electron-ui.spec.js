@@ -268,6 +268,50 @@ test('artist tab groups artists by importance and context menu can jump to the m
   expect(position.bottom).toBeLessThan(position.containerBottom + 1)
 })
 
+test('artist track display limit controls hydrated artist song counts and persists across reload', async ({ page }) => {
+  await waitForWall(page)
+
+  await page.click('#tab-artists')
+  const firstArtistMeta = page.locator('.playlist-card').first().locator('.playlist-meta')
+  await expect(firstArtistMeta).toContainText('100 首')
+
+  await page.click('#settings-btn')
+  await expect(page.locator('#settings-panel')).toHaveClass(/is-open/)
+  await page.fill('#artist-track-display-limit-input', '30')
+  await page.locator('#artist-track-display-limit-input').dispatchEvent('change')
+  await expect(firstArtistMeta).toContainText('30 首')
+
+  await page.reload()
+  await page.waitForSelector('.playlist-card')
+  await page.click('#tab-artists')
+  await expect(page.locator('.playlist-card').first().locator('.playlist-meta')).toContainText('30 首')
+
+  await page.click('#settings-btn')
+  await expect(page.locator('#artist-track-display-limit-input')).toHaveValue('30')
+})
+
+test('artist track rows stay stable while hovered', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 900 })
+  await waitForWall(page)
+
+  await page.click('#tab-artists')
+  const hoverRow = page.locator('.playlist-card').first().locator('.track-row').first()
+  await expect(hoverRow).toBeVisible()
+
+  const before = await hoverRow.boundingBox()
+  await hoverRow.hover()
+  await page.waitForTimeout(160)
+
+  const after = await hoverRow.boundingBox()
+  const transform = await hoverRow.evaluate((node) => getComputedStyle(node).transform)
+
+  expect(before).not.toBeNull()
+  expect(after).not.toBeNull()
+  expect(Math.abs((after?.x || 0) - (before?.x || 0))).toBeLessThanOrEqual(0.5)
+  expect(Math.abs((after?.y || 0) - (before?.y || 0))).toBeLessThanOrEqual(0.5)
+  expect(transform).toBe('none')
+})
+
 test('playlist header can collapse rows and remember the collapsed state after reload', async ({ page }) => {
   await waitForWall(page)
 
@@ -704,6 +748,47 @@ test('liked playlist context menu pins already-added targets to the top without 
   await expect(targetCard.locator('.playlist-meta')).toContainText(String(targetCountBefore + 1))
 })
 
+test('context menu stays near the clicked track while submenu reflows inside a narrow viewport', async ({ page }) => {
+  const viewport = { width: 520, height: 650 }
+  await page.setViewportSize(viewport)
+  await waitForWall(page, HUGE_PAGE_URL)
+
+  const row = page.locator('.playlist-card[data-playlist-id="1011"] .track-row[data-track-id="1011009"]')
+  const rowBox = await row.boundingBox()
+  if (!rowBox) {
+    throw new Error('expected the target row to be visible')
+  }
+
+  const clickX = Math.round(rowBox.x + Math.min(24, Math.max(10, rowBox.width / 2)))
+  const clickY = Math.round(rowBox.y + (rowBox.height / 2))
+  await page.mouse.click(clickX, clickY, { button: 'right' })
+
+  const menu = page.locator('#context-menu')
+  await expect(menu).toBeVisible()
+  const menuBox = await menu.boundingBox()
+  if (!menuBox) {
+    throw new Error('expected the context menu to be visible')
+  }
+  expect(Math.abs(menuBox.x - clickX)).toBeLessThanOrEqual(2)
+  expect(Math.abs(menuBox.y - clickY)).toBeLessThanOrEqual(2)
+  expect(menuBox.x + menuBox.width).toBeLessThanOrEqual(viewport.width)
+  expect(menuBox.y + menuBox.height).toBeLessThanOrEqual(viewport.height)
+
+  const moveTrigger = menu.locator('.context-menu-item--submenu-trigger')
+  await moveTrigger.click()
+
+  const submenu = menu.locator('.context-menu-submenu')
+  await expect(submenu).toBeVisible()
+  const submenuBox = await submenu.boundingBox()
+  if (!submenuBox) {
+    throw new Error('expected the submenu to be visible')
+  }
+  expect(submenuBox.x).toBeGreaterThanOrEqual(8)
+  expect(submenuBox.y).toBeGreaterThanOrEqual(8)
+  expect(submenuBox.x + submenuBox.width).toBeLessThanOrEqual(viewport.width)
+  expect(submenuBox.y + submenuBox.height).toBeLessThanOrEqual(viewport.height)
+})
+
 test('subscribed tracks can be added to an owned playlist via context menu', async ({ page }) => {
   await waitForWall(page)
 
@@ -829,6 +914,18 @@ test('tracks support ctrl multi-select and shift range select', async ({ page })
   await expect(row1).toHaveClass(/is-selected/)
   await expect(row2).toHaveClass(/is-selected/)
   await expect(row3).toHaveClass(/is-selected/)
+
+  await page.keyboard.press('Escape')
+  await expect(card.locator('.track-row.is-selected')).toHaveCount(0)
+
+  await row1.click()
+  await expect(card.locator('.track-row.is-selected')).toHaveCount(0)
+
+  await row3.click({ modifiers: ['Shift'] })
+  await expect(card.locator('.track-row.is-selected')).toHaveCount(3)
+  await expect(row1).toHaveClass(/is-selected/)
+  await expect(row2).toHaveClass(/is-selected/)
+  await expect(row3).toHaveClass(/is-selected/)
 })
 
 test('owned tracks can be removed via context menu', async ({ page }) => {
@@ -938,6 +1035,30 @@ test('tracks can be drag-sorted within the same playlist', async ({ page }) => {
   }).toEqual([beforeIds[1], beforeIds[2], beforeIds[0], beforeIds[3]])
 })
 
+test('selected tracks drag together within the same playlist', async ({ page }) => {
+  await waitForWall(page)
+
+  const card = page.locator('.playlist-card[data-playlist-id="102"]')
+  const row1 = card.locator('.track-row[data-track-id="102001"]')
+  const row3 = card.locator('.track-row[data-track-id="102003"]')
+  await row1.click({ modifiers: ['Control'] })
+  await row3.click({ modifiers: ['Control'] })
+  await expect(card.locator('.track-row.is-selected')).toHaveCount(2)
+
+  await dragTrack(
+    page,
+    '.playlist-card[data-playlist-id="102"] .track-row[data-track-id="102003"]',
+    '.playlist-card[data-playlist-id="102"] .track-row[data-track-id="102004"]',
+    'after'
+  )
+
+  await expect.poll(async () => {
+    return card.locator('.track-row').evaluateAll((nodes) => {
+      return nodes.slice(0, 4).map((node) => node.getAttribute('data-track-id'))
+    })
+  }).toEqual(['102002', '102004', '102001', '102003'])
+})
+
 test('tracks can be dragged into another playlist at a chosen position', async ({ page }) => {
   await waitForWall(page)
 
@@ -969,6 +1090,45 @@ test('tracks can be dragged into another playlist at a chosen position', async (
 
   await expect(sourceCard.locator('.playlist-meta')).toContainText(String(sourceCountBefore - 1))
   await expect(targetCard.locator('.playlist-meta')).toContainText(String(targetCountBefore + 1))
+})
+
+test('selected tracks drag together into another playlist', async ({ page }) => {
+  await waitForWall(page)
+
+  const sourceCard = page.locator('.playlist-card[data-playlist-id="102"]')
+  const targetCard = page.locator('.playlist-card[data-playlist-id="103"]')
+  const row1 = sourceCard.locator('.track-row[data-track-id="102001"]')
+  const row2 = sourceCard.locator('.track-row[data-track-id="102002"]')
+  const sourceMetaBefore = await sourceCard.locator('.playlist-meta').textContent()
+  const targetMetaBefore = await targetCard.locator('.playlist-meta').textContent()
+  const sourceCountBefore = Number((sourceMetaBefore || '0').match(/\d+/)?.[0] || 0)
+  const targetCountBefore = Number((targetMetaBefore || '0').match(/\d+/)?.[0] || 0)
+
+  await row1.click({ modifiers: ['Control'] })
+  await row2.click({ modifiers: ['Control'] })
+  await expect(sourceCard.locator('.track-row.is-selected')).toHaveCount(2)
+
+  await dragTrack(
+    page,
+    '.playlist-card[data-playlist-id="102"] .track-row[data-track-id="102002"]',
+    '.playlist-card[data-playlist-id="103"] .track-row[data-track-id="103002"]',
+    'before'
+  )
+
+  await expect.poll(async () => {
+    return targetCard.locator('.track-row').evaluateAll((nodes) => {
+      return nodes.slice(0, 5).map((node) => node.getAttribute('data-track-id'))
+    })
+  }).toEqual(['103001', '102001', '102002', '103002', '103003'])
+
+  await expect.poll(async () => {
+    return sourceCard.locator('.track-row').evaluateAll((nodes) => {
+      return nodes.slice(0, 3).map((node) => node.getAttribute('data-track-id'))
+    })
+  }).toEqual(['102003', '102004', '102005'])
+
+  await expect(sourceCard.locator('.playlist-meta')).toContainText(String(sourceCountBefore - 2))
+  await expect(targetCard.locator('.playlist-meta')).toContainText(String(targetCountBefore + 2))
 })
 
 test('dragging from liked playlist copies the track instead of removing it', async ({ page }) => {
@@ -1067,6 +1227,64 @@ test('native pointer drag can be repeated after drop', async ({ page }) => {
   }).toEqual(['102003', '102001', '102004', '102002'])
 
   await expect(card.locator('.track-row.is-dragging')).toHaveCount(0)
+})
+
+test('clicking an owned track keeps the normal pointer cursor', async ({ page }) => {
+  await waitForWall(page)
+
+  const row = page.locator('.playlist-card[data-playlist-id="102"] .track-row[data-track-id="102001"]')
+  await row.hover()
+  await expect.poll(async () => {
+    return row.evaluate((node) => getComputedStyle(node).cursor)
+  }).toBe('pointer')
+
+  await row.click()
+
+  await expect(row).not.toHaveClass(/is-dragging/)
+  await expect.poll(async () => {
+    return row.evaluate((node) => getComputedStyle(node).cursor)
+  }).toBe('pointer')
+})
+
+test('compact single-line labels keep enough line height for descenders', async ({ page }) => {
+  await waitForWall(page)
+
+  await page.click('#settings-btn')
+  await page.locator('#ui-scale-range').evaluate((node) => {
+    node.value = '125'
+    node.dispatchEvent(new Event('input', { bubbles: true }))
+    node.dispatchEvent(new Event('change', { bubbles: true }))
+  })
+  await page.check('#playlist-recommendations-toggle')
+  await page.click('#settings-close-btn')
+
+  await expect(page.locator('.playlist-recommendations').first()).toBeVisible()
+
+  const metrics = await page.evaluate(() => {
+    const readMetrics = (selector) => {
+      const node = document.querySelector(selector)
+      if (!(node instanceof HTMLElement)) {
+        throw new Error(`missing node: ${selector}`)
+      }
+      const style = getComputedStyle(node)
+      return {
+        selector,
+        fontSize: parseFloat(style.fontSize),
+        lineHeight: parseFloat(style.lineHeight),
+      }
+    }
+
+    return [
+      readMetrics('.playlist-card[data-playlist-id="102"] .playlist-title'),
+      readMetrics('.playlist-card[data-playlist-id="102"] .track-row[data-track-id="102001"] .track-name'),
+      readMetrics('.playlist-card[data-playlist-id="102"] .track-row[data-track-id="102001"] .track-meta'),
+      readMetrics('.playlist-recommendations .recommendation-text'),
+    ]
+  })
+
+  for (const metric of metrics) {
+    expect(metric.lineHeight, `${metric.selector} should leave room for descenders`).toBeGreaterThan(metric.fontSize * 1.1)
+  }
 })
 
 test('wall can reach the bottom after recommendations expand', async ({ page }) => {

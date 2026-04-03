@@ -22,6 +22,7 @@ const RECOMMENDATION_FETCH_COUNT = Math.max(RECOMMENDATION_COUNT * 3, 12)
 const RECOMMENDATION_CONCURRENCY = 2
 const QR_LOGIN_POLL_MS = 1400
 const PLAYLIST_UNDO_NOTICE_MS = 20000
+const CONTEXT_MENU_SCROLL_GUARD_MS = 150
 const TRACK_FOCUS_FLASH_MS = 1800
 const UI_SCALE_MIN = 80
 const UI_SCALE_MAX = 125
@@ -30,6 +31,10 @@ const UI_SCALE_DEFAULT = 100
 const LIKED_PLAYLIST_DISPLAY_MODE_ALL = 'all'
 const LIKED_PLAYLIST_DISPLAY_MODE_UNCOLLECTED = 'uncollected'
 const LIKED_PLAYLIST_DISPLAY_MODE_HIDDEN = 'hidden'
+const ARTIST_TRACK_DISPLAY_LIMIT_MIN = 20
+const ARTIST_TRACK_DISPLAY_LIMIT_MAX = 1000
+const ARTIST_TRACK_DISPLAY_LIMIT_DEFAULT = 100
+const ARTIST_TRACK_HYDRATION_CONCURRENCY = 2
 const ARTIST_PLAYLIST_ID_OFFSET = 1000000000000
 
 const TEXT = {
@@ -160,7 +165,9 @@ const state = {
   combinedPlayCounts: new Map(),
   trackPlayTiers: new Map(),
   artistPlaylistSets: new Map(),
+  artistPlaylistEntriesByKey: new Map(),
   artistPlaylistIdByKey: new Map(),
+  artistRemoteTracksByKey: new Map(),
   totalOwnedPlaylistCount: 0,
   tabScrollPositions: {
     owned: 0,
@@ -191,14 +198,19 @@ const renderRuntime = {
   recommendationGlobalError: '',
   recommendationQueue: [],
   recommendationInFlight: 0,
+  artistHydrationSessionId: 0,
+  artistHydrationQueue: [],
+  artistHydrationInFlight: 0,
   renderedTrackKey: '',
   renderedRecommendationKey: '',
   renderedPlaylistId: null,
   authPollTimer: 0,
   authLoginKey: '',
   contextMenuTrack: null,
+  contextMenuOpenedAt: 0,
   selectedTrackKeys: new Set(),
   selectedTrackAnchorKey: '',
+  trackRangeAnchorKey: '',
   selectedPlaylistId: 0,
   albumHoverTimer: 0,
   albumHoverPendingKey: '',
@@ -253,11 +265,13 @@ function createMockBridge() {
   const exploreDelay = Math.max(0, Number(params.get('exploreDelay') || 0) || 0)
   const progressListeners = new Set()
   const patchListeners = new Set()
+  const subscribedPlaylistRemovalFailureListeners = new Set()
   const account = { userId: 1, nickname: '\u793a\u4f8b\u8d26\u53f7' }
   let loggedIn = !authRequired
   let qrChecks = 0
   let exploreRequestCount = 0
-  const removedSubscribedPlaylists = new Map()
+  let artistRequestCount = 0
+  const pendingRemovedSubscribedPlaylists = new Map()
   const localPlayCounts = {
     101001: 6,
     101002: 3,
@@ -276,6 +290,7 @@ function createMockBridge() {
     theme: window.localStorage.getItem(THEME_STORAGE_KEY) || 'light',
     showPlaylistRecommendations: Boolean(storedSettings.showPlaylistRecommendations),
     likedPlaylistDisplayMode: normalizeLikedPlaylistDisplayMode(storedSettings.likedPlaylistDisplayMode),
+    artistTrackDisplayLimit: normalizeArtistTrackDisplayLimit(storedSettings.artistTrackDisplayLimit),
     collapsedPlaylistIds: normalizeCollapsedPlaylistIds(storedSettings.collapsedPlaylistIds),
     uiScale: normalizeUiScale(storedSettings.uiScale),
   }
@@ -291,14 +306,37 @@ function createMockBridge() {
     ]
   seedMockLikedPlaylistOverlap(basePlaylists)
   const defaultExplorePlaylists = buildMockExplorePlaylists()
+  const artistTrackStore = buildMockArtistSongStore(basePlaylists)
   const recommendationStore = new Map()
   const emitProgress = (payload) => progressListeners.forEach((listener) => listener(payload))
   const emitPatch = (payload) => patchListeners.forEach((listener) => listener(payload))
+  const clearPendingMockSubscribedPlaylistRemoval = (entry) => {
+    if (entry?.timer) {
+      window.clearTimeout(entry.timer)
+      entry.timer = 0
+    }
+  }
+  const takePendingMockSubscribedPlaylistRemoval = (playlistId) => {
+    const normalizedPlaylistId = Number(playlistId || 0)
+    if (normalizedPlaylistId <= 0) {
+      return null
+    }
+
+    const entry = pendingRemovedSubscribedPlaylists.get(normalizedPlaylistId) || null
+    if (!entry) {
+      return null
+    }
+
+    clearPendingMockSubscribedPlaylistRemoval(entry)
+    pendingRemovedSubscribedPlaylists.delete(normalizedPlaylistId)
+    return entry
+  }
   const updateMockStats = () => {
     window.__mockStats = {
       playlistCount: basePlaylists.length,
       trackCount: basePlaylists.reduce((sum, playlist) => sum + playlist.tracks.length, 0),
       exploreRequestCount,
+      artistRequestCount,
     }
   }
 
@@ -309,6 +347,7 @@ function createMockBridge() {
         theme: storedPreferences.theme === 'dark' ? 'dark' : 'light',
         showPlaylistRecommendations: Boolean(storedPreferences.showPlaylistRecommendations),
         likedPlaylistDisplayMode: normalizeLikedPlaylistDisplayMode(storedPreferences.likedPlaylistDisplayMode),
+        artistTrackDisplayLimit: normalizeArtistTrackDisplayLimit(storedPreferences.artistTrackDisplayLimit),
         collapsedPlaylistIds: normalizeCollapsedPlaylistIds(storedPreferences.collapsedPlaylistIds),
         uiScale: normalizeUiScale(storedPreferences.uiScale),
       },
@@ -319,6 +358,9 @@ function createMockBridge() {
         ...preferences,
         likedPlaylistDisplayMode: normalizeLikedPlaylistDisplayMode(
           preferences?.likedPlaylistDisplayMode ?? storedPreferences.likedPlaylistDisplayMode
+        ),
+        artistTrackDisplayLimit: normalizeArtistTrackDisplayLimit(
+          preferences?.artistTrackDisplayLimit ?? storedPreferences.artistTrackDisplayLimit
         ),
         collapsedPlaylistIds: normalizeCollapsedPlaylistIds(
           preferences?.collapsedPlaylistIds ?? storedPreferences.collapsedPlaylistIds
@@ -331,6 +373,7 @@ function createMockBridge() {
           theme: storedPreferences.theme === 'dark' ? 'dark' : 'light',
           showPlaylistRecommendations: Boolean(storedPreferences.showPlaylistRecommendations),
           likedPlaylistDisplayMode: normalizeLikedPlaylistDisplayMode(storedPreferences.likedPlaylistDisplayMode),
+          artistTrackDisplayLimit: normalizeArtistTrackDisplayLimit(storedPreferences.artistTrackDisplayLimit),
           collapsedPlaylistIds: normalizeCollapsedPlaylistIds(storedPreferences.collapsedPlaylistIds),
           uiScale: normalizeUiScale(storedPreferences.uiScale),
         },
@@ -408,6 +451,16 @@ function createMockBridge() {
       return { ok: true }
     },
     getSongUrl: async () => ({ ok: false, error: '\u6a21\u62df\u6a21\u5f0f\u4e0d\u63d0\u4f9b\u97f3\u9891\u94fe\u63a5' }),
+    getArtistSongs: async (artistId, maxCount) => {
+      artistRequestCount += 1
+      updateMockStats()
+      const normalizedArtistId = Number(artistId || 0)
+      const normalizedLimit = normalizeArtistTrackDisplayLimit(maxCount)
+      return {
+        ok: true,
+        tracks: (artistTrackStore.get(normalizedArtistId) || []).slice(0, normalizedLimit),
+      }
+    },
     recordTrackPlay: async (_userId, trackId) => {
       const key = String(Number(trackId || 0))
       localPlayCounts[key] = Number(localPlayCounts[key] || 0) + 1
@@ -443,7 +496,9 @@ function createMockBridge() {
         return { ok: false, error: TEXT.subscribePlaylistFailed }
       }
 
+      const pendingEntry = takePendingMockSubscribedPlaylistRemoval(sourcePlaylistId)
       const nextPlaylist = {
+        ...(pendingEntry?.playlist || {}),
         ...playlist,
         id: sourcePlaylistId,
         sourcePlaylistId,
@@ -457,23 +512,37 @@ function createMockBridge() {
         basePlaylists.push(nextPlaylist)
       }
 
-      removedSubscribedPlaylists.delete(sourcePlaylistId)
       updateMockStats()
       return { ok: true, playlist: nextPlaylist }
     },
     addTrackToPlaylist: async () => ({ ok: true }),
     removeTrackFromPlaylist: async () => ({ ok: true }),
     commitPlaylistTrackMove: async () => ({ ok: true }),
-    removeSubscribedPlaylist: async (playlistId) => {
-      const normalizedPlaylistId = Number(playlistId || 0)
+    removeSubscribedPlaylist: async (playlist) => {
+      const normalizedPlaylistId = Number(playlist?.sourcePlaylistId || playlist?.id || 0)
       const index = basePlaylists.findIndex((playlist) => playlist.id === normalizedPlaylistId)
       if (index < 0) {
         return { ok: false, error: TEXT.removeSubscribedPlaylistFailed }
       }
 
-      const [playlist] = basePlaylists.splice(index, 1)
-      if (playlist) {
-        removedSubscribedPlaylists.set(normalizedPlaylistId, playlist)
+      const [removedPlaylist] = basePlaylists.splice(index, 1)
+      if (removedPlaylist) {
+        const entry = takePendingMockSubscribedPlaylistRemoval(normalizedPlaylistId) || {
+          playlist: removedPlaylist,
+          timer: 0,
+        }
+        entry.playlist = {
+          ...removedPlaylist,
+          ...playlist,
+          id: normalizedPlaylistId,
+          sourcePlaylistId: normalizedPlaylistId,
+          subscribed: true,
+          isExplore: false,
+        }
+        entry.timer = window.setTimeout(() => {
+          takePendingMockSubscribedPlaylistRemoval(normalizedPlaylistId)
+        }, PLAYLIST_UNDO_NOTICE_MS)
+        pendingRemovedSubscribedPlaylists.set(normalizedPlaylistId, entry)
       }
       updateMockStats()
       return { ok: true }
@@ -484,15 +553,18 @@ function createMockBridge() {
         return { ok: false, error: TEXT.restoreSubscribedPlaylistFailed }
       }
 
+      const pendingEntry = takePendingMockSubscribedPlaylistRemoval(normalizedPlaylistId)
       if (!basePlaylists.some((item) => item.id === normalizedPlaylistId)) {
-        const restoredPlaylist = removedSubscribedPlaylists.get(normalizedPlaylistId) || {
+        const restoredPlaylist = pendingEntry?.playlist || {
           ...playlist,
+          id: normalizedPlaylistId,
+          sourcePlaylistId: normalizedPlaylistId,
           subscribed: true,
+          isExplore: false,
         }
         basePlaylists.push(restoredPlaylist)
       }
 
-      removedSubscribedPlaylists.delete(normalizedPlaylistId)
       updateMockStats()
       return { ok: true }
     },
@@ -504,6 +576,10 @@ function createMockBridge() {
     onPlaylistPatch: (callback) => {
       patchListeners.add(callback)
       return () => patchListeners.delete(callback)
+    },
+    onSubscribedPlaylistRemovalFailed: (callback) => {
+      subscribedPlaylistRemovalFailureListeners.add(callback)
+      return () => subscribedPlaylistRemovalFailureListeners.delete(callback)
     },
   }
 }
@@ -598,6 +674,10 @@ function buildMockExplorePlaylists() {
 function buildMockPlaylist(id, name, trackCount, creatorId, subscribed, trackError = '', options = {}) {
   const explicitTracks = Array.isArray(options.tracks) ? options.tracks : null
   const tracks = explicitTracks || (trackError ? [] : Array.from({ length: trackCount }, (_, index) => ({
+    artistEntries: [{
+      id: (index % 5) + 1,
+      name: `\u827a\u672f\u5bb6 ${((index % 5) + 1)}`,
+    }],
     albumId: (index % 9) + 1,
     albumCoverUrl: buildMockCover((index % 9) + 1),
     id: id * 1000 + index + 1,
@@ -653,6 +733,66 @@ function seedMockLikedPlaylistOverlap(playlists) {
   }
 
   return playlists
+}
+
+function buildMockArtistSongStore(playlists) {
+  const grouped = new Map()
+
+  for (const playlist of playlists || []) {
+    for (const track of playlist.tracks || []) {
+      const artistEntries = Array.isArray(track.artistEntries) && track.artistEntries.length
+        ? track.artistEntries
+        : (track.artists || []).map((artist) => ({
+          id: 0,
+          name: String(artist || '').trim(),
+        })).filter((artist) => artist.name)
+
+      for (const artist of artistEntries) {
+        const artistId = Number(artist?.id || 0)
+        if (artistId <= 0) {
+          continue
+        }
+
+        if (!grouped.has(artistId)) {
+          grouped.set(artistId, new Map())
+        }
+
+        const bucket = grouped.get(artistId)
+        if (!bucket.has(track.id)) {
+          bucket.set(track.id, {
+            ...track,
+            artistEntries: artistEntries.map((entry) => ({
+              id: Number(entry?.id || 0),
+              name: String(entry?.name || '').trim(),
+            })).filter((entry) => entry.name),
+            artists: Array.isArray(track.artists) ? track.artists.slice() : [],
+          })
+        }
+      }
+    }
+  }
+
+  const store = new Map()
+  for (const [artistId, trackMap] of grouped.entries()) {
+    const artistName = trackMap.values().next().value?.artistEntries?.find((artist) => Number(artist.id || 0) === artistId)?.name
+      || `\u827a\u672f\u5bb6 ${artistId}`
+    const localTracks = [...trackMap.values()].sort((left, right) => left.id - right.id)
+    const fillerCount = Math.max(0, 160 - localTracks.length)
+    const fillerTracks = Array.from({ length: fillerCount }, (_, index) => ({
+      id: artistId * 1000000 + index + 1,
+      position: localTracks.length + index + 1,
+      name: `${artistName} \u70ed\u95e8\u5355\u66f2 ${index + 1}`,
+      artists: [artistName],
+      artistEntries: [{ id: artistId, name: artistName }],
+      album: `\u70ed\u95e8\u4e13\u8f91 ${Math.floor(index / 10) + 1}`,
+      albumId: artistId * 10000 + index + 1,
+      albumCoverUrl: buildMockCover(artistId * 10 + index + 1),
+      durationMs: 180000 + ((index % 7) * 8000),
+    }))
+    store.set(artistId, [...localTracks, ...fillerTracks])
+  }
+
+  return store
 }
 
 function buildMockCover(seed) {
@@ -772,6 +912,19 @@ function normalizeLikedPlaylistDisplayMode(input) {
   return LIKED_PLAYLIST_DISPLAY_MODE_ALL
 }
 
+function normalizeArtistTrackDisplayLimit(input) {
+  const numeric = Number(input)
+  if (!Number.isFinite(numeric)) {
+    return ARTIST_TRACK_DISPLAY_LIMIT_DEFAULT
+  }
+
+  return clamp(
+    Math.round(numeric),
+    ARTIST_TRACK_DISPLAY_LIMIT_MIN,
+    ARTIST_TRACK_DISPLAY_LIMIT_MAX
+  )
+}
+
 function normalizeCollapsedPlaylistIds(input) {
   if (!Array.isArray(input)) {
     return []
@@ -868,6 +1021,7 @@ function cacheRefs() {
   refs.uiScaleValue = document.getElementById('ui-scale-value')
   refs.playlistRecommendationsToggle = document.getElementById('playlist-recommendations-toggle')
   refs.likedPlaylistDisplayModeSelect = document.getElementById('liked-playlist-display-mode-select')
+  refs.artistTrackDisplayLimitInput = document.getElementById('artist-track-display-limit-input')
   refs.settingsLogoutBtn = document.getElementById('settings-logout-btn')
   refs.contextMenu = document.getElementById('context-menu')
   refs.contextRemoveTrackBtn = document.getElementById('context-remove-track-btn')
@@ -922,6 +1076,7 @@ function bindEvents() {
   refs.uiScaleRange.addEventListener('change', handleUiScaleCommit)
   refs.playlistRecommendationsToggle.addEventListener('change', handleSettingsChange)
   refs.likedPlaylistDisplayModeSelect.addEventListener('change', handleSettingsChange)
+  refs.artistTrackDisplayLimitInput.addEventListener('change', handleSettingsChange)
   refs.settingsLogoutBtn.addEventListener('click', () => {
     void handleLogout()
   })
@@ -937,7 +1092,9 @@ function bindEvents() {
     }, SEARCH_DEBOUNCE_MS)
   })
   refs.wallScroll.addEventListener('scroll', () => {
-    closeContextMenu()
+    if (!shouldKeepContextMenuOpenOnScroll()) {
+      closeContextMenu()
+    }
     hideAlbumHoverPreview()
     handleWallScroll()
   }, { passive: true })
@@ -1020,6 +1177,9 @@ function wireBridge() {
   }
   if (appBridge && typeof appBridge.onPlaylistPatch === 'function') {
     appBridge.onPlaylistPatch((payload) => mergePlaylistPatch(payload?.playlists || [], { done: Boolean(payload?.done) }))
+  }
+  if (appBridge && typeof appBridge.onSubscribedPlaylistRemovalFailed === 'function') {
+    appBridge.onSubscribedPlaylistRemovalFailed((payload) => handleSubscribedPlaylistRemovalFailed(payload))
   }
 }
 
@@ -1293,8 +1453,13 @@ function resetAppState() {
   state.combinedPlayCounts = new Map()
   state.trackPlayTiers = new Map()
   state.artistPlaylistSets = new Map()
+  state.artistPlaylistEntriesByKey = new Map()
   state.artistPlaylistIdByKey = new Map()
+  state.artistRemoteTracksByKey = new Map()
   state.totalOwnedPlaylistCount = 0
+  renderRuntime.artistHydrationSessionId += 1
+  renderRuntime.artistHydrationQueue = []
+  renderRuntime.artistHydrationInFlight = 0
   renderRuntime.wallColumns = []
   renderRuntime.wallNodeMaps = []
   renderRuntime.wallPlacementsByColumn = []
@@ -1304,6 +1469,7 @@ function resetAppState() {
   renderRuntime.renderedTrackKey = ''
   renderRuntime.renderedRecommendationKey = ''
   renderRuntime.renderedPlaylistId = null
+  renderRuntime.trackRangeAnchorKey = ''
   renderRuntime.exploreRequestToken = 0
   renderRuntime.exploreRequestKey = ''
   renderRuntime.exploreRequestPromise = null
@@ -1357,17 +1523,35 @@ function buildPlaylistProfile(playlistName, tracks) {
   }
 }
 
+function buildArtistKey(artistId, artistName) {
+  const normalizedArtistId = Number(artistId || 0)
+  if (normalizedArtistId > 0) {
+    return `id:${normalizedArtistId}`
+  }
+
+  const normalizedArtistName = normalizeQuery(artistName)
+  return normalizedArtistName ? `name:${normalizedArtistName}` : ''
+}
+
 function getTrackArtistEntries(track) {
   const seen = new Set()
-  return (track?.artists || []).flatMap((artist) => {
-    const name = String(artist || '').trim()
-    const key = normalizeQuery(name)
+  const rawEntries = Array.isArray(track?.artistEntries) && track.artistEntries.length
+    ? track.artistEntries
+    : (track?.artists || []).map((artist) => ({
+      id: 0,
+      name: typeof artist === 'string' ? artist : artist?.name,
+    }))
+
+  return rawEntries.flatMap((artist) => {
+    const name = String(artist?.name || artist || '').trim()
+    const id = Number(artist?.id || artist?.artistId || 0)
+    const key = buildArtistKey(id, name)
     if (!key || seen.has(key)) {
       return []
     }
 
     seen.add(key)
-    return [{ key, name }]
+    return [{ key, id, name }]
   })
 }
 
@@ -1429,7 +1613,6 @@ function compareArtistPlaylists(left, right) {
     || Number(right.artistPlayScore || 0) - Number(left.artistPlayScore || 0)
     || Number(right.artistLikedTrackCount || 0) - Number(left.artistLikedTrackCount || 0)
     || Number(right.artistOwnedTrackCount || 0) - Number(left.artistOwnedTrackCount || 0)
-    || right.trackCount - left.trackCount
     || Number(right.artistSourcePlaylistCount || 0) - Number(left.artistSourcePlaylistCount || 0)
     || Number(right.artistOccurrenceCount || 0) - Number(left.artistOccurrenceCount || 0)
     || String(left.name || '').localeCompare(String(right.name || ''), 'zh-CN')
@@ -1485,6 +1668,136 @@ function computeArtistImportance(entry, tracks) {
   }
 }
 
+function compareArtistTracks(left, right) {
+  return Number(right._artistCareScore || 0) - Number(left._artistCareScore || 0)
+    || Number(right._artistPlayCount || 0) - Number(left._artistPlayCount || 0)
+    || Number(right._artistLikedPlaylistCount || 0) - Number(left._artistLikedPlaylistCount || 0)
+    || Number(right._artistOwnedPlaylistCount || 0) - Number(left._artistOwnedPlaylistCount || 0)
+    || Number(right._artistSourcePlaylistIds?.size || 0) - Number(left._artistSourcePlaylistIds?.size || 0)
+    || Number(right._artistOccurrenceCount || 0) - Number(left._artistOccurrenceCount || 0)
+    || Number(left._artistFirstSeenOrder || 0) - Number(right._artistFirstSeenOrder || 0)
+    || Number(left.position || 0) - Number(right.position || 0)
+    || Number(left.id || 0) - Number(right.id || 0)
+}
+
+function toArtistTrackOutput(track, position = 0) {
+  const artistEntries = normalizeTrackArtistEntries(track?.artistEntries, track?.artists || [])
+  return {
+    id: Number(track?.id || 0),
+    position: Number(position || track?.position || 0),
+    name: track?.name || '\u672a\u547d\u540d',
+    artists: artistEntries.map((artist) => artist.name),
+    artistEntries,
+    album: track?.album || '',
+    albumId: Number(track?.albumId || 0),
+    albumCoverUrl: track?.albumCoverUrl || '',
+    durationMs: Number(track?.durationMs || 0),
+  }
+}
+
+function getArtistTrackStats(entry) {
+  return [...entry.trackMap.values()]
+    .map((track) => ({
+      ...track,
+      _artistLikedPlaylistCount: Number(track._artistLikedPlaylistIds?.size || 0),
+      _artistOwnedPlaylistCount: Number(track._artistOwnedPlaylistIds?.size || 0),
+      _artistSubscribedPlaylistCount: Number(track._artistSubscribedPlaylistIds?.size || 0),
+    }))
+    .map((track) => ({
+      ...track,
+      _artistCareScore: computeTrackCareScore(track),
+    }))
+}
+
+function buildArtistPlaylistTracks(entry, trackStats) {
+  const limit = normalizeArtistTrackDisplayLimit(state.settings.artistTrackDisplayLimit)
+  const remoteState = state.artistRemoteTracksByKey.get(entry.key)
+  const localTracks = trackStats.slice().sort(compareArtistTracks)
+
+  if (!Array.isArray(remoteState?.tracks) || remoteState.tracks.length === 0) {
+    return localTracks
+      .slice(0, limit)
+      .map((track, index) => toArtistTrackOutput(track, index + 1))
+  }
+
+  const localTracksById = new Map(localTracks.map((track) => [track.id, track]))
+  const seen = new Set()
+  const remoteTracks = remoteState.tracks.flatMap((track, index) => {
+    const normalizedTrackId = Number(track?.id || 0)
+    if (normalizedTrackId <= 0 || seen.has(normalizedTrackId)) {
+      return []
+    }
+
+    seen.add(normalizedTrackId)
+    const localTrack = localTracksById.get(normalizedTrackId)
+    return [toArtistTrackOutput({
+      ...localTrack,
+      ...track,
+      artists: Array.isArray(track?.artists) && track.artists.length ? track.artists : (localTrack?.artists || []),
+      artistEntries: Array.isArray(track?.artistEntries) && track.artistEntries.length
+        ? track.artistEntries
+        : (localTrack?.artistEntries || []),
+    }, index + 1)]
+  })
+
+  const localOnlyTracks = localTracks
+    .filter((track) => !seen.has(track.id))
+    .map((track) => toArtistTrackOutput(track))
+
+  return [...remoteTracks, ...localOnlyTracks]
+    .slice(0, limit)
+    .map((track, index) => ({
+      ...track,
+      position: index + 1,
+    }))
+}
+
+function buildArtistPlaylistFromEntry(entry) {
+  const trackStats = getArtistTrackStats(entry)
+  const artistStats = computeArtistImportance(entry, trackStats)
+  const tracks = buildArtistPlaylistTracks(entry, trackStats)
+  const remoteState = state.artistRemoteTracksByKey.get(entry.key)
+  const trackCount = tracks.length
+
+  return normalizePlaylist({
+    id: buildArtistPlaylistId(entry.key),
+    sourcePlaylistId: 0,
+    name: entry.name,
+    creatorId: 0,
+    creatorName: '',
+    subscribed: false,
+    isArtist: true,
+    artistKey: entry.key,
+    artistId: Number(entry.artistId || 0),
+    artistName: entry.name,
+    artistImportance: artistStats.importance,
+    artistPlayScore: artistStats.playScore,
+    artistPlayCount: artistStats.totalPlayCount,
+    artistTopTrackPlayCount: artistStats.topTrackPlayCount,
+    artistLikedTrackCount: artistStats.likedTrackCount,
+    artistOwnedTrackCount: artistStats.ownedTrackCount,
+    artistSubscribedTrackCount: artistStats.subscribedTrackCount,
+    artistSourcePlaylistCount: artistStats.sourcePlaylistCount,
+    artistOccurrenceCount: entry.occurrenceCount,
+    artistHydrating: Boolean(remoteState?.loading),
+    artistTracksSource: Array.isArray(remoteState?.tracks) && remoteState.tracks.length ? 'remote' : 'library',
+    artistTrackDisplayLimit: normalizeArtistTrackDisplayLimit(state.settings.artistTrackDisplayLimit),
+    trackCount,
+    coverUrl: resolveDominantAlbumCover(tracks, tracks[0]?.albumCoverUrl || ''),
+    tracks,
+    hydrated: true,
+    hydrating: false,
+  })
+}
+
+function pruneArtistRemoteTracksByKey(validArtistKeys) {
+  const validKeys = new Set(validArtistKeys || [])
+  state.artistRemoteTracksByKey = new Map(
+    [...state.artistRemoteTracksByKey.entries()].filter(([artistKey]) => validKeys.has(artistKey))
+  )
+  renderRuntime.artistHydrationQueue = renderRuntime.artistHydrationQueue.filter((artistKey) => validKeys.has(artistKey))
+}
+
 function rebuildArtistPlaylists() {
   const artists = new Map()
   let artistOrder = 0
@@ -1506,6 +1819,7 @@ function rebuildArtistPlaylists() {
         if (!entry) {
           entry = {
             key: artist.key,
+            artistId: Number(artist.id || 0),
             name: artist.name || '\u672a\u77e5\u827a\u4eba',
             firstSeenOrder: artistOrder,
             occurrenceCount: 0,
@@ -1516,6 +1830,8 @@ function rebuildArtistPlaylists() {
           }
           artists.set(artist.key, entry)
           artistOrder += 1
+        } else if (!entry.artistId && Number(artist.id || 0) > 0) {
+          entry.artistId = Number(artist.id || 0)
         }
 
         entry.occurrenceCount += 1
@@ -1555,75 +1871,62 @@ function rebuildArtistPlaylists() {
     }
   }
 
+  state.artistPlaylistEntriesByKey = artists
+  pruneArtistRemoteTracksByKey(artists.keys())
+
   const artistPlaylists = [...artists.values()]
-    .map((entry) => {
-      const trackStats = [...entry.trackMap.values()]
-        .map((track) => ({
-          ...track,
-          _artistLikedPlaylistCount: Number(track._artistLikedPlaylistIds?.size || 0),
-          _artistOwnedPlaylistCount: Number(track._artistOwnedPlaylistIds?.size || 0),
-          _artistSubscribedPlaylistCount: Number(track._artistSubscribedPlaylistIds?.size || 0),
-        }))
-        .map((track) => ({
-          ...track,
-          _artistCareScore: computeTrackCareScore(track),
-        }))
-      const artistStats = computeArtistImportance(entry, trackStats)
-      const tracks = trackStats
-        .sort((left, right) =>
-          Number(right._artistCareScore || 0) - Number(left._artistCareScore || 0)
-          || Number(right._artistPlayCount || 0) - Number(left._artistPlayCount || 0)
-          || Number(right._artistLikedPlaylistCount || 0) - Number(left._artistLikedPlaylistCount || 0)
-          || Number(right._artistOwnedPlaylistCount || 0) - Number(left._artistOwnedPlaylistCount || 0)
-          || right._artistSourcePlaylistIds.size - left._artistSourcePlaylistIds.size
-          || right._artistOccurrenceCount - left._artistOccurrenceCount
-          || left._artistFirstSeenOrder - right._artistFirstSeenOrder
-          || left.position - right.position
-          || left.id - right.id
-        )
-        .map((track) => ({
-          id: track.id,
-          position: track.position,
-          name: track.name,
-          artists: track.artists,
-          album: track.album,
-          albumId: track.albumId,
-          albumCoverUrl: track.albumCoverUrl,
-          durationMs: track.durationMs,
-        }))
-
-      const trackCount = tracks.length
-
-      return normalizePlaylist({
-        id: buildArtistPlaylistId(entry.key),
-        sourcePlaylistId: 0,
-        name: entry.name,
-        creatorId: 0,
-        creatorName: '',
-        subscribed: false,
-        isArtist: true,
-        artistKey: entry.key,
-        artistName: entry.name,
-        artistImportance: artistStats.importance,
-        artistPlayScore: artistStats.playScore,
-        artistPlayCount: artistStats.totalPlayCount,
-        artistTopTrackPlayCount: artistStats.topTrackPlayCount,
-        artistLikedTrackCount: artistStats.likedTrackCount,
-        artistOwnedTrackCount: artistStats.ownedTrackCount,
-        artistSubscribedTrackCount: artistStats.subscribedTrackCount,
-        artistSourcePlaylistCount: artistStats.sourcePlaylistCount,
-        artistOccurrenceCount: entry.occurrenceCount,
-        trackCount,
-        coverUrl: resolveDominantAlbumCover(tracks, tracks[0]?.albumCoverUrl || ''),
-        tracks,
-        hydrated: true,
-        hydrating: false,
-      })
-    })
+    .map((entry) => buildArtistPlaylistFromEntry(entry))
     .sort(compareArtistPlaylists)
 
   state.artistPlaylists = artistPlaylists
   state.artistPlaylistIdByKey = new Map(artistPlaylists.map((playlist) => [playlist.artistKey, playlist.id]))
+}
+
+function normalizeTrackArtistEntries(artistEntries, fallbackArtists = []) {
+  const rawEntries = Array.isArray(artistEntries) && artistEntries.length
+    ? artistEntries
+    : (fallbackArtists || []).map((artist) => ({
+      id: 0,
+      name: typeof artist === 'string' ? artist : artist?.name,
+    }))
+
+  const seen = new Set()
+  const normalized = []
+  for (const artist of rawEntries) {
+    const name = String(artist?.name || artist || '').trim()
+    const id = Number(artist?.id || artist?.artistId || 0)
+    const key = buildArtistKey(id, name)
+    if (!key || seen.has(key)) {
+      continue
+    }
+
+    seen.add(key)
+    normalized.push({ id, key, name })
+  }
+
+  return normalized
+}
+
+function normalizePlaylistTrack(track, index = 0) {
+  const artistEntries = normalizeTrackArtistEntries(track?.artistEntries, track?.artists || [])
+  const artists = artistEntries.map((artist) => artist.name)
+
+  return {
+    id: Number(track?.id || 0),
+    position: Number(track?.position || index + 1),
+    name: track?.name || '\u672a\u547d\u540d',
+    artists,
+    artistEntries,
+    album: track?.album || '',
+    albumId: Number(track?.albumId || 0),
+    albumCoverUrl: track?.albumCoverUrl || '',
+    durationMs: Number(track?.durationMs || 0),
+    searchText: normalizeQuery([
+      track?.name || '',
+      track?.album || '',
+      artists.join(' '),
+    ].join(' ')),
+  }
 }
 
 function normalizePlaylist(playlist) {
@@ -1634,21 +1937,8 @@ function normalizePlaylist(playlist) {
   const sourcePlaylistId = Number(playlist.sourcePlaylistId || playlist.id || 0)
   const isExplore = Boolean(playlist.isExplore)
   const isArtist = Boolean(playlist.isArtist)
-  const tracks = (playlist.tracks || []).map((track, index) => ({
-    id: Number(track.id),
-    position: Number(track.position || index + 1),
-    name: track.name || '\u672a\u547d\u540d',
-    artists: Array.isArray(track.artists) ? track.artists : [],
-    album: track.album || '',
-    albumId: Number(track.albumId || 0),
-    albumCoverUrl: track.albumCoverUrl || '',
-    durationMs: Number(track.durationMs || 0),
-    searchText: normalizeQuery([
-      track.name || '',
-      track.album || '',
-      Array.isArray(track.artists) ? track.artists.join(' ') : '',
-    ].join(' ')),
-  })).filter((track) => track.id > 0)
+  const tracks = (playlist.tracks || []).map((track, index) => normalizePlaylistTrack(track, index))
+    .filter((track) => track.id > 0)
 
   return {
     id: isExplore ? -Math.abs(sourcePlaylistId) : Number(playlist.id),
@@ -1667,6 +1957,7 @@ function normalizePlaylist(playlist) {
     isExplore,
     isArtist,
     artistKey: playlist.artistKey || '',
+    artistId: Number(playlist.artistId || 0),
     artistName: playlist.artistName || playlist.name || '',
     artistImportance: Number(playlist.artistImportance || 0),
     artistPlayScore: Number(playlist.artistPlayScore || 0),
@@ -1677,6 +1968,11 @@ function normalizePlaylist(playlist) {
     artistSubscribedTrackCount: Number(playlist.artistSubscribedTrackCount || 0),
     artistSourcePlaylistCount: Number(playlist.artistSourcePlaylistCount || 0),
     artistOccurrenceCount: Number(playlist.artistOccurrenceCount || 0),
+    artistHydrating: Boolean(playlist.artistHydrating),
+    artistTracksSource: playlist.artistTracksSource || '',
+    artistTrackDisplayLimit: normalizeArtistTrackDisplayLimit(
+      playlist.artistTrackDisplayLimit ?? state.settings.artistTrackDisplayLimit
+    ),
     tracks,
     profile: buildPlaylistProfile(playlist.name || '', tracks),
     tracksError: playlist.tracksError || '',
@@ -1698,6 +1994,44 @@ function refreshPlaylistMap() {
     ...state.explorePlaylists.map((playlist) => [playlist.id, playlist]),
     ...state.artistPlaylists.map((playlist) => [playlist.id, playlist]),
   ])
+}
+
+function replaceArtistPlaylistByKey(artistKey, nextPlaylist) {
+  const currentIndex = state.artistPlaylists.findIndex((playlist) => playlist.artistKey === artistKey)
+  if (currentIndex === -1) {
+    return false
+  }
+
+  const nextArtistPlaylists = state.artistPlaylists.slice()
+  nextArtistPlaylists[currentIndex] = nextPlaylist
+  nextArtistPlaylists.sort(compareArtistPlaylists)
+  state.artistPlaylists = nextArtistPlaylists
+  state.artistPlaylistIdByKey = new Map(nextArtistPlaylists.map((playlist) => [playlist.artistKey, playlist.id]))
+  refreshPlaylistMap()
+  syncQueueWithPlaylists()
+  return true
+}
+
+function refreshArtistPlaylistByKey(artistKey, { rerender = false } = {}) {
+  const entry = state.artistPlaylistEntriesByKey.get(artistKey)
+  if (!entry) {
+    return false
+  }
+
+  const nextPlaylist = buildArtistPlaylistFromEntry(entry)
+  const replaced = replaceArtistPlaylistByKey(artistKey, nextPlaylist)
+  if (!replaced) {
+    return false
+  }
+
+  if (rerender) {
+    renderTabs()
+    renderHeader()
+    renderPlayer()
+    applyFilters({ syncAll: true })
+  }
+
+  return true
 }
 
 function setPlaylists(playlists) {
@@ -2324,6 +2658,7 @@ function renderWallViewport({ token = renderRuntime.wallRenderToken, force = fal
   renderRuntime.renderedPlaylistIds = nextRenderedPlaylistIds
   syncWallPlaybackState()
   syncTrackSelectionState()
+  primeVisibleArtistPlaylists()
   primeVisibleRecommendations()
 }
 
@@ -2884,6 +3219,116 @@ function renderRecommendationRow(playlistId, track, recommendationState) {
   `
 }
 
+function primeVisibleArtistPlaylists() {
+  if (state.activeTab !== 'artists') {
+    return
+  }
+
+  if (!appBridge || typeof appBridge.getArtistSongs !== 'function') {
+    return
+  }
+
+  for (const playlistId of renderRuntime.renderedPlaylistIds) {
+    queueArtistPlaylistHydration(playlistId)
+  }
+}
+
+function queueArtistPlaylistHydration(playlistId) {
+  const playlist = getPlaylistById(playlistId)
+  if (!playlist?.isArtist || isPlaylistCollapsed(playlist)) {
+    return
+  }
+
+  const artistKey = playlist.artistKey || ''
+  const artistId = Number(playlist.artistId || 0)
+  const requestedLimit = normalizeArtistTrackDisplayLimit(state.settings.artistTrackDisplayLimit)
+  if (!artistKey || artistId <= 0 || requestedLimit <= 0) {
+    return
+  }
+
+  const remoteState = state.artistRemoteTracksByKey.get(artistKey)
+  const currentTrackCount = Array.isArray(remoteState?.tracks) ? remoteState.tracks.length : 0
+  const isCovered = currentTrackCount >= requestedLimit
+  const isAlreadyQueued = renderRuntime.artistHydrationQueue.includes(artistKey)
+  const isAlreadyLoading = Boolean(remoteState?.loading) && Number(remoteState?.requestedLimit || 0) >= requestedLimit
+  const hasMatchingError = Boolean(remoteState?.error) && Number(remoteState?.requestedLimit || 0) >= requestedLimit
+  if (isCovered || isAlreadyQueued || isAlreadyLoading || hasMatchingError) {
+    return
+  }
+
+  state.artistRemoteTracksByKey.set(artistKey, {
+    ...(remoteState || {}),
+    artistId,
+    loading: true,
+    requestedLimit,
+  })
+  refreshArtistPlaylistByKey(artistKey)
+
+  renderRuntime.artistHydrationQueue.push(artistKey)
+  processArtistHydrationQueue()
+}
+
+function processArtistHydrationQueue() {
+  while (
+    renderRuntime.artistHydrationInFlight < ARTIST_TRACK_HYDRATION_CONCURRENCY
+    && renderRuntime.artistHydrationQueue.length
+  ) {
+    const artistKey = renderRuntime.artistHydrationQueue.shift()
+    const sessionId = renderRuntime.artistHydrationSessionId
+    renderRuntime.artistHydrationInFlight += 1
+
+    void hydrateArtistPlaylistTracks(artistKey, sessionId).finally(() => {
+      if (sessionId !== renderRuntime.artistHydrationSessionId) {
+        return
+      }
+
+      renderRuntime.artistHydrationInFlight = Math.max(0, renderRuntime.artistHydrationInFlight - 1)
+      processArtistHydrationQueue()
+    })
+  }
+}
+
+async function hydrateArtistPlaylistTracks(artistKey, sessionId) {
+  if (sessionId !== renderRuntime.artistHydrationSessionId) {
+    return
+  }
+
+  const playlist = state.artistPlaylists.find((item) => item.artistKey === artistKey) || null
+  const requestedLimit = normalizeArtistTrackDisplayLimit(state.settings.artistTrackDisplayLimit)
+  const artistId = Number(playlist?.artistId || 0)
+  if (!playlist || artistId <= 0) {
+    return
+  }
+
+  const result = await appBridge.getArtistSongs(artistId, requestedLimit)
+  if (sessionId !== renderRuntime.artistHydrationSessionId) {
+    return
+  }
+
+  const previousState = state.artistRemoteTracksByKey.get(artistKey) || {}
+  if (!result?.ok) {
+    state.artistRemoteTracksByKey.set(artistKey, {
+      ...previousState,
+      artistId,
+      loading: false,
+      error: result?.error || TEXT.goToArtistPlaylistFailed,
+      requestedLimit,
+    })
+    refreshArtistPlaylistByKey(artistKey, { rerender: state.activeTab === 'artists' })
+    return
+  }
+
+  state.artistRemoteTracksByKey.set(artistKey, {
+    ...previousState,
+    artistId,
+    loading: false,
+    error: '',
+    requestedLimit,
+    tracks: (result.tracks || []).map((track, index) => normalizePlaylistTrack(track, index)),
+  })
+  refreshArtistPlaylistByKey(artistKey, { rerender: state.activeTab === 'artists' })
+}
+
 function primeVisibleRecommendations() {
   if (!state.settings.showPlaylistRecommendations) {
     return
@@ -3196,6 +3641,7 @@ function clonePlaylistSnapshot(playlist) {
     isExplore: Boolean(playlist.isExplore),
     isArtist: Boolean(playlist.isArtist),
     artistKey: playlist.artistKey || '',
+    artistId: Number(playlist.artistId || 0),
     artistName: playlist.artistName || playlist.name || '',
     artistImportance: Number(playlist.artistImportance || 0),
     artistSourcePlaylistCount: Number(playlist.artistSourcePlaylistCount || 0),
@@ -3208,6 +3654,10 @@ function clonePlaylistSnapshot(playlist) {
       position: Number(track.position || index + 1),
       name: track.name || '',
       artists: Array.isArray(track.artists) ? track.artists.slice() : [],
+      artistEntries: normalizeTrackArtistEntries(track.artistEntries, track.artists || []).map((artist) => ({
+        id: Number(artist.id || 0),
+        name: artist.name,
+      })),
       album: track.album || '',
       albumId: Number(track.albumId || 0),
       albumCoverUrl: track.albumCoverUrl || '',
@@ -3336,6 +3786,26 @@ async function restoreRemovedSubscribedPlaylist() {
   applyFilters({ syncAll: true })
 }
 
+function handleSubscribedPlaylistRemovalFailed(payload) {
+  const playlistSnapshot = payload?.playlist ? clonePlaylistSnapshot(payload.playlist) : null
+  if (playlistSnapshot?.id) {
+    if (Number(renderRuntime.playlistUndoNotice?.playlist?.id || 0) === Number(playlistSnapshot.id)) {
+      dismissPlaylistUndoNotice()
+    }
+
+    setPlaylists(sortWallPlaylists(upsertPlaylistIntoLibrary(state.playlists, playlistSnapshot)))
+    if (!(state.queuePlaylistId === null && state.currentTrackId === null)) {
+      syncQueueWithPlaylists()
+    }
+    renderTabs()
+    renderHeader()
+    renderPlayer()
+    applyFilters({ syncAll: true })
+  }
+
+  showToast(payload?.error || TEXT.removeSubscribedPlaylistFailed, 'error')
+}
+
 async function removeSubscribedPlaylistFromCard(playlistId, buttonRect) {
   const normalizedPlaylistId = Number(playlistId || 0)
   const playlist = getPlaylistById(normalizedPlaylistId)
@@ -3358,7 +3828,8 @@ async function removeSubscribedPlaylistFromCard(playlistId, buttonRect) {
   renderRuntime.playlistRemovalPendingIds.add(normalizedPlaylistId)
   renderWallViewport({ force: true })
 
-  const result = await appBridge.removeSubscribedPlaylist(normalizedPlaylistId)
+  const playlistSnapshot = clonePlaylistSnapshot(playlist)
+  const result = await appBridge.removeSubscribedPlaylist(playlistSnapshot)
   renderRuntime.playlistRemovalPendingIds.delete(normalizedPlaylistId)
 
   if (!result?.ok) {
@@ -3367,7 +3838,6 @@ async function removeSubscribedPlaylistFromCard(playlistId, buttonRect) {
     return
   }
 
-  const playlistSnapshot = clonePlaylistSnapshot(playlist)
   setPlaylists(sortWallPlaylists(
     state.playlists.filter((item) => Number(item.id || 0) !== normalizedPlaylistId)
   ))
@@ -3456,6 +3926,10 @@ function handleWallClick(event) {
     return
   }
 
+  const rowInfo = getTrackRowSelectionInfo(row)
+  if (rowInfo) {
+    renderRuntime.trackRangeAnchorKey = rowInfo.key
+  }
   clearTrackSelection()
   playFromPlaylist(Number(row.dataset.playlistId), Number(row.dataset.trackId))
 }
@@ -3477,38 +3951,62 @@ function handleWallContextMenu(event) {
 
 function openContextMenu(clientX, clientY) {
   renderContextMenu()
+  renderRuntime.contextMenuOpenedAt = Date.now()
   refs.contextMenu.classList.remove('hidden', 'context-menu--submenu-left')
   refs.contextMenu.style.left = '0px'
   refs.contextMenu.style.top = '0px'
+  refs.contextMenu.style.removeProperty('--context-menu-submenu-top')
 
+  const viewportPadding = 8
   const menuWidth = refs.contextMenu.offsetWidth || 224
   const menuHeight = refs.contextMenu.offsetHeight || 52
-  const submenu = refs.contextMenu.querySelector('.context-menu-submenu')
-  const submenuGroup = submenu ? submenu.parentElement : null
-  const submenuWidth = submenu instanceof HTMLElement ? (submenu.offsetWidth || 180) : 0
-  const submenuOffsetTop = submenuGroup instanceof HTMLElement ? submenuGroup.offsetTop : 0
-
-  const spaceRight = window.innerWidth - clientX - menuWidth - 8
-  const flipLeft = submenu instanceof HTMLElement && spaceRight < submenuWidth
-  if (flipLeft) refs.contextMenu.classList.add('context-menu--submenu-left')
-
-  const submenuHeight = submenu instanceof HTMLElement ? Math.min(480, submenu.scrollHeight + 8) : 0
-  const totalHeight = submenu instanceof HTMLElement
-    ? Math.max(menuHeight, submenuOffsetTop + submenuHeight)
-    : menuHeight
-  const left = flipLeft
-    ? clamp(clientX, menuWidth + submenuWidth + 8, window.innerWidth - menuWidth - 8)
-    : clamp(clientX, 8, Math.max(8, window.innerWidth - menuWidth - submenuWidth - 8))
-  const top = clamp(clientY, 8, Math.max(8, window.innerHeight - totalHeight - 8))
+  const left = clamp(
+    clientX,
+    viewportPadding,
+    Math.max(viewportPadding, window.innerWidth - menuWidth - viewportPadding)
+  )
+  const top = clamp(
+    clientY,
+    viewportPadding,
+    Math.max(viewportPadding, window.innerHeight - menuHeight - viewportPadding)
+  )
   refs.contextMenu.style.left = `${left}px`
   refs.contextMenu.style.top = `${top}px`
+
+  const submenu = refs.contextMenu.querySelector('.context-menu-submenu')
+  const submenuGroup = submenu ? submenu.parentElement : null
+  if (!(submenu instanceof HTMLElement) || !(submenuGroup instanceof HTMLElement)) {
+    return
+  }
+
+  const submenuWidth = submenu.offsetWidth || 180
+  const submenuHeight = submenu.offsetHeight || Math.min(480, submenu.scrollHeight + 8)
+  const spaceRight = window.innerWidth - (left + menuWidth) - viewportPadding
+  const spaceLeft = left - viewportPadding
+  if (spaceRight < submenuWidth && spaceLeft > spaceRight) {
+    refs.contextMenu.classList.add('context-menu--submenu-left')
+  }
+
+  const submenuTop = clamp(
+    top + submenuGroup.offsetTop,
+    viewportPadding,
+    Math.max(viewportPadding, window.innerHeight - submenuHeight - viewportPadding)
+  ) - top - submenuGroup.offsetTop
+  refs.contextMenu.style.setProperty('--context-menu-submenu-top', `${submenuTop}px`)
 }
 
 function closeContextMenu() {
   renderRuntime.contextMenuTrack = null
+  renderRuntime.contextMenuOpenedAt = 0
   refs.contextMenu.classList.add('hidden')
   refs.contextMenu.classList.remove('context-menu--submenu-left')
+  refs.contextMenu.style.removeProperty('--context-menu-submenu-top')
   refs.contextMenu.replaceChildren()
+}
+
+function shouldKeepContextMenuOpenOnScroll() {
+  return !refs.contextMenu.classList.contains('hidden')
+    && (Date.now() - Number(renderRuntime.contextMenuOpenedAt || 0)) < CONTEXT_MENU_SCROLL_GUARD_MS
 }
 
 function createContextMenuButton(item) {
@@ -3674,6 +4172,7 @@ function resolveTrackContextMenuState(target) {
     const playlist = getPlaylistById(playlistId)
     const recommendationState = ensureRecommendationState(playlistId)
     const track = recommendationState.tracks.find((item) => item.id === trackId)
+      || recommendationState.poolTracks.find((item) => item.id === trackId)
 
     if (!playlist || !track) {
       return null
@@ -3839,6 +4338,37 @@ function flashTrackFocus(playlistId, trackId) {
   }, TRACK_FOCUS_FLASH_MS)
 }
 
+function ensureArtistTrackVisibleInPlaylist(playlistId, trackId) {
+  const playlist = getPlaylistById(playlistId)
+  if (!playlist?.isArtist || !playlist.artistKey) {
+    return false
+  }
+
+  if ((playlist.tracks || []).some((track) => Number(track.id || 0) === Number(trackId || 0))) {
+    return false
+  }
+
+  const entry = state.artistPlaylistEntriesByKey.get(playlist.artistKey)
+  const sourceTrack = entry?.trackMap?.get(Number(trackId || 0))
+  if (!sourceTrack) {
+    return false
+  }
+
+  const nextTracks = [toArtistTrackOutput(sourceTrack), ...(playlist.tracks || [])]
+  const nextPlaylist = normalizePlaylist({
+    ...playlist,
+    _normalized: false,
+    trackCount: Math.max(Number(playlist.trackCount || 0), nextTracks.length),
+    tracks: nextTracks,
+  })
+  if (!replaceArtistPlaylistByKey(playlist.artistKey, nextPlaylist)) {
+    return false
+  }
+
+  applyFilters({ syncAll: true })
+  return true
+}
+
 async function focusTrackRowInPlaylist(playlistId, trackId) {
   const normalizedPlaylistId = Number(playlistId || 0)
   const normalizedTrackId = Number(trackId || 0)
@@ -3865,7 +4395,18 @@ async function focusTrackRowInPlaylist(playlistId, trackId) {
 
   const row = refs.wallColumns.querySelector(`.track-row[data-playlist-id="${normalizedPlaylistId}"][data-track-id="${normalizedTrackId}"]`)
   if (!(row instanceof HTMLElement)) {
-    return null
+    if (!ensureArtistTrackVisibleInPlaylist(normalizedPlaylistId, normalizedTrackId)) {
+      return null
+    }
+
+    await new Promise((resolve) => window.requestAnimationFrame(() => window.requestAnimationFrame(resolve)))
+    const fallbackRow = refs.wallColumns.querySelector(`.track-row[data-playlist-id="${normalizedPlaylistId}"][data-track-id="${normalizedTrackId}"]`)
+    if (!(fallbackRow instanceof HTMLElement)) {
+      return null
+    }
+
+    flashTrackFocus(normalizedPlaylistId, normalizedTrackId)
+    return fallbackRow
   }
 
   flashTrackFocus(normalizedPlaylistId, normalizedTrackId)
@@ -3890,30 +4431,32 @@ async function focusPlaylistCardInTab(tab, playlistId, options = {}) {
 
   applyFilters({ syncAll: true })
 
-  const placement = getWallPlacementByPlaylistId(normalizedPlaylistId)
-  if (placement) {
-    const targetTop = clamp(
-      Math.round(placement.top - refs.wallScroll.clientHeight * 0.28),
-      0,
-      Math.max(0, refs.wallScroll.scrollHeight - refs.wallScroll.clientHeight)
-    )
-    refs.wallScroll.scrollTop = targetTop
-    renderWallViewport({ force: true })
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const placement = getWallPlacementByPlaylistId(normalizedPlaylistId)
+    if (placement) {
+      const targetTop = clamp(
+        Math.round(placement.top - refs.wallScroll.clientHeight * 0.28),
+        0,
+        Math.max(0, refs.wallScroll.scrollHeight - refs.wallScroll.clientHeight)
+      )
+      refs.wallScroll.scrollTop = targetTop
+      renderWallViewport({ force: true })
+    }
+
+    await new Promise((resolve) => window.requestAnimationFrame(() => window.requestAnimationFrame(resolve)))
+
+    const card = refs.wallColumns.querySelector(`.playlist-card[data-playlist-id="${normalizedPlaylistId}"]`)
+    if (card) {
+      card.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' })
+      if (options.successMessage) {
+        showToast(options.successMessage)
+      }
+      return true
+    }
   }
 
-  await new Promise((resolve) => window.requestAnimationFrame(() => window.requestAnimationFrame(resolve)))
-
-  const card = refs.wallColumns.querySelector(`.playlist-card[data-playlist-id="${normalizedPlaylistId}"]`)
-  if (!card) {
-    showToast(options.errorMessage || TEXT.locateFailed, 'error')
-    return false
-  }
-
-  card.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' })
-  if (options.successMessage) {
-    showToast(options.successMessage)
-  }
-  return true
+  showToast(options.errorMessage || TEXT.locateFailed, 'error')
+  return false
 }
 
 async function jumpToArtistPlaylistFromContextMenu(artistPlaylistId, artistKey = '') {
@@ -4162,7 +4705,32 @@ function setTrackSelection(keys, { anchorKey = '' } = {}) {
   renderRuntime.selectedTrackAnchorKey = normalizedKeys.includes(anchorKey)
     ? anchorKey
     : normalizedKeys[normalizedKeys.length - 1]
+  renderRuntime.trackRangeAnchorKey = renderRuntime.selectedTrackAnchorKey
   syncTrackSelectionState()
+}
+
+function getTrackRangeAnchorInfo(playlistId) {
+  const normalizedPlaylistId = Number(playlistId || 0)
+  if (normalizedPlaylistId <= 0) {
+    return null
+  }
+
+  if (
+    renderRuntime.selectedTrackKeys.size
+    && Number(renderRuntime.selectedPlaylistId || 0) === normalizedPlaylistId
+  ) {
+    const selectedAnchor = parseTrackSelectionKey(renderRuntime.selectedTrackAnchorKey)
+    if (selectedAnchor.playlistId === normalizedPlaylistId && selectedAnchor.trackId > 0) {
+      return selectedAnchor
+    }
+  }
+
+  const rangeAnchor = parseTrackSelectionKey(renderRuntime.trackRangeAnchorKey)
+  if (rangeAnchor.playlistId === normalizedPlaylistId && rangeAnchor.trackId > 0) {
+    return rangeAnchor
+  }
+
+  return null
 }
 
 function getSelectableTracksForPlaylist(playlistId) {
@@ -4204,11 +4772,10 @@ function handleTrackSelectionClick(event, row) {
     return false
   }
 
-  const samePlaylistSelection = Number(renderRuntime.selectedPlaylistId || 0) === info.playlistId
+  const samePlaylistSelection = renderRuntime.selectedTrackKeys.size > 0
+    && Number(renderRuntime.selectedPlaylistId || 0) === info.playlistId
   if (rangeSelection) {
-    const anchor = samePlaylistSelection
-      ? parseTrackSelectionKey(renderRuntime.selectedTrackAnchorKey)
-      : null
+    const anchor = getTrackRangeAnchorInfo(info.playlistId)
     const rangeKeys = buildTrackSelectionRange(
       info.playlistId,
       anchor?.trackId || info.trackId,
@@ -4376,7 +4943,37 @@ function reorderTracksToIndex(tracks, trackId, targetIndex) {
 
   const nextTracks = tracks.slice()
   const [movedTrack] = nextTracks.splice(fromIndex, 1)
-  nextTracks.splice(clamp(targetIndex, 0, nextTracks.length), 0, movedTrack)
+  const normalizedTargetIndex = clamp(Number(targetIndex) || 0, 0, (tracks || []).length)
+  const insertionIndex = clamp(
+    fromIndex < normalizedTargetIndex ? normalizedTargetIndex - 1 : normalizedTargetIndex,
+    0,
+    nextTracks.length
+  )
+  nextTracks.splice(insertionIndex, 0, movedTrack)
+  return normalizeTrackPositions(nextTracks)
+}
+
+function moveTracksToIndex(tracks, trackIds, targetIndex) {
+  const normalizedTrackIds = [...new Set((trackIds || []).map((id) => Number(id)).filter((id) => id > 0))]
+  if (!normalizedTrackIds.length) {
+    return null
+  }
+
+  const movedTrackIdSet = new Set(normalizedTrackIds)
+  const movedTracks = (tracks || []).filter((track) => movedTrackIdSet.has(Number(track.id)))
+  if (movedTracks.length !== normalizedTrackIds.length) {
+    return null
+  }
+
+  const remainingTracks = (tracks || []).filter((track) => !movedTrackIdSet.has(Number(track.id)))
+  const normalizedTargetIndex = clamp(Number(targetIndex) || 0, 0, (tracks || []).length)
+  const removedBeforeTarget = (tracks || [])
+    .slice(0, normalizedTargetIndex)
+    .filter((track) => movedTrackIdSet.has(Number(track.id)))
+    .length
+  const insertionIndex = clamp(normalizedTargetIndex - removedBeforeTarget, 0, remainingTracks.length)
+  const nextTracks = remainingTracks.slice()
+  nextTracks.splice(insertionIndex, 0, ...movedTracks)
   return normalizeTrackPositions(nextTracks)
 }
 
@@ -4386,12 +4983,20 @@ function insertTrackAtIndex(tracks, track, targetIndex) {
   return normalizeTrackPositions(nextTracks)
 }
 
-function buildTrackMovePlan({ sourcePlaylistId, targetPlaylistId, trackId, targetIndex }) {
+function insertTracksAtIndex(tracks, movedTracks, targetIndex) {
+  const nextTracks = (tracks || []).slice()
+  nextTracks.splice(clamp(Number(targetIndex) || 0, 0, nextTracks.length), 0, ...(movedTracks || []))
+  return normalizeTrackPositions(nextTracks)
+}
+
+function buildTrackMovePlan({ sourcePlaylistId, targetPlaylistId, trackId, trackIds, targetIndex }) {
   const sourcePlaylist = getPlaylistById(sourcePlaylistId)
   const targetPlaylist = getPlaylistById(targetPlaylistId)
-  const track = sourcePlaylist?.tracks.find((item) => item.id === Number(trackId))
+  const normalizedTrackIds = [...new Set((trackIds || [trackId]).map((id) => Number(id)).filter((id) => id > 0))]
+  const tracks = sourcePlaylist?.tracks.filter((item) => normalizedTrackIds.includes(Number(item.id))) || []
+  const track = tracks.find((item) => item.id === Number(trackId)) || tracks[0] || null
 
-  if (!sourcePlaylist || !targetPlaylist || !track) {
+  if (!sourcePlaylist || !targetPlaylist || !track || tracks.length !== normalizedTrackIds.length) {
     return null
   }
 
@@ -4401,13 +5006,13 @@ function buildTrackMovePlan({ sourcePlaylistId, targetPlaylistId, trackId, targe
 
   if (
     sourcePlaylist.id !== targetPlaylist.id
-    && targetPlaylist.tracks.some((item) => item.id === track.id)
+    && tracks.some((movedTrack) => targetPlaylist.tracks.some((item) => item.id === movedTrack.id))
   ) {
     return null
   }
 
   if (sourcePlaylist.id === targetPlaylist.id) {
-    const nextTracks = reorderTracksToIndex(sourcePlaylist.tracks, track.id, targetIndex)
+    const nextTracks = moveTracksToIndex(sourcePlaylist.tracks, normalizedTrackIds, targetIndex)
     if (!nextTracks || tracksHaveSameOrder(sourcePlaylist.tracks, nextTracks)) {
       return null
     }
@@ -4417,6 +5022,8 @@ function buildTrackMovePlan({ sourcePlaylistId, targetPlaylistId, trackId, targe
       keepSource: false,
       sourcePlaylist,
       targetPlaylist,
+      tracks,
+      trackIds: normalizedTrackIds,
       track,
       sourceTracks: nextTracks,
       targetTracks: nextTracks,
@@ -4424,16 +5031,19 @@ function buildTrackMovePlan({ sourcePlaylistId, targetPlaylistId, trackId, targe
   }
 
   const keepSource = isLikedPlaylist(sourcePlaylist)
-  const nextTargetTracks = insertTrackAtIndex(targetPlaylist.tracks, track, targetIndex)
+  const nextTargetTracks = insertTracksAtIndex(targetPlaylist.tracks, tracks, targetIndex)
+  const movedTrackIdSet = new Set(normalizedTrackIds)
   const nextSourceTracks = keepSource
     ? sourcePlaylist.tracks.slice()
-    : sourcePlaylist.tracks.filter((item) => item.id !== track.id)
+    : sourcePlaylist.tracks.filter((item) => !movedTrackIdSet.has(Number(item.id)))
 
   return {
     samePlaylist: false,
     keepSource,
     sourcePlaylist,
     targetPlaylist,
+    tracks,
+    trackIds: normalizedTrackIds,
     track,
     sourceTracks: normalizeTrackPositions(nextSourceTracks),
     targetTracks: nextTargetTracks,
@@ -4455,7 +5065,12 @@ function applyTrackMovePlan(plan) {
 
   setPlaylists(sortWallPlaylists(nextPlaylists))
 
-  if (!plan.samePlaylist && !plan.keepSource && state.queuePlaylistId === plan.sourcePlaylist.id && state.currentTrackId === plan.track.id) {
+  if (
+    !plan.samePlaylist
+    && !plan.keepSource
+    && state.queuePlaylistId === plan.sourcePlaylist.id
+    && (plan.trackIds || []).includes(Number(state.currentTrackId || 0))
+  ) {
     clearCurrentPlayback()
   } else {
     syncQueueWithPlaylists()
@@ -4481,6 +5096,8 @@ async function commitTrackMovePlan(plan) {
       sourcePlaylistId: plan.sourcePlaylist.id,
       targetPlaylistId: plan.targetPlaylist.id,
       track: plan.track,
+      tracks: plan.tracks,
+      trackIds: plan.trackIds,
       keepSource: plan.keepSource,
       sourceTracks: plan.keepSource ? null : plan.sourceTracks,
       targetTracks: plan.targetTracks,
@@ -4599,6 +5216,26 @@ function clearTrackDragState() {
   renderRuntime.dragState = null
 }
 
+function getDraggedTrackIdsForRow(playlistId, trackId) {
+  const normalizedPlaylistId = Number(playlistId || 0)
+  const normalizedTrackId = Number(trackId || 0)
+  const playlist = getPlaylistById(normalizedPlaylistId)
+  if (!playlist || normalizedTrackId <= 0) {
+    return []
+  }
+
+  const useSelection = Number(renderRuntime.selectedPlaylistId || 0) === normalizedPlaylistId
+    && isTrackSelected(normalizedPlaylistId, normalizedTrackId)
+  if (!useSelection) {
+    return [normalizedTrackId]
+  }
+
+  const selectedTrackIds = playlist.tracks
+    .filter((track) => isTrackSelected(normalizedPlaylistId, track.id))
+    .map((track) => Number(track.id))
+  return selectedTrackIds.length ? selectedTrackIds : [normalizedTrackId]
+}
+
 function buildDropTargetForRow(dragState, row, clientY) {
   const playlistId = Number(row.getAttribute('data-playlist-id'))
   const playlist = getPlaylistById(playlistId)
@@ -4608,7 +5245,6 @@ function buildDropTargetForRow(dragState, row, clientY) {
     return null
   }
 
-  const fromIndex = playlist.tracks.findIndex((track) => track.id === dragState.trackId)
   const hoveredIndex = playlist.tracks.findIndex((track) => track.id === hoveredTrackId)
   if (hoveredIndex === -1) {
     return null
@@ -4616,16 +5252,13 @@ function buildDropTargetForRow(dragState, row, clientY) {
 
   const rect = row.getBoundingClientRect()
   const position = clientY < rect.top + (rect.height / 2) ? 'before' : 'after'
-  let targetIndex = position === 'before' ? hoveredIndex : hoveredIndex + 1
-
-  if (playlist.id === dragState.sourcePlaylistId && fromIndex !== -1 && targetIndex > fromIndex) {
-    targetIndex -= 1
-  }
+  const targetIndex = position === 'before' ? hoveredIndex : hoveredIndex + 1
 
   const plan = buildTrackMovePlan({
     sourcePlaylistId: dragState.sourcePlaylistId,
     targetPlaylistId: playlist.id,
     trackId: dragState.trackId,
+    trackIds: dragState.trackIds,
     targetIndex,
   })
   if (!plan) {
@@ -4650,16 +5283,13 @@ function buildDropTargetForCard(dragState, card, position) {
     return null
   }
 
-  let targetIndex = position === 'start' ? 0 : playlist.tracks.length
-  const fromIndex = playlist.tracks.findIndex((track) => track.id === dragState.trackId)
-  if (playlist.id === dragState.sourcePlaylistId && fromIndex !== -1 && targetIndex > fromIndex) {
-    targetIndex -= 1
-  }
+  const targetIndex = position === 'start' ? 0 : playlist.tracks.length
 
   const plan = buildTrackMovePlan({
     sourcePlaylistId: dragState.sourcePlaylistId,
     targetPlaylistId: playlist.id,
     trackId: dragState.trackId,
+    trackIds: dragState.trackIds,
     targetIndex,
   })
   if (!plan) {
@@ -4718,8 +5348,9 @@ function handleWallDragStart(event) {
   const sourcePlaylistId = Number(row.getAttribute('data-playlist-id'))
   const trackId = Number(row.getAttribute('data-track-id'))
   const playlist = getPlaylistById(sourcePlaylistId)
+  const trackIds = getDraggedTrackIdsForRow(sourcePlaylistId, trackId)
 
-  if (!playlist || !canMutatePlaylistOrder(playlist)) {
+  if (!playlist || !canMutatePlaylistOrder(playlist) || !trackIds.length) {
     event.preventDefault()
     return
   }
@@ -4729,18 +5360,23 @@ function handleWallDragStart(event) {
   renderRuntime.dragState = {
     sourcePlaylistId,
     trackId,
+    trackIds,
   }
 
   renderRuntime.dragSourceRow = row
   row.blur()
-  row.classList.add('is-dragging')
+  const draggedTrackIdSet = new Set(trackIds)
+  refs.wallColumns.querySelectorAll(`.track-row[data-playlist-id="${sourcePlaylistId}"]`).forEach((trackRow) => {
+    const rowTrackId = Number(trackRow.getAttribute('data-track-id'))
+    trackRow.classList.toggle('is-dragging', draggedTrackIdSet.has(rowTrackId))
+  })
   row.addEventListener('dragend', scheduleTrackDragStateCleanup, { once: true })
   closeContextMenu()
   hideAlbumHoverPreview()
 
   if (event.dataTransfer) {
     event.dataTransfer.effectAllowed = isLikedPlaylist(playlist) ? 'copyMove' : 'move'
-    event.dataTransfer.setData('text/plain', `${sourcePlaylistId}:${trackId}`)
+    event.dataTransfer.setData('text/plain', `${sourcePlaylistId}:${trackIds.join(',')}`)
   }
 }
 
@@ -5305,6 +5941,9 @@ function renderSettings() {
   refs.likedPlaylistDisplayModeSelect.value = normalizeLikedPlaylistDisplayMode(
     state.settings.likedPlaylistDisplayMode
   )
+  refs.artistTrackDisplayLimitInput.value = String(
+    normalizeArtistTrackDisplayLimit(state.settings.artistTrackDisplayLimit)
+  )
 }
 
 function toggleSettingsPanel() {
@@ -5322,13 +5961,24 @@ function handleSettingsChange() {
   const nextLikedPlaylistDisplayMode = normalizeLikedPlaylistDisplayMode(
     refs.likedPlaylistDisplayModeSelect.value
   )
+  const nextArtistTrackDisplayLimit = normalizeArtistTrackDisplayLimit(
+    refs.artistTrackDisplayLimitInput.value
+  )
   const recommendationsChanged = nextShowPlaylistRecommendations !== state.settings.showPlaylistRecommendations
+  const artistTrackDisplayLimitChanged = nextArtistTrackDisplayLimit !== state.settings.artistTrackDisplayLimit
 
   state.settings.showPlaylistRecommendations = nextShowPlaylistRecommendations
   state.settings.likedPlaylistDisplayMode = nextLikedPlaylistDisplayMode
+  state.settings.artistTrackDisplayLimit = nextArtistTrackDisplayLimit
+  refs.artistTrackDisplayLimitInput.value = String(nextArtistTrackDisplayLimit)
 
   if (recommendationsChanged) {
     resetRecommendationRuntime()
+  }
+
+  if (artistTrackDisplayLimitChanged) {
+    rebuildArtistPlaylists()
+    refreshPlaylistMap()
   }
 
   saveSettings()
@@ -5386,6 +6036,7 @@ function loadStoredSettings() {
     return {
       showPlaylistRecommendations: Boolean(parsed.showPlaylistRecommendations),
       likedPlaylistDisplayMode: normalizeLikedPlaylistDisplayMode(parsed.likedPlaylistDisplayMode),
+      artistTrackDisplayLimit: normalizeArtistTrackDisplayLimit(parsed.artistTrackDisplayLimit),
       collapsedPlaylistIds: normalizeCollapsedPlaylistIds(parsed.collapsedPlaylistIds),
       uiScale: normalizeUiScale(parsed.uiScale),
     }
@@ -5393,6 +6044,7 @@ function loadStoredSettings() {
     return {
       showPlaylistRecommendations: false,
       likedPlaylistDisplayMode: LIKED_PLAYLIST_DISPLAY_MODE_ALL,
+      artistTrackDisplayLimit: ARTIST_TRACK_DISPLAY_LIMIT_DEFAULT,
       collapsedPlaylistIds: [],
       uiScale: UI_SCALE_DEFAULT,
     }
@@ -5416,6 +6068,9 @@ async function hydrateStoredPreferences() {
   state.settings.likedPlaylistDisplayMode = normalizeLikedPlaylistDisplayMode(
     result.preferences.likedPlaylistDisplayMode
   )
+  state.settings.artistTrackDisplayLimit = normalizeArtistTrackDisplayLimit(
+    result.preferences.artistTrackDisplayLimit
+  )
   state.settings.collapsedPlaylistIds = normalizeCollapsedPlaylistIds(
     result.preferences.collapsedPlaylistIds
   )
@@ -5436,6 +6091,7 @@ async function persistPreferences() {
     theme: state.theme,
     showPlaylistRecommendations: Boolean(state.settings.showPlaylistRecommendations),
     likedPlaylistDisplayMode: normalizeLikedPlaylistDisplayMode(state.settings.likedPlaylistDisplayMode),
+    artistTrackDisplayLimit: normalizeArtistTrackDisplayLimit(state.settings.artistTrackDisplayLimit),
     collapsedPlaylistIds: normalizeCollapsedPlaylistIds(state.settings.collapsedPlaylistIds),
     uiScale: normalizeUiScale(state.settings.uiScale),
   })

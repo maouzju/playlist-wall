@@ -2,8 +2,44 @@ const api = require('NeteaseCloudMusicApi')
 
 const PLAYLIST_PAGE_SIZE = 1000
 const EXPLORE_DETAIL_CONCURRENCY = 4
+const API_REQUEST_TIMEOUT_MS = 15000
+const API_MAX_ATTEMPTS = 5
+const API_RETRY_DELAY_MS = 2000
+const PLAYLIST_SUBSCRIPTION_TIMEOUT_MS = 8000
+const API_TIMEOUT_MESSAGE = '\u8bf7\u6c42\u8d85\u65f6\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5'
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+function createTimeoutError(message = API_TIMEOUT_MESSAGE) {
+  const error = new Error(message)
+  error.code = 'ETIMEDOUT'
+  error.status = 408
+  return error
+}
+
+function withTimeout(promise, timeoutMs, timeoutMessage = API_TIMEOUT_MESSAGE) {
+  const normalizedTimeoutMs = Number(timeoutMs || 0)
+  if (normalizedTimeoutMs <= 0) {
+    return Promise.resolve(promise)
+  }
+
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(createTimeoutError(timeoutMessage))
+    }, normalizedTimeoutMs)
+
+    Promise.resolve(promise).then(
+      (value) => {
+        clearTimeout(timer)
+        resolve(value)
+      },
+      (error) => {
+        clearTimeout(timer)
+        reject(error)
+      }
+    )
+  })
+}
 
 function createApiError(error, fallbackMessage, codeMessages = {}) {
   const body = error?.body || null
@@ -47,25 +83,56 @@ function normalizeSongSource(data, level) {
   }
 }
 
-function normalizeArtists(source) {
+function normalizeArtistEntries(source) {
   const artists = source?.ar || source?.artists || source?.artistNames || []
   if (Array.isArray(artists)) {
-    return artists.map((artist) => typeof artist === 'string' ? artist : artist?.name).filter(Boolean)
+    return artists.map((artist) => {
+      if (typeof artist === 'string') {
+        return {
+          id: 0,
+          name: artist.trim(),
+        }
+      }
+
+      return {
+        id: Number(artist?.id || artist?.artistId || 0),
+        name: String(artist?.name || artist?.artistName || '').trim(),
+      }
+    }).filter((artist) => artist.name)
   }
+
   if (typeof artists === 'string') {
-    return artists.split(/[\/,\u3001]/).map((item) => item.trim()).filter(Boolean)
+    return artists.split(/[\/,\u3001]/).map((item) => ({
+      id: 0,
+      name: item.trim(),
+    })).filter((artist) => artist.name)
   }
+
   return []
+}
+
+function normalizeArtists(source) {
+  return normalizeArtistEntries(source).map((artist) => artist.name)
+}
+
+function normalizeTrackIds(trackIds) {
+  return [...new Set(
+    (Array.isArray(trackIds) ? trackIds : [trackIds])
+      .map((id) => Number(id))
+      .filter((id) => id > 0)
+  )]
 }
 
 function normalizeTrackRecord(track, index = 0) {
   const source = track?.songInfo || track?.songData || track?.song || track?.track || track || {}
   const album = source?.al || source?.album || {}
+  const artistEntries = normalizeArtistEntries(source)
 
   return {
     id: Number(source?.id || track?.songId || track?.id || 0),
     name: source?.name || track?.name || '',
-    artists: normalizeArtists(source),
+    artists: artistEntries.map((artist) => artist.name),
+    artistEntries,
     album: album?.name || source?.albumName || '',
     albumId: Number(album?.id || source?.albumId || 0),
     albumCoverUrl: album?.picUrl || album?.coverUrl || source?.albumPicUrl || '',
@@ -143,27 +210,41 @@ async function callApi(name, params, options = {}) {
     throw new Error(`Unknown API: ${name}`)
   }
 
-  for (let attempt = 1; attempt <= 5; attempt += 1) {
+  const maxAttempts = Number.isInteger(options.maxAttempts) && options.maxAttempts > 0
+    ? options.maxAttempts
+    : API_MAX_ATTEMPTS
+  const timeoutMs = Number.isFinite(options.timeoutMs) && options.timeoutMs > 0
+    ? Math.round(options.timeoutMs)
+    : API_REQUEST_TIMEOUT_MS
+  const retryDelayMs = Number.isFinite(options.retryDelayMs) && options.retryDelayMs >= 0
+    ? Number(options.retryDelayMs)
+    : API_RETRY_DELAY_MS
+  const timeoutMessage = typeof options.timeoutMessage === 'string' && options.timeoutMessage.trim()
+    ? options.timeoutMessage.trim()
+    : API_TIMEOUT_MESSAGE
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
-      const response = await fn(params)
+      const response = await withTimeout(fn(params), timeoutMs, timeoutMessage)
       if (!response || typeof response !== 'object') {
         throw new Error(`Bad response from ${name}`)
       }
       return response
     } catch (error) {
+      const errorCode = error && error.code ? String(error.code) : ''
       const msg = error && error.message ? error.message : ''
       const body = error && error.body ? error.body : null
       const bodyMsg = body && (body.msg || body.message) ? (body.msg || body.message) : ''
       const status = (error && error.status) || (body && body.code) || 0
-      const retryable = /(ETIMEDOUT|timeout|502|ECONNRESET|405|\u9891\u7e41)/i.test(`${msg} ${bodyMsg} ${status}`)
-      if (!retryable || attempt === 5) {
+      const retryable = /(ETIMEDOUT|timeout|502|ECONNRESET|405|\u9891\u7e41)/i.test(`${errorCode} ${msg} ${bodyMsg} ${status}`)
+      if (!retryable || attempt === maxAttempts) {
         throw createApiError(
           error,
           options.fallbackMessage || `API request failed: ${name}`,
           options.codeMessages || {}
         )
       }
-      await sleep(2000 * attempt)
+      await sleep(retryDelayMs * attempt)
     }
   }
 
@@ -359,6 +440,61 @@ class NeteaseService {
     }))
   }
 
+  async getArtistSongs(artistId, maxCount = 100) {
+    const normalizedArtistId = Number(artistId || 0)
+    const normalizedMaxCount = Math.max(1, Math.round(Number(maxCount || 0) || 0))
+    if (normalizedArtistId <= 0) {
+      throw new Error('\u827a\u4eba\u4e0d\u5b58\u5728')
+    }
+
+    const tracks = []
+    const seen = new Set()
+    let offset = 0
+
+    while (tracks.length < normalizedMaxCount) {
+      const pageLimit = Math.min(100, normalizedMaxCount - tracks.length)
+      const response = await callApi('artist_songs', {
+        cookie: this.cookie,
+        id: normalizedArtistId,
+        order: 'hot',
+        offset,
+        limit: pageLimit,
+      }, {
+        fallbackMessage: '\u83b7\u53d6\u827a\u4eba\u6b4c\u66f2\u5931\u8d25',
+      })
+
+      ensureApiSuccess(response.body, '\u83b7\u53d6\u827a\u4eba\u6b4c\u66f2\u5931\u8d25')
+      const songs = Array.isArray(response.body?.songs) ? response.body.songs : []
+      if (!songs.length) {
+        break
+      }
+
+      for (const song of songs) {
+        const track = normalizeTrackRecord(song, tracks.length)
+        if (track.id <= 0 || seen.has(track.id)) {
+          continue
+        }
+
+        seen.add(track.id)
+        tracks.push(track)
+        if (tracks.length >= normalizedMaxCount) {
+          break
+        }
+      }
+
+      if (songs.length < pageLimit) {
+        break
+      }
+
+      offset += songs.length
+    }
+
+    return tracks.map((track, index) => ({
+      ...track,
+      position: index + 1,
+    }))
+  }
+
   async getSongUrl(songId) {
     const high = await callApi('song_url_v1', {
       cookie: this.cookie,
@@ -378,12 +514,17 @@ class NeteaseService {
     return normalizeSongSource(standard.body?.data?.[0], 'standard')
   }
 
-  async removeTrackFromPlaylist(playlistId, trackId) {
+  async removeTrackFromPlaylist(playlistId, trackIds) {
+    const normalizedTrackIds = normalizeTrackIds(trackIds)
+    if (!normalizedTrackIds.length) {
+      throw new Error('移出歌单失败')
+    }
+
     const response = await callApi('playlist_tracks', {
       cookie: this.cookie,
       op: 'del',
       pid: playlistId,
-      tracks: String(trackId),
+      tracks: normalizedTrackIds.join(','),
     }, {
       fallbackMessage: '\u79fb\u51fa\u6b4c\u5355\u5931\u8d25',
       codeMessages: {
@@ -394,12 +535,17 @@ class NeteaseService {
     ensureApiSuccess(response.body, '\u79fb\u51fa\u6b4c\u5355\u5931\u8d25')
   }
 
-  async addTrackToPlaylist(playlistId, trackId) {
+  async addTrackToPlaylist(playlistId, trackIds) {
+    const normalizedTrackIds = normalizeTrackIds(trackIds)
+    if (!normalizedTrackIds.length) {
+      throw new Error('加入歌单失败')
+    }
+
     const response = await callApi('playlist_tracks', {
       cookie: this.cookie,
       op: 'add',
       pid: playlistId,
-      tracks: String(trackId),
+      tracks: normalizedTrackIds.join(','),
     }, {
       fallbackMessage: '\u52a0\u5165\u6b4c\u5355\u5931\u8d25',
       codeMessages: {
@@ -417,6 +563,9 @@ class NeteaseService {
       t: 1,
     }, {
       fallbackMessage: '\u6536\u85cf\u6b4c\u5355\u5931\u8d25',
+      timeoutMs: PLAYLIST_SUBSCRIPTION_TIMEOUT_MS,
+      maxAttempts: 1,
+      retryDelayMs: 0,
       codeMessages: {
         301: '\u9700\u8981\u6709\u6548\u7684\u7f51\u6613\u4e91\u767b\u5f55\u6001\uff0c\u624d\u80fd\u6536\u85cf\u6b4c\u5355\u3002',
       },
@@ -432,6 +581,9 @@ class NeteaseService {
       t: 2,
     }, {
       fallbackMessage: '\u5220\u9664\u6536\u85cf\u6b4c\u5355\u5931\u8d25',
+      timeoutMs: PLAYLIST_SUBSCRIPTION_TIMEOUT_MS,
+      maxAttempts: 1,
+      retryDelayMs: 0,
       codeMessages: {
         301: '\u9700\u8981\u6709\u6548\u7684\u7f51\u6613\u4e91\u767b\u5f55\u6001\uff0c\u624d\u80fd\u5220\u9664\u6536\u85cf\u6b4c\u5355\u3002',
       },
@@ -685,4 +837,10 @@ class NeteaseService {
   }
 }
 
-module.exports = { NeteaseService }
+module.exports = {
+  NeteaseService,
+  __testing: {
+    callApi,
+    withTimeout,
+  },
+}

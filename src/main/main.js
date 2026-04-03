@@ -12,6 +12,7 @@ const { clearSession, getUserDataFilePath, readSession, writeSession } = require
 const { NeteaseService } = require('./netease-service')
 
 const HYDRATE_CONCURRENCY = 5
+const PLAYLIST_UNDO_NOTICE_MS = 20000
 
 const TEXT = {
   windowTitle: '\u6b4c\u5355\u5899',
@@ -35,6 +36,8 @@ const TEXT = {
 let win = null
 let svc = null
 let hydrationRunId = 0
+let flushingPendingSubscribedPlaylistRemovals = false
+const pendingSubscribedPlaylistRemovals = new Map()
 
 function send(channel, data) {
   if (win && !win.isDestroyed()) {
@@ -174,17 +177,45 @@ function normalizePlaylistMeta(playlist) {
   }
 }
 
+function normalizeTrackArtistEntries(track) {
+  const artistEntries = Array.isArray(track?.artistEntries)
+    ? track.artistEntries
+    : Array.isArray(track?.artists)
+      ? track.artists.map((artist) => ({
+        id: 0,
+        name: typeof artist === 'string' ? artist : artist?.name,
+      }))
+      : []
+
+  return artistEntries.map((artist) => ({
+    id: Number(artist?.id || artist?.artistId || 0),
+    name: String(artist?.name || '').trim(),
+  })).filter((artist) => artist.name)
+}
+
 function normalizeTracks(tracks) {
-  return (tracks || []).map((track, index) => ({
-    id: Number(track?.id || 0),
-    name: track?.name || '',
-    artists: Array.isArray(track?.artists) ? track.artists : [],
-    album: track?.album || '',
-    albumId: Number(track?.albumId || 0),
-    albumCoverUrl: track?.albumCoverUrl || '',
-    durationMs: Number(track?.durationMs || 0),
-    position: Number(track?.position || index + 1),
-  })).filter((track) => track.id > 0)
+  return (tracks || []).map((track, index) => {
+    const artistEntries = normalizeTrackArtistEntries(track)
+
+    return {
+      id: Number(track?.id || 0),
+      name: track?.name || '',
+      artists: artistEntries.map((artist) => artist.name),
+      artistEntries,
+      album: track?.album || '',
+      albumId: Number(track?.albumId || 0),
+      albumCoverUrl: track?.albumCoverUrl || '',
+      durationMs: Number(track?.durationMs || 0),
+      position: Number(track?.position || index + 1),
+    }
+  }).filter((track) => track.id > 0)
+}
+
+function normalizeTrackIds(trackIds, fallbackTrackId = 0) {
+  const ids = Array.isArray(trackIds) && trackIds.length
+    ? trackIds
+    : [fallbackTrackId]
+  return [...new Set(ids.map((id) => Number(id)).filter((id) => id > 0))]
 }
 
 function normalizePlaylistPayload(playlist) {
@@ -195,6 +226,20 @@ function normalizePlaylistPayload(playlist) {
     hydrated: Boolean(playlist?.hydrated),
     hydrating: Boolean(playlist?.hydrating) && !playlist?.hydrated,
   }
+}
+
+function normalizeSubscribedPlaylistPayload(playlist) {
+  const normalizedPlaylistId = Number(playlist?.sourcePlaylistId || playlist?.id || 0)
+
+  return normalizePlaylistPayload({
+    ...playlist,
+    id: normalizedPlaylistId,
+    sourcePlaylistId: normalizedPlaylistId,
+    subscribed: true,
+    isExplore: false,
+    hydrated: Boolean(playlist?.hydrated !== false),
+    hydrating: false,
+  })
 }
 
 function mergePlaylists(livePlaylists, cachedPlaylists) {
@@ -488,6 +533,87 @@ function upsertPlaylistInCache(playlist) {
   savePlaylistDetailCache(normalizedPlaylist, normalizedPlaylist.tracks)
 }
 
+function clearPendingSubscribedPlaylistRemovalTimer(entry) {
+  if (entry?.timer) {
+    clearTimeout(entry.timer)
+    entry.timer = null
+  }
+}
+
+function takePendingSubscribedPlaylistRemoval(playlistId) {
+  const normalizedPlaylistId = Number(playlistId || 0)
+  if (normalizedPlaylistId <= 0) {
+    return null
+  }
+
+  const entry = pendingSubscribedPlaylistRemovals.get(normalizedPlaylistId) || null
+  if (!entry) {
+    return null
+  }
+
+  clearPendingSubscribedPlaylistRemovalTimer(entry)
+  pendingSubscribedPlaylistRemovals.delete(normalizedPlaylistId)
+  return entry
+}
+
+async function finalizePendingSubscribedPlaylistRemoval(playlistId) {
+  const entry = takePendingSubscribedPlaylistRemoval(playlistId)
+  if (!entry?.playlist?.id) {
+    return { ok: true, skipped: true }
+  }
+
+  try {
+    const service = ensureServiceReady()
+    await service.unsubscribePlaylist(entry.playlist.id)
+    removePlaylistFromCache(entry.playlist.id)
+    return { ok: true }
+  } catch (error) {
+    upsertPlaylistInCache(entry.playlist)
+    send('subscribed-playlist-removal-failed', {
+      playlist: entry.playlist,
+      error: error.message || String(error),
+    })
+    return { ok: false, error: error.message || String(error) }
+  }
+}
+
+function stagePendingSubscribedPlaylistRemoval(playlist) {
+  const normalizedPlaylist = normalizeSubscribedPlaylistPayload(playlist)
+  if (normalizedPlaylist.id <= 0) {
+    throw new Error(TEXT.removeSubscribedPlaylistFailed)
+  }
+
+  const existingEntry = takePendingSubscribedPlaylistRemoval(normalizedPlaylist.id)
+  if (existingEntry?.playlist?.id) {
+    upsertPlaylistInCache(existingEntry.playlist)
+  }
+
+  const entry = {
+    playlist: normalizedPlaylist,
+    timer: null,
+    requestedAt: Date.now(),
+  }
+
+  entry.timer = setTimeout(() => {
+    void finalizePendingSubscribedPlaylistRemoval(normalizedPlaylist.id)
+  }, PLAYLIST_UNDO_NOTICE_MS)
+
+  pendingSubscribedPlaylistRemovals.set(normalizedPlaylist.id, entry)
+  removePlaylistFromCache(normalizedPlaylist.id)
+  return entry
+}
+
+async function flushPendingSubscribedPlaylistRemovals() {
+  const pendingIds = [...pendingSubscribedPlaylistRemovals.keys()]
+  if (!pendingIds.length) {
+    return
+  }
+
+  for (const playlistId of pendingIds) {
+    await finalizePendingSubscribedPlaylistRemoval(playlistId)
+  }
+}
+
 function describePlaylistError(error, hasCachedTracks = false) {
   const code = Number(error?.body?.code || error?.status || 0)
   if (code === 401) {
@@ -696,8 +822,9 @@ async function buildBootstrapPayload() {
       ? (livePlaylists || []).map(normalizePlaylistMeta).filter((playlist) => playlist.id > 0)
       : mergePlaylists(livePlaylists, bootstrap?.playlists || [])
   )
+    .filter((playlist) => !pendingSubscribedPlaylistRemovals.has(Number(playlist.id || 0)))
 
-  if (!allPlaylists.length) {
+  if (!allPlaylists.length && pendingSubscribedPlaylistRemovals.size === 0) {
     throw new Error(TEXT.playlistsMissing)
   }
 
@@ -820,6 +947,19 @@ function registerIpc() {
     }
   })
 
+  ipcMain.handle('getArtistSongs', async (_event, artistId, maxCount) => {
+    try {
+      if (!svc) {
+        throw new Error(TEXT.serviceNotReady)
+      }
+
+      const tracks = await svc.getArtistSongs(artistId, maxCount)
+      return { ok: true, tracks }
+    } catch (error) {
+      return { ok: false, error: error.message || String(error), tracks: [] }
+    }
+  })
+
   ipcMain.handle('recordTrackPlay', async (_event, userId, trackId) => {
     try {
       return {
@@ -861,25 +1001,23 @@ function registerIpc() {
 
   ipcMain.handle('subscribePlaylist', async (_event, playlist) => {
     try {
-      if (!svc) {
-        throw new Error(TEXT.serviceNotReady)
-      }
-
       const normalizedSourcePlaylistId = Number(playlist?.sourcePlaylistId || playlist?.id || 0)
       if (normalizedSourcePlaylistId <= 0) {
         throw new Error('\u6536\u85cf\u6b4c\u5355\u5931\u8d25')
       }
 
-      await svc.subscribePlaylist(normalizedSourcePlaylistId)
+      const pendingEntry = takePendingSubscribedPlaylistRemoval(normalizedSourcePlaylistId)
+      if (!pendingEntry) {
+        const service = ensureServiceReady()
+        await service.subscribePlaylist(normalizedSourcePlaylistId)
+      }
 
-      const subscribedPlaylist = normalizePlaylistPayload({
+      const subscribedPlaylist = normalizeSubscribedPlaylistPayload({
+        ...(pendingEntry?.playlist || {}),
         ...playlist,
-        id: normalizedSourcePlaylistId,
-        sourcePlaylistId: normalizedSourcePlaylistId,
-        isExplore: false,
-        subscribed: true,
-        hydrated: Boolean(playlist?.hydrated !== false),
-        hydrating: false,
+        tracks: Array.isArray(pendingEntry?.playlist?.tracks) && pendingEntry.playlist.tracks.length > 0
+          ? pendingEntry.playlist.tracks
+          : (playlist?.tracks || []),
       })
 
       upsertPlaylistInCache(subscribedPlaylist)
@@ -893,19 +1031,14 @@ function registerIpc() {
     }
   })
 
-  ipcMain.handle('removeSubscribedPlaylist', async (_event, playlistId) => {
+  ipcMain.handle('removeSubscribedPlaylist', async (_event, playlist) => {
     try {
-      if (!svc) {
-        throw new Error(TEXT.serviceNotReady)
-      }
-
-      const normalizedPlaylistId = Number(playlistId || 0)
-      if (normalizedPlaylistId <= 0) {
+      const normalizedPlaylist = normalizeSubscribedPlaylistPayload(playlist)
+      if (normalizedPlaylist.id <= 0) {
         throw new Error(TEXT.removeSubscribedPlaylistFailed)
       }
 
-      await svc.unsubscribePlaylist(normalizedPlaylistId)
-      removePlaylistFromCache(normalizedPlaylistId)
+      stagePendingSubscribedPlaylistRemoval(normalizedPlaylist)
       return { ok: true }
     } catch (error) {
       return { ok: false, error: error.message || String(error) }
@@ -914,26 +1047,27 @@ function registerIpc() {
 
   ipcMain.handle('restoreSubscribedPlaylist', async (_event, playlist) => {
     try {
-      if (!svc) {
-        throw new Error(TEXT.serviceNotReady)
-      }
-
-      const normalizedPlaylistId = Number(playlist?.sourcePlaylistId || playlist?.id || 0)
-      if (normalizedPlaylistId <= 0) {
+      const normalizedPlaylist = normalizeSubscribedPlaylistPayload(playlist)
+      if (normalizedPlaylist.id <= 0) {
         throw new Error(TEXT.restoreSubscribedPlaylistFailed)
       }
 
-      await svc.subscribePlaylist(normalizedPlaylistId)
-      upsertPlaylistInCache({
-        ...playlist,
-        id: normalizedPlaylistId,
-        sourcePlaylistId: normalizedPlaylistId,
-        subscribed: true,
-        isExplore: false,
-        hydrated: Boolean(playlist?.hydrated !== false),
-        hydrating: false,
+      const pendingEntry = takePendingSubscribedPlaylistRemoval(normalizedPlaylist.id)
+      const restoredPlaylist = normalizeSubscribedPlaylistPayload({
+        ...(pendingEntry?.playlist || {}),
+        ...normalizedPlaylist,
+        tracks: Array.isArray(pendingEntry?.playlist?.tracks) && pendingEntry.playlist.tracks.length > 0
+          ? pendingEntry.playlist.tracks
+          : (normalizedPlaylist.tracks || []),
       })
-      return { ok: true }
+
+      if (!pendingEntry) {
+        const service = ensureServiceReady()
+        await service.subscribePlaylist(restoredPlaylist.id)
+      }
+
+      upsertPlaylistInCache(restoredPlaylist)
+      return { ok: true, playlist: restoredPlaylist }
     } catch (error) {
       return { ok: false, error: error.message || String(error) }
     }
@@ -950,15 +1084,16 @@ function registerIpc() {
       const sourcePlaylistId = Number(payload?.sourcePlaylistId || 0)
       const targetPlaylistId = Number(payload?.targetPlaylistId || 0)
       const trackId = Number(payload?.track?.id || 0)
+      const trackIds = normalizeTrackIds(payload?.trackIds || payload?.tracks?.map((track) => track?.id), trackId)
       const keepSource = Boolean(payload?.keepSource)
       const sourceTracks = Array.isArray(payload?.sourceTracks) ? normalizeTracks(payload.sourceTracks) : null
       const targetTracks = Array.isArray(payload?.targetTracks) ? normalizeTracks(payload.targetTracks) : null
 
-      if (sourcePlaylistId <= 0 || targetPlaylistId <= 0 || trackId <= 0 || !targetTracks?.length) {
+      if (sourcePlaylistId <= 0 || targetPlaylistId <= 0 || !trackIds.length || !targetTracks?.length) {
         throw new Error('\u79fb\u52a8\u6b4c\u66f2\u5931\u8d25')
       }
 
-      if (!targetTracks.some((track) => track.id === trackId)) {
+      if (!trackIds.every((id) => targetTracks.some((track) => track.id === id))) {
         throw new Error('\u79fb\u52a8\u6b4c\u66f2\u5931\u8d25')
       }
 
@@ -968,19 +1103,21 @@ function registerIpc() {
         return { ok: true }
       }
 
-      await svc.addTrackToPlaylist(targetPlaylistId, trackId)
+      await svc.addTrackToPlaylist(targetPlaylistId, trackIds)
       targetTrackAdded = true
       await svc.updatePlaylistTrackOrder(targetPlaylistId, targetTracks.map((track) => track.id))
 
       if (!keepSource) {
-        await svc.removeTrackFromPlaylist(sourcePlaylistId, trackId)
+        await svc.removeTrackFromPlaylist(sourcePlaylistId, trackIds)
       }
 
       replacePlaylistTracksInCache(targetPlaylistId, targetTracks)
       if (!keepSource && sourceTracks) {
         replacePlaylistTracksInCache(sourcePlaylistId, sourceTracks)
       } else if (!keepSource) {
-        removeTrackFromCache(sourcePlaylistId, trackId)
+        for (const movedTrackId of trackIds) {
+          removeTrackFromCache(sourcePlaylistId, movedTrackId)
+        }
       }
 
       return { ok: true }
@@ -988,21 +1125,22 @@ function registerIpc() {
       const sourcePlaylistId = Number(payload?.sourcePlaylistId || 0)
       const targetPlaylistId = Number(payload?.targetPlaylistId || 0)
       const trackId = Number(payload?.track?.id || 0)
+      const trackIds = normalizeTrackIds(payload?.trackIds || payload?.tracks?.map((track) => track?.id), trackId)
 
       if (
         targetTrackAdded
         && sourcePlaylistId > 0
         && targetPlaylistId > 0
         && sourcePlaylistId !== targetPlaylistId
-        && trackId > 0
+        && trackIds.length
       ) {
         try {
-          await svc.removeTrackFromPlaylist(targetPlaylistId, trackId)
+          await svc.removeTrackFromPlaylist(targetPlaylistId, trackIds)
         } catch (rollbackError) {
           console.warn('failed to rollback playlist move after error', {
             sourcePlaylistId,
             targetPlaylistId,
-            trackId,
+            trackIds,
             rollbackError,
           })
         }
@@ -1052,6 +1190,18 @@ app.whenReady().then(() => {
   cleanupLegacyWorkspaceCache()
   registerIpc()
   createWindow()
+})
+
+app.on('before-quit', (event) => {
+  if (flushingPendingSubscribedPlaylistRemovals || pendingSubscribedPlaylistRemovals.size === 0) {
+    return
+  }
+
+  flushingPendingSubscribedPlaylistRemovals = true
+  event.preventDefault()
+  void flushPendingSubscribedPlaylistRemovals().finally(() => {
+    app.exit(0)
+  })
 })
 
 app.on('window-all-closed', () => {

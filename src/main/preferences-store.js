@@ -10,6 +10,9 @@ const UI_SCALE_DEFAULT = 100
 const LIKED_PLAYLIST_DISPLAY_MODE_ALL = 'all'
 const LIKED_PLAYLIST_DISPLAY_MODE_UNCOLLECTED = 'uncollected'
 const LIKED_PLAYLIST_DISPLAY_MODE_HIDDEN = 'hidden'
+const ARTIST_TRACK_DISPLAY_LIMIT_MIN = 20
+const ARTIST_TRACK_DISPLAY_LIMIT_MAX = 1000
+const ARTIST_TRACK_DISPLAY_LIMIT_DEFAULT = 100
 
 function normalizeUiScale(input) {
   const numeric = Number(input)
@@ -33,6 +36,18 @@ function normalizeLikedPlaylistDisplayMode(input) {
   }
 
   return LIKED_PLAYLIST_DISPLAY_MODE_ALL
+}
+
+function normalizeArtistTrackDisplayLimit(input) {
+  const numeric = Number(input)
+  if (!Number.isFinite(numeric)) {
+    return ARTIST_TRACK_DISPLAY_LIMIT_DEFAULT
+  }
+
+  return Math.min(
+    ARTIST_TRACK_DISPLAY_LIMIT_MAX,
+    Math.max(ARTIST_TRACK_DISPLAY_LIMIT_MIN, Math.round(numeric))
+  )
 }
 
 function normalizeCollapsedPlaylistIds(input) {
@@ -61,6 +76,7 @@ function normalizePreferences(input = {}) {
     theme: input?.theme === 'dark' ? 'dark' : 'light',
     showPlaylistRecommendations: Boolean(input?.showPlaylistRecommendations),
     likedPlaylistDisplayMode: normalizeLikedPlaylistDisplayMode(input?.likedPlaylistDisplayMode),
+    artistTrackDisplayLimit: normalizeArtistTrackDisplayLimit(input?.artistTrackDisplayLimit),
     collapsedPlaylistIds: normalizeCollapsedPlaylistIds(input?.collapsedPlaylistIds),
     uiScale: normalizeUiScale(input?.uiScale),
   }
@@ -99,4 +115,5 @@ module.exports = {
   readPreferences,
   writePreferences,
   normalizePreferences,
+  normalizeArtistTrackDisplayLimit,
 }
