@@ -1,0 +1,88 @@
+{
+  "name": "playlist-wall",
+  "version": "0.1.0",
+  "description": "Unofficial Playlist Wall desktop organizer for NetEase Cloud Music / 非官方网易云音乐歌单整理工具",
+  "type": "commonjs",
+  "main": "src/main/main.js",
+  "license": "MIT",
+  "author": "maou",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/maouzju/playlist-wall.git"
+  },
+  "homepage": "https://github.com/maouzju/playlist-wall",
+  "bugs": "https://github.com/maouzju/playlist-wall/issues",
+  "keywords": [
+    "netease",
+    "netease-cloud-music",
+    "electron",
+    "playlist",
+    "music-player",
+    "waterfall-layout"
+  ],
+  "scripts": {
+    "start": "node scripts/start-electron.js",
+    "test:ui": "playwright test tests/electron-ui.spec.js --reporter=line",
+    "third-party:notices": "node scripts/generate-third-party-notices.js",
+    "dist:win": "npm run third-party:notices && electron-builder --win nsis portable --publish never"
+  },
+  "dependencies": {
+    "NeteaseCloudMusicApi": "^4.30.0"
+  },
+  "devDependencies": {
+    "electron": "^33.4.11",
+    "electron-builder": "^26.8.1",
+    "playwright": "^1.59.1",
+    "sharp": "^0.34.5"
+  },
+  "build": {
+    "appId": "com.maouzju.playlistwall",
+    "productName": "Playlist Wall",
+    "artifactName": "playlist-wall-${version}-${productName}-${arch}.${ext}",
+    "asar": true,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "src/**/*",
+      "assets/**/*",
+      "package.json",
+      "LICENSE",
+      "DISCLAIMER.md",
+      "THIRD_PARTY_NOTICES.md"
+    ],
+    "extraMetadata": {
+      "main": "src/main/main.js"
+    },
+    "win": {
+      "icon": "assets/icon.ico",
+      "signAndEditExecutable": false,
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "artifactName": "playlist-wall-${version}-setup-${arch}.${ext}",
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Playlist Wall"
+    },
+    "portable": {
+      "artifactName": "playlist-wall-${version}-portable-${arch}.${ext}"
+    }
+  }
+}
