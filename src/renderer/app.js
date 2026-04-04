@@ -23,6 +23,7 @@ const RECOMMENDATION_FETCH_COUNT = Math.max(RECOMMENDATION_COUNT * 3, 12)
 const RECOMMENDATION_CONCURRENCY = 2
 const QR_LOGIN_POLL_MS = 1400
 const PLAYLIST_UNDO_NOTICE_MS = 20000
+const PLAYLIST_DRAG_CLICK_SUPPRESS_MS = 280
 const CONTEXT_MENU_SCROLL_GUARD_MS = 150
 const TRACK_FOCUS_FLASH_MS = 1800
 const UI_SCALE_MIN = 80
@@ -243,6 +244,8 @@ const renderRuntime = {
   playlistDragState: null,
   playlistDragSourceCard: null,
   playlistDragIndicator: null,
+  playlistDragSuppressedId: 0,
+  playlistDragSuppressUntil: 0,
   playlistMutationPending: false,
   playlistRemovalPendingIds: new Set(),
   playlistUndoNotice: null,
@@ -4469,7 +4472,12 @@ function handleWallClick(event) {
   }
   const collapseButton = target ? target.closest('[data-toggle-playlist-collapse]') : null
   if (collapseButton) {
-    togglePlaylistCollapsed(Number(collapseButton.getAttribute('data-toggle-playlist-collapse')))
+    const playlistId = Number(collapseButton.getAttribute('data-toggle-playlist-collapse'))
+    if (consumeSuppressedPlaylistCollapseClick(playlistId)) {
+      return
+    }
+
+    togglePlaylistCollapsed(playlistId)
     return
   }
   const addButton = target ? target.closest('[data-add-recommend-track]') : null
@@ -5744,6 +5752,14 @@ function applyPlaylistMovePlan(plan) {
 }
 
 function clearPlaylistDragIndicator() {
+  if (Number.isInteger(renderRuntime.playlistDragIndicator?.columnIndex)) {
+    const column = renderRuntime.wallColumns[renderRuntime.playlistDragIndicator.columnIndex]
+    if (column) {
+      column.classList.remove('is-playlist-drop-column')
+      column.style.removeProperty('--playlist-drop-y')
+    }
+  }
+
   if (renderRuntime.playlistDragIndicator?.playlistId) {
     const card = refs.wallColumns.querySelector(`.playlist-card[data-playlist-id="${renderRuntime.playlistDragIndicator.playlistId}"]`)
     card?.classList.remove('is-playlist-drop-before', 'is-playlist-drop-after')
@@ -5754,7 +5770,12 @@ function clearPlaylistDragIndicator() {
 
 function setPlaylistDragIndicator(indicator) {
   const current = renderRuntime.playlistDragIndicator
-  if (current?.playlistId === indicator?.playlistId && current?.position === indicator?.position) {
+  if (
+    current?.playlistId === indicator?.playlistId
+    && current?.position === indicator?.position
+    && current?.columnIndex === indicator?.columnIndex
+    && Math.abs(Number(current?.y || 0) - Number(indicator?.y || 0)) < 1
+  ) {
     return
   }
 
@@ -5765,6 +5786,13 @@ function setPlaylistDragIndicator(indicator) {
 
   const card = refs.wallColumns.querySelector(`.playlist-card[data-playlist-id="${indicator.playlistId}"]`)
   card?.classList.add(indicator.position === 'before' ? 'is-playlist-drop-before' : 'is-playlist-drop-after')
+  if (Number.isInteger(indicator.columnIndex)) {
+    const column = renderRuntime.wallColumns[indicator.columnIndex]
+    if (column) {
+      column.classList.add('is-playlist-drop-column')
+      column.style.setProperty('--playlist-drop-y', `${Math.round(indicator.y || 0)}px`)
+    }
+  }
   renderRuntime.playlistDragIndicator = indicator
 }
 
@@ -5862,6 +5890,12 @@ function clearTrackDragState() {
 }
 
 function clearPlaylistDragState() {
+  const draggedPlaylistId = Number(
+    renderRuntime.playlistDragState?.sourcePlaylistId
+    || renderRuntime.playlistDragSourceCard?.getAttribute?.('data-playlist-id')
+    || 0
+  )
+
   if (renderRuntime.playlistDragSourceCard instanceof HTMLElement) {
     renderRuntime.playlistDragSourceCard.classList.remove('is-playlist-dragging')
   }
@@ -5873,6 +5907,135 @@ function clearPlaylistDragState() {
   renderRuntime.playlistDragSourceCard = null
   clearPlaylistDragIndicator()
   renderRuntime.playlistDragState = null
+  if (draggedPlaylistId > 0) {
+    suppressPlaylistCollapseClick(draggedPlaylistId)
+  }
+}
+
+function suppressPlaylistCollapseClick(playlistId, durationMs = PLAYLIST_DRAG_CLICK_SUPPRESS_MS) {
+  renderRuntime.playlistDragSuppressedId = Number(playlistId || 0)
+  renderRuntime.playlistDragSuppressUntil = window.performance.now() + Math.max(0, durationMs)
+}
+
+function consumeSuppressedPlaylistCollapseClick(playlistId) {
+  const normalizedPlaylistId = Number(playlistId || 0)
+  if (normalizedPlaylistId <= 0 || renderRuntime.playlistDragSuppressedId !== normalizedPlaylistId) {
+    return false
+  }
+
+  if (window.performance.now() > renderRuntime.playlistDragSuppressUntil) {
+    renderRuntime.playlistDragSuppressedId = 0
+    renderRuntime.playlistDragSuppressUntil = 0
+    return false
+  }
+
+  renderRuntime.playlistDragSuppressedId = 0
+  renderRuntime.playlistDragSuppressUntil = 0
+  return true
+}
+
+function resolvePlaylistDropColumn(target, clientX) {
+  const columnCandidates = renderRuntime.wallColumns
+    .map((columnNode, columnIndex) => ({
+      columnNode,
+      columnIndex,
+      placements: renderRuntime.wallPlacementsByColumn[columnIndex] || [],
+    }))
+
+  if (!columnCandidates.length) {
+    return null
+  }
+
+  const directColumn = target?.closest('.wall-column')
+  if (directColumn) {
+    const directMatch = columnCandidates.find((candidate) => candidate.columnNode === directColumn)
+    if (directMatch) {
+      return directMatch
+    }
+  }
+
+  let bestCandidate = null
+  let bestDistance = Number.POSITIVE_INFINITY
+
+  for (const candidate of columnCandidates) {
+    const rect = candidate.columnNode.getBoundingClientRect()
+    const distance = clientX < rect.left
+      ? rect.left - clientX
+      : clientX > rect.right
+        ? clientX - rect.right
+        : 0
+
+    if (distance < bestDistance) {
+      bestDistance = distance
+      bestCandidate = candidate
+      if (distance === 0) {
+        break
+      }
+    }
+  }
+
+  return bestCandidate
+}
+
+function resolvePlaylistGapTarget(columnIndex, clientY) {
+  const columnNode = renderRuntime.wallColumns[columnIndex]
+  const placements = renderRuntime.wallPlacementsByColumn[columnIndex] || []
+  if (!columnNode) {
+    return null
+  }
+
+  if (!placements.length) {
+    return {
+      columnIndex,
+      playlistId: 0,
+      position: 'before',
+      y: 0,
+    }
+  }
+
+  const columnRect = columnNode.getBoundingClientRect()
+  const relativeY = clamp(clientY - columnRect.top, 0, Math.max(0, columnRect.height))
+  const gapTargets = []
+  const firstPlacement = placements[0]
+  gapTargets.push({
+    playlistId: firstPlacement.item.playlist.id,
+    position: 'before',
+    y: Math.max(0, firstPlacement.top),
+  })
+
+  for (let index = 1; index < placements.length; index += 1) {
+    const previousPlacement = placements[index - 1]
+    const nextPlacement = placements[index]
+    gapTargets.push({
+      playlistId: nextPlacement.item.playlist.id,
+      position: 'before',
+      y: (previousPlacement.bottom + nextPlacement.top) / 2,
+    })
+  }
+
+  const lastPlacement = placements[placements.length - 1]
+  gapTargets.push({
+    playlistId: lastPlacement.item.playlist.id,
+    position: 'after',
+    y: lastPlacement.bottom,
+  })
+
+  let closestGapTarget = gapTargets[0]
+  let closestDistance = Math.abs(relativeY - closestGapTarget.y)
+
+  for (let index = 1; index < gapTargets.length; index += 1) {
+    const candidate = gapTargets[index]
+    const distance = Math.abs(relativeY - candidate.y)
+    if (distance < closestDistance) {
+      closestDistance = distance
+      closestGapTarget = candidate
+    }
+  }
+
+  return {
+    columnIndex,
+    ...closestGapTarget,
+  }
 }
 
 function resolvePlaylistDropTarget(event) {
@@ -5882,18 +6045,23 @@ function resolvePlaylistDropTarget(event) {
   }
 
   const target = event.target instanceof Element ? event.target : null
-  const card = target?.closest('.playlist-card[data-playlist-id]')
-  if (!card) {
+  const column = resolvePlaylistDropColumn(target, event.clientX)
+  if (!column) {
     return null
   }
 
-  const targetPlaylistId = Number(card.getAttribute('data-playlist-id'))
-  const rect = card.getBoundingClientRect()
-  const position = event.clientY < rect.top + (rect.height / 2) ? 'before' : 'after'
+  const gapTarget = resolvePlaylistGapTarget(column.columnIndex, event.clientY)
+  if (!gapTarget) {
+    return null
+  }
+
+  const targetPlaylistId = Number(gapTarget.playlistId)
+  const position = gapTarget.position
   const plan = buildPlaylistMovePlan({
     sourcePlaylistId: dragState.sourcePlaylistId,
     targetPlaylistId,
     position,
+    columnIndex: column.columnIndex,
   })
   if (!plan) {
     return null
@@ -5901,8 +6069,10 @@ function resolvePlaylistDropTarget(event) {
 
   return {
     indicator: {
+      columnIndex: column.columnIndex,
       playlistId: targetPlaylistId,
       position,
+      y: gapTarget.y,
     },
     plan,
   }

@@ -531,6 +531,21 @@ button:focus-visible,
   align-self: flex-start;
 }
 
+.wall-column.is-playlist-drop-column::before {
+  content: "";
+  position: absolute;
+  left: calc(8px * var(--ui-scale));
+  right: calc(8px * var(--ui-scale));
+  top: var(--playlist-drop-y, 0px);
+  z-index: 4;
+  height: calc(3px * var(--ui-scale));
+  border-radius: 999px;
+  background: var(--text);
+  box-shadow: 0 0 0 1px var(--surface);
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+
 .playlist-card {
   position: absolute;
   inset-inline: 0;
@@ -556,11 +571,11 @@ button:focus-visible,
 }
 
 .playlist-card.is-playlist-drop-before {
-  box-shadow: inset 0 2px 0 var(--text), 0 0 0 2px var(--text);
+  box-shadow: 0 0 0 2px var(--text);
 }
 
 .playlist-card.is-playlist-drop-after {
-  box-shadow: inset 0 -2px 0 var(--text), 0 0 0 2px var(--text);
+  box-shadow: 0 0 0 2px var(--text);
 }
 
 .playlist-card.is-drop-target-start .playlist-header {
