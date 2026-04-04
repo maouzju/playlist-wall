@@ -219,6 +219,7 @@ const renderRuntime = {
   artistHydrationSessionId: 0,
   artistHydrationQueue: [],
   artistHydrationInFlight: 0,
+  artistHydrationRerenderPending: false,
   renderedTrackKey: '',
   renderedRecommendationKey: '',
   renderedPlaylistId: null,
@@ -1727,6 +1728,7 @@ function resetAppState() {
   renderRuntime.artistHydrationSessionId += 1
   renderRuntime.artistHydrationQueue = []
   renderRuntime.artistHydrationInFlight = 0
+  renderRuntime.artistHydrationRerenderPending = false
   renderRuntime.wallColumns = []
   renderRuntime.wallNodeMaps = []
   renderRuntime.wallPlacementsByColumn = []
@@ -3845,8 +3847,38 @@ function processArtistHydrationQueue() {
 
       renderRuntime.artistHydrationInFlight = Math.max(0, renderRuntime.artistHydrationInFlight - 1)
       processArtistHydrationQueue()
+      flushPendingArtistHydrationRerender()
     })
   }
+}
+
+function queuePendingArtistHydrationRerender() {
+  if (state.activeTab !== 'artists') {
+    return
+  }
+
+  renderRuntime.artistHydrationRerenderPending = true
+}
+
+function flushPendingArtistHydrationRerender() {
+  if (!renderRuntime.artistHydrationRerenderPending) {
+    return
+  }
+
+  if (state.activeTab !== 'artists') {
+    renderRuntime.artistHydrationRerenderPending = false
+    return
+  }
+
+  if (renderRuntime.artistHydrationQueue.length || renderRuntime.artistHydrationInFlight > 0) {
+    return
+  }
+
+  renderRuntime.artistHydrationRerenderPending = false
+  renderTabs()
+  renderHeader()
+  renderPlayer()
+  applyFilters({ syncAll: true })
 }
 
 async function hydrateArtistPlaylistTracks(artistKey, sessionId) {
@@ -3873,6 +3905,7 @@ async function hydrateArtistPlaylistTracks(artistKey, sessionId) {
   }
 
   const resolvedArtistId = Number(result?.artistId || artistRequest.artistId || previousState?.artistId || 0)
+  const shouldRerenderImmediately = state.activeTab === 'artists' && expanded
 
   if (!result?.ok) {
     state.artistRemoteTracksByKey.set(artistKey, {
@@ -3883,7 +3916,10 @@ async function hydrateArtistPlaylistTracks(artistKey, sessionId) {
       requestedAll: expanded,
       requestedMaxCount,
     })
-    refreshArtistPlaylistByKey(artistKey, { rerender: state.activeTab === 'artists' })
+    refreshArtistPlaylistByKey(artistKey, { rerender: shouldRerenderImmediately })
+    if (!shouldRerenderImmediately) {
+      queuePendingArtistHydrationRerender()
+    }
     return
   }
 
@@ -3898,7 +3934,10 @@ async function hydrateArtistPlaylistTracks(artistKey, sessionId) {
       || (requestedMaxCount > 0 && (result.tracks || []).length < requestedMaxCount),
     tracks: (result.tracks || []).map((track, index) => normalizePlaylistTrack(track, index)),
   })
-  refreshArtistPlaylistByKey(artistKey, { rerender: state.activeTab === 'artists' })
+  refreshArtistPlaylistByKey(artistKey, { rerender: shouldRerenderImmediately })
+  if (!shouldRerenderImmediately) {
+    queuePendingArtistHydrationRerender()
+  }
 }
 
 function primeVisibleRecommendations() {
