@@ -248,85 +248,108 @@
 
   <div id="settings-backdrop" class="hidden"></div>
   <aside id="settings-panel" aria-label="设置">
-    <label class="settings-row" for="ui-scale-range">
-      <div class="settings-copy">
-        <div class="settings-label">&#x754C;&#x9762;&#x7F29;&#x653E;</div>
-        <div class="settings-hint">&#x6539;&#x53D8;&#x6574;&#x4F53;&#x5BC6;&#x5EA6;&#xFF0C;&#x6B4C;&#x5355;&#x5217;&#x6570;&#x4F1A;&#x968F;&#x4E4B;&#x81EA;&#x9002;&#x5E94;&#x53D8;&#x5316;&#x3002;</div>
-      </div>
-      <div class="settings-scale-control">
-        <output class="settings-scale-value" id="ui-scale-value" for="ui-scale-range">100%</output>
-        <input id="ui-scale-range" type="range" min="80" max="125" step="5" value="100">
-      </div>
-    </label>
-    <label class="settings-row" for="playlist-recommendations-toggle">
-      <div class="settings-copy">
-        <div class="settings-label">歌单推荐音乐</div>
-        <div class="settings-hint">打开后，每张歌单底部会补一组网易云推荐曲目。</div>
-      </div>
-      <input id="playlist-recommendations-toggle" type="checkbox">
-    </label>
-    <label class="settings-row" for="liked-playlist-display-mode-select">
-      <div class="settings-copy">
-        <div class="settings-label">&#x7231;&#x5FC3;&#x6B4C;&#x5355;&#x5982;&#x4F55;&#x5C55;&#x73B0;</div>
-        <div class="settings-hint">&#x5B8C;&#x6574;&#x663E;&#x793A;&#x6216;&#x53EA;&#x4FDD;&#x7559;&#x8FD8;&#x6CA1;&#x88AB;&#x5176;&#x4ED6;&#x81EA;&#x5EFA;&#x6B4C;&#x5355;&#x6536;&#x5F55;&#x7684;&#x66F2;&#x76EE;&#x3002;</div>
-      </div>
-      <select id="liked-playlist-display-mode-select" class="settings-select">
-        <option value="all">&#x5B8C;&#x6574;&#x663E;&#x793A;</option>
-        <option value="uncollected">&#x4EC5;&#x663E;&#x793A;&#x672A;&#x88AB;&#x6B4C;&#x5355;&#x6536;&#x5F55;&#x7684;</option>
-        <option value="hidden">&#x9690;&#x85CF;</option>
-      </select>
-    </label>
-    <label class="settings-row" for="default-audio-quality-select">
-      <div class="settings-copy">
-        <div class="settings-label">默认音质</div>
-        <div class="settings-hint">默认优先使用这个档位；“最佳可用”会按可用性依次尝试更高音质后再回退。</div>
-      </div>
-      <select id="default-audio-quality-select" class="settings-select">
-        <option value="best">最佳可用</option>
-        <option value="lossless">无损</option>
-        <option value="exhigh">极高</option>
-        <option value="standard">标准</option>
-      </select>
-    </label>
-    <label class="settings-row" for="auto-adjust-audio-quality-toggle">
-      <div class="settings-copy">
-        <div class="settings-label">根据网络自动切换音质</div>
-        <div class="settings-hint">开启后会在弱网或省流量模式下降档，网络恢复后回到默认音质。</div>
-      </div>
-      <input id="auto-adjust-audio-quality-toggle" type="checkbox" checked>
-    </label>
-    <div class="settings-row settings-row--stack">
-      <div class="settings-copy">
-        <div class="settings-label">版本更新</div>
-        <div class="settings-hint" id="settings-update-hint">启动后会自动检查 GitHub Releases；发现新版本后，可以直接一键下载并重启更新。</div>
-      </div>
-      <div class="settings-status" id="settings-update-status">正在读取当前版本...</div>
-      <div class="settings-inline-actions">
-        <button class="settings-action-btn" id="settings-update-check-btn" type="button">检查更新</button>
-        <button class="settings-action-btn hidden" id="settings-update-install-btn" type="button">一键更新</button>
-      </div>
+    <div class="settings-header">
+      <span class="settings-title">设置</span>
+      <button class="settings-close-btn" id="settings-close-btn" type="button" aria-label="关闭">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="1" y1="1" x2="13" y2="13"/><line x1="13" y1="1" x2="1" y2="13"/></svg>
+      </button>
     </div>
-    <div class="settings-row settings-row--actions">
-      <div class="settings-copy">
-        <div class="settings-label">账号</div>
-        <div class="settings-hint">清空本机登录状态和歌单缓存，可以切换到其他账号。</div>
+    <div class="settings-body">
+      <div class="settings-section-label">界面</div>
+      <label class="settings-row" for="ui-scale-range">
+        <div class="settings-copy">
+          <div class="settings-label">界面缩放</div>
+          <div class="settings-hint">改变整体密度，歌单列数会随之自适应变化。</div>
+        </div>
+        <div class="settings-scale-control">
+          <output class="settings-scale-value" id="ui-scale-value" for="ui-scale-range">100%</output>
+          <input id="ui-scale-range" class="settings-range" type="range" min="80" max="125" step="5" value="100">
+        </div>
+      </label>
+
+      <div class="settings-section-label">音乐</div>
+      <label class="settings-row" for="playlist-recommendations-toggle">
+        <div class="settings-copy">
+          <div class="settings-label">歌单推荐音乐</div>
+          <div class="settings-hint">打开后，每张歌单底部会补一组网易云推荐曲目。</div>
+        </div>
+        <div class="settings-toggle">
+          <input id="playlist-recommendations-toggle" type="checkbox" class="settings-toggle-input">
+          <div class="settings-toggle-track"><div class="settings-toggle-thumb"></div></div>
+        </div>
+      </label>
+      <label class="settings-row" for="liked-playlist-display-mode-select">
+        <div class="settings-copy">
+          <div class="settings-label">爱心歌单如何展现</div>
+          <div class="settings-hint">完整显示或只保留还没被其他自建歌单收录的曲目。</div>
+        </div>
+        <select id="liked-playlist-display-mode-select" class="settings-select">
+          <option value="all">完整显示</option>
+          <option value="uncollected">仅未被收录的</option>
+          <option value="hidden">隐藏</option>
+        </select>
+      </label>
+      <label class="settings-row" for="default-audio-quality-select">
+        <div class="settings-copy">
+          <div class="settings-label">默认音质</div>
+          <div class="settings-hint">默认优先使用这个档位；"最佳可用"会按可用性依次尝试更高音质后再回退。</div>
+        </div>
+        <select id="default-audio-quality-select" class="settings-select">
+          <option value="best">最佳可用</option>
+          <option value="lossless">无损</option>
+          <option value="exhigh">极高</option>
+          <option value="standard">标准</option>
+        </select>
+      </label>
+      <label class="settings-row" for="auto-adjust-audio-quality-toggle">
+        <div class="settings-copy">
+          <div class="settings-label">根据网络自动切换音质</div>
+          <div class="settings-hint">开启后会在弱网或省流量模式下降档，网络恢复后回到默认音质。</div>
+        </div>
+        <div class="settings-toggle">
+          <input id="auto-adjust-audio-quality-toggle" type="checkbox" class="settings-toggle-input" checked>
+          <div class="settings-toggle-track"><div class="settings-toggle-thumb"></div></div>
+        </div>
+      </label>
+
+      <div class="settings-section-label">系统</div>
+      <div class="settings-row settings-row--stack">
+        <div class="settings-copy">
+          <div class="settings-label">版本更新</div>
+          <div class="settings-hint" id="settings-update-hint">启动后会自动检查 GitHub Releases；发现新版本后，可以直接一键下载并重启更新。</div>
+        </div>
+        <div class="settings-update-footer">
+          <div class="settings-status" id="settings-update-status">正在读取当前版本...</div>
+          <div class="settings-inline-actions">
+            <button class="settings-action-btn" id="settings-update-check-btn" type="button">检查更新</button>
+            <button class="settings-action-btn settings-action-btn--primary hidden" id="settings-update-install-btn" type="button">一键更新</button>
+          </div>
+        </div>
       </div>
-      <button class="settings-action-btn" id="settings-logout-btn" type="button">退出登录</button>
-    </div>
-    <div class="settings-row settings-row--stack hidden">
-      <div class="settings-copy">
-        <div class="settings-label">Spotify 导入</div>
-        <div class="settings-hint">打开应用内 Spotify 登录窗口，登录后自动把歌单读进当前整理墙。</div>
+
+      <div class="settings-section-label">账号</div>
+      <div class="settings-row settings-row--actions">
+        <div class="settings-copy">
+          <div class="settings-label">退出登录</div>
+          <div class="settings-hint">清空本机登录状态和歌单缓存，可以切换到其他账号。</div>
+        </div>
+        <button class="settings-action-btn settings-action-btn--danger" id="settings-logout-btn" type="button">退出登录</button>
       </div>
-      <div class="settings-inline-actions">
-        <button class="settings-action-btn" id="settings-spotify-auto-login-btn" type="button">登录 Spotify（应用内登录）</button>
-        <button class="settings-action-btn" id="settings-spotify-refresh-btn" type="button">刷新</button>
-        <button class="settings-action-btn" id="settings-spotify-clear-btn" type="button">清除</button>
-      </div>
-      <div class="settings-status" id="settings-spotify-status">未连接</div>
-      <div class="settings-inline-actions">
-        <button class="settings-action-btn" id="settings-spotify-sync-to-netease-btn" type="button">Spotify -> 网易云</button>
-        <button class="settings-action-btn" id="settings-spotify-sync-to-spotify-btn" type="button">网易云 -> Spotify</button>
+      <div class="settings-row settings-row--stack hidden">
+        <div class="settings-copy">
+          <div class="settings-label">Spotify 导入</div>
+          <div class="settings-hint">打开应用内 Spotify 登录窗口，登录后自动把歌单读进当前整理墙。</div>
+        </div>
+        <div class="settings-inline-actions">
+          <button class="settings-action-btn" id="settings-spotify-auto-login-btn" type="button">登录 Spotify（应用内登录）</button>
+          <button class="settings-action-btn" id="settings-spotify-refresh-btn" type="button">刷新</button>
+          <button class="settings-action-btn" id="settings-spotify-clear-btn" type="button">清除</button>
+        </div>
+        <div class="settings-status" id="settings-spotify-status">未连接</div>
+        <div class="settings-inline-actions">
+          <button class="settings-action-btn" id="settings-spotify-sync-to-netease-btn" type="button">Spotify -> 网易云</button>
+          <button class="settings-action-btn" id="settings-spotify-sync-to-spotify-btn" type="button">网易云 -> Spotify</button>
+        </div>
       </div>
     </div>
   </aside>
