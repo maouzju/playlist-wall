@@ -162,7 +162,7 @@ function normalizeArtists(source) {
 }
 
 function normalizeArtistLookupText(input) {
-  return String(input || '').trim().toLowerCase()
+  return String(input || '').trim().toLowerCase().replace(/\s+/g, ' ')
 }
 
 function getArtistSearchCandidateNames(artist) {
@@ -189,6 +189,45 @@ function pickBestArtistSearchMatch(artists, artistName) {
   )
 
   return exactMatch || ((artists || [])[0] || null)
+}
+
+function dedupeLookupValues(values, limit = 6) {
+  const result = []
+  const seen = new Set()
+
+  for (const value of values || []) {
+    const normalizedValue = normalizeArtistLookupText(value)
+    if (!normalizedValue || seen.has(normalizedValue)) {
+      continue
+    }
+
+    seen.add(normalizedValue)
+    result.push(normalizedValue)
+    if (result.length >= limit) {
+      break
+    }
+  }
+
+  return result
+}
+
+function normalizeArtistResolveContext(context = {}) {
+  return {
+    trackNames: dedupeLookupValues(context?.trackNames, 6),
+    albumNames: dedupeLookupValues(context?.albumNames, 6),
+  }
+}
+
+function buildArtistResolveQueries(artistName, context = {}) {
+  const normalizedArtistName = String(artistName || '').trim()
+  if (!normalizedArtistName) {
+    return []
+  }
+
+  return dedupeLookupValues([
+    ...dedupeLookupValues(context.trackNames, 4),
+    ...dedupeLookupValues(context.albumNames, 2),
+  ], 6).map((value) => `${normalizedArtistName} ${value}`)
 }
 
 function normalizeTrackIds(trackIds) {
@@ -232,6 +271,9 @@ function normalizePlaylistSummary(playlist, overrides = {}) {
       : Boolean(playlist?.subscribed),
     creatorId: Number(overrides.creatorId || creator?.userId || playlist?.creatorId || 0),
     creatorName: overrides.creatorName || creator?.nickname || playlist?.creatorName || '',
+    description: overrides.description !== undefined
+      ? String(overrides.description || '')
+      : String(playlist?.description || playlist?.desc || ''),
     playCount: Number(overrides.playCount || playlist?.playCount || 0),
     copywriter: overrides.copywriter || playlist?.copywriter || '',
     exploreSourceLabel: overrides.exploreSourceLabel || playlist?.exploreSourceLabel || '',
@@ -348,7 +390,80 @@ class NeteaseService {
     this.cookie = cookie
   }
 
-  async resolveArtistReference(artistRef) {
+  async resolveArtistSearchMatch(artists, artistName, resolveContext = null) {
+    const normalizedContext = normalizeArtistResolveContext(resolveContext)
+    const artistCandidates = Array.isArray(artists) ? artists.filter((artist) => Number(artist?.id || 0) > 0) : []
+    if (!artistCandidates.length) {
+      return null
+    }
+
+    const exactMatches = artistCandidates.filter((artist) =>
+      getArtistSearchCandidateNames(artist)
+        .some((candidate) => normalizeArtistLookupText(candidate) === normalizeArtistLookupText(artistName))
+    )
+    if (exactMatches.length === 1) {
+      return exactMatches[0]
+    }
+
+    const candidates = exactMatches.length ? exactMatches : artistCandidates
+    const queries = buildArtistResolveQueries(artistName, normalizedContext)
+    if (!queries.length) {
+      return null
+    }
+
+    const candidateIds = new Set(candidates.map((artist) => Number(artist.id || 0)).filter((artistId) => artistId > 0))
+    const trackNameHints = new Set(normalizedContext.trackNames)
+    const albumNameHints = new Set(normalizedContext.albumNames)
+    const candidateScores = new Map()
+
+    for (const keywords of queries) {
+      const response = await callApi('search', {
+        cookie: this.cookie,
+        keywords,
+        type: 1,
+        limit: 10,
+        offset: 0,
+      }, {
+        fallbackMessage: '\u641c\u7d22\u6b4c\u66f2\u5931\u8d25',
+      })
+
+      ensureApiSuccess(response.body, '\u641c\u7d22\u6b4c\u66f2\u5931\u8d25')
+      const songs = Array.isArray(response.body?.result?.songs)
+        ? response.body.result.songs
+        : []
+
+      songs.forEach((song, index) => {
+        const track = normalizeTrackRecord(song, index)
+        const matchedArtistEntries = track.artistEntries.filter((artist) => candidateIds.has(Number(artist?.id || 0)))
+        if (!matchedArtistEntries.length) {
+          return
+        }
+
+        const matchesTrackName = trackNameHints.has(normalizeArtistLookupText(track.name))
+        const matchesAlbumName = albumNameHints.has(normalizeArtistLookupText(track.album))
+        if (!matchesTrackName && !matchesAlbumName) {
+          return
+        }
+
+        const score = (matchesTrackName ? 12 : 0) + (matchesAlbumName ? 6 : 0) + Math.max(0, 5 - index)
+        for (const artist of matchedArtistEntries) {
+          const artistId = Number(artist.id || 0)
+          candidateScores.set(artistId, Number(candidateScores.get(artistId) || 0) + score)
+        }
+      })
+    }
+
+    const [bestMatch] = [...candidateScores.entries()].sort((left, right) =>
+      right[1] - left[1] || left[0] - right[0]
+    )
+    if (!bestMatch || bestMatch[1] <= 0) {
+      return null
+    }
+
+    return candidates.find((artist) => Number(artist?.id || 0) === bestMatch[0]) || null
+  }
+
+  async resolveArtistReference(artistRef, options = {}) {
     const normalizedArtistId = Number(artistRef || 0)
     if (normalizedArtistId > 0) {
       return {
@@ -376,7 +491,8 @@ class NeteaseService {
     const artists = Array.isArray(response.body?.result?.artists)
       ? response.body.result.artists
       : []
-    const matchedArtist = pickBestArtistSearchMatch(artists, artistName)
+    const matchedArtist = await this.resolveArtistSearchMatch(artists, artistName, options?.resolveContext)
+      || pickBestArtistSearchMatch(artists, artistName)
     const resolvedArtistId = Number(matchedArtist?.id || 0)
     if (resolvedArtistId <= 0) {
       throw new Error('\u827a\u4eba\u4e0d\u5b58\u5728')
@@ -481,15 +597,28 @@ class NeteaseService {
     })
 
     const playlists = response.body?.playlist || []
-    return playlists.map((playlist) => ({
-      id: Number(playlist.id),
-      name: playlist.name || '',
-      trackCount: Number(playlist.trackCount || 0),
-      coverUrl: playlist.coverImgUrl || '',
-      specialType: Number(playlist.specialType || 0),
-      subscribed: Boolean(playlist.subscribed),
-      creatorId: Number(playlist.creator?.userId || 0),
-    }))
+    return playlists.map((playlist) => normalizePlaylistSummary(playlist))
+  }
+
+  async getPlaylistDetailSummary(playlistId) {
+    const normalizedPlaylistId = Number(playlistId || 0)
+    if (normalizedPlaylistId <= 0) {
+      throw new Error('\u6b4c\u5355\u4e0d\u5b58\u5728')
+    }
+
+    const response = await callApi('playlist_detail', {
+      cookie: this.cookie,
+      id: normalizedPlaylistId,
+      s: 0,
+    }, {
+      fallbackMessage: '\u83b7\u53d6\u6b4c\u5355\u8be6\u60c5\u5931\u8d25',
+      codeMessages: {
+        301: '\u9700\u8981\u6709\u6548\u7684\u7f51\u6613\u4e91\u767b\u5f55\u6001\uff0c\u624d\u80fd\u83b7\u53d6\u6b4c\u5355\u8be6\u60c5\u3002',
+      },
+    })
+
+    ensureApiSuccess(response.body, '\u83b7\u53d6\u6b4c\u5355\u8be6\u60c5\u5931\u8d25')
+    return normalizePlaylistSummary(response.body?.playlist || { id: normalizedPlaylistId })
   }
 
   async getUserPlayCounts(userId) {
@@ -557,7 +686,9 @@ class NeteaseService {
   }
 
   async getArtistSongs(artistRef, maxCount = 100, options = {}) {
-    const resolvedArtist = await this.resolveArtistReference(artistRef)
+    const resolvedArtist = await this.resolveArtistReference(artistRef, {
+      resolveContext: options?.resolveContext,
+    })
     const normalizedArtistId = Number(resolvedArtist.artistId || 0)
     const numericMaxCount = Number(maxCount)
     const fetchAll = !Number.isFinite(numericMaxCount) || numericMaxCount <= 0
@@ -687,6 +818,123 @@ class NeteaseService {
     })
 
     ensureApiSuccess(response.body, '\u52a0\u5165\u6b4c\u5355\u5931\u8d25')
+  }
+
+  async createPlaylist(name, options = {}) {
+    const normalizedName = String(name || '').trim()
+    if (!normalizedName) {
+      throw new Error('\u6b4c\u5355\u540d\u4e0d\u80fd\u4e3a\u7a7a')
+    }
+
+    const response = await callApi('playlist_create', {
+      cookie: this.cookie,
+      name: normalizedName,
+      privacy: options?.privacy ? '10' : '0',
+      type: options?.type || 'NORMAL',
+    }, {
+      fallbackMessage: '\u65b0\u5efa\u6b4c\u5355\u5931\u8d25',
+      codeMessages: {
+        301: '\u9700\u8981\u6709\u6548\u7684\u7f51\u6613\u4e91\u767b\u5f55\u6001\uff0c\u624d\u80fd\u65b0\u5efa\u6b4c\u5355\u3002',
+      },
+    })
+
+    ensureApiSuccess(response.body, '\u65b0\u5efa\u6b4c\u5355\u5931\u8d25')
+    const playlistId = Number(
+      response.body?.id
+      || response.body?.playlistId
+      || response.body?.playlist?.id
+      || 0
+    )
+    if (playlistId <= 0) {
+      throw new Error('\u65b0\u5efa\u6b4c\u5355\u5931\u8d25')
+    }
+
+    return this.getPlaylistDetailSummary(playlistId)
+  }
+
+  async renamePlaylist(playlistId, name) {
+    const normalizedPlaylistId = Number(playlistId || 0)
+    const normalizedName = String(name || '').trim()
+    if (normalizedPlaylistId <= 0 || !normalizedName) {
+      throw new Error('\u91cd\u547d\u540d\u6b4c\u5355\u5931\u8d25')
+    }
+
+    const response = await callApi('playlist_name_update', {
+      cookie: this.cookie,
+      id: normalizedPlaylistId,
+      name: normalizedName,
+    }, {
+      fallbackMessage: '\u91cd\u547d\u540d\u6b4c\u5355\u5931\u8d25',
+      codeMessages: {
+        301: '\u9700\u8981\u6709\u6548\u7684\u7f51\u6613\u4e91\u767b\u5f55\u6001\uff0c\u624d\u80fd\u91cd\u547d\u540d\u6b4c\u5355\u3002',
+      },
+    })
+
+    ensureApiSuccess(response.body, '\u91cd\u547d\u540d\u6b4c\u5355\u5931\u8d25')
+  }
+
+  async updatePlaylistDescription(playlistId, description) {
+    const normalizedPlaylistId = Number(playlistId || 0)
+    if (normalizedPlaylistId <= 0) {
+      throw new Error('\u4fee\u6539\u6b4c\u5355\u7b80\u4ecb\u5931\u8d25')
+    }
+
+    const response = await callApi('playlist_desc_update', {
+      cookie: this.cookie,
+      id: normalizedPlaylistId,
+      desc: String(description || ''),
+    }, {
+      fallbackMessage: '\u4fee\u6539\u6b4c\u5355\u7b80\u4ecb\u5931\u8d25',
+      codeMessages: {
+        301: '\u9700\u8981\u6709\u6548\u7684\u7f51\u6613\u4e91\u767b\u5f55\u6001\uff0c\u624d\u80fd\u4fee\u6539\u6b4c\u5355\u7b80\u4ecb\u3002',
+      },
+    })
+
+    ensureApiSuccess(response.body, '\u4fee\u6539\u6b4c\u5355\u7b80\u4ecb\u5931\u8d25')
+  }
+
+  async updatePlaylistCover(playlistId, coverFile) {
+    const normalizedPlaylistId = Number(playlistId || 0)
+    const fileName = String(coverFile?.name || '').trim()
+    const fileData = coverFile?.data
+    if (normalizedPlaylistId <= 0 || !fileName || !fileData) {
+      throw new Error('\u4fee\u6539\u6b4c\u5355\u5c01\u9762\u5931\u8d25')
+    }
+
+    const response = await callApi('playlist_cover_update', {
+      cookie: this.cookie,
+      id: normalizedPlaylistId,
+      imgFile: {
+        name: fileName,
+        data: fileData,
+      },
+    }, {
+      fallbackMessage: '\u4fee\u6539\u6b4c\u5355\u5c01\u9762\u5931\u8d25',
+      codeMessages: {
+        301: '\u9700\u8981\u6709\u6548\u7684\u7f51\u6613\u4e91\u767b\u5f55\u6001\uff0c\u624d\u80fd\u4fee\u6539\u6b4c\u5355\u5c01\u9762\u3002',
+      },
+    })
+
+    ensureApiSuccess(response.body, '\u4fee\u6539\u6b4c\u5355\u5c01\u9762\u5931\u8d25')
+  }
+
+  async deletePlaylist(playlistId) {
+    const normalizedPlaylistId = Number(playlistId || 0)
+    if (normalizedPlaylistId <= 0) {
+      throw new Error('\u5220\u9664\u81ea\u5efa\u6b4c\u5355\u5931\u8d25')
+    }
+
+    const response = await callApi('playlist_delete', {
+      cookie: this.cookie,
+      id: normalizedPlaylistId,
+    }, {
+      fallbackMessage: '\u5220\u9664\u81ea\u5efa\u6b4c\u5355\u5931\u8d25',
+      codeMessages: {
+        301: '\u9700\u8981\u6709\u6548\u7684\u7f51\u6613\u4e91\u767b\u5f55\u6001\uff0c\u624d\u80fd\u5220\u9664\u81ea\u5efa\u6b4c\u5355\u3002',
+      },
+    })
+
+    ensureApiSuccess(response.body, '\u5220\u9664\u81ea\u5efa\u6b4c\u5355\u5931\u8d25')
   }
 
   async subscribePlaylist(playlistId) {

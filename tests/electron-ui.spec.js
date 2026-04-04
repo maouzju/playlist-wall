@@ -121,6 +121,118 @@ async function dragPlaylistHeader(page, sourcePlaylistId, targetPlaylistId, plac
   }, { sourcePlaylistId, targetPlaylistId, placement })
 }
 
+async function dragPlaylistHeaderToGap(page, sourcePlaylistId, beforePlaylistId, afterPlaylistId) {
+  await page.evaluate(({ sourcePlaylistId, beforePlaylistId, afterPlaylistId }) => {
+    const source = document.querySelector(`.playlist-card[data-playlist-id="${sourcePlaylistId}"] [data-drag-playlist="${sourcePlaylistId}"]`)
+    const beforeCard = beforePlaylistId
+      ? document.querySelector(`.playlist-card[data-playlist-id="${beforePlaylistId}"]`)
+      : null
+    const afterCard = afterPlaylistId
+      ? document.querySelector(`.playlist-card[data-playlist-id="${afterPlaylistId}"]`)
+      : null
+    const column = beforeCard?.closest('.wall-column') || afterCard?.closest('.wall-column')
+
+    if (!source || !column || !beforeCard || !afterCard) {
+      throw new Error(`playlist gap target missing: ${sourcePlaylistId} -> ${beforePlaylistId}/${afterPlaylistId}`)
+    }
+
+    const sourceRect = source.getBoundingClientRect()
+    const beforeRect = beforeCard.getBoundingClientRect()
+    const afterRect = afterCard.getBoundingClientRect()
+    const columnRect = column.getBoundingClientRect()
+    const clientX = Math.round(columnRect.left + Math.min(40, Math.max(16, columnRect.width / 2)))
+    const clientY = Math.round((beforeRect.bottom + afterRect.top) / 2)
+    const sourceX = Math.round(sourceRect.left + Math.min(40, Math.max(16, sourceRect.width / 2)))
+    const sourceY = Math.round(sourceRect.top + (sourceRect.height / 2))
+    const dataTransfer = new DataTransfer()
+
+    source.dispatchEvent(new DragEvent('dragstart', {
+      bubbles: true,
+      cancelable: true,
+      clientX: sourceX,
+      clientY: sourceY,
+      dataTransfer,
+    }))
+    column.dispatchEvent(new DragEvent('dragover', {
+      bubbles: true,
+      cancelable: true,
+      clientX,
+      clientY,
+      dataTransfer,
+    }))
+    column.dispatchEvent(new DragEvent('drop', {
+      bubbles: true,
+      cancelable: true,
+      clientX,
+      clientY,
+      dataTransfer,
+    }))
+    source.dispatchEvent(new DragEvent('dragend', {
+      bubbles: true,
+      cancelable: true,
+      clientX,
+      clientY,
+      dataTransfer,
+    }))
+  }, { sourcePlaylistId, beforePlaylistId, afterPlaylistId })
+}
+
+async function dragPlaylistHeaderToColumn(page, sourcePlaylistId, targetColumnIndex, clientYOffset = 2) {
+  await page.evaluate(({ sourcePlaylistId, targetColumnIndex, clientYOffset }) => {
+    const source = document.querySelector(`.playlist-card[data-playlist-id="${sourcePlaylistId}"] [data-drag-playlist="${sourcePlaylistId}"]`)
+    const columns = Array.from(document.querySelectorAll('.wall-column'))
+    const targetColumn = columns[targetColumnIndex]
+    if (!source || !targetColumn) {
+      throw new Error(`playlist column target missing: ${sourcePlaylistId} -> column ${targetColumnIndex}`)
+    }
+
+    const sourceRect = source.getBoundingClientRect()
+    const targetRect = targetColumn.getBoundingClientRect()
+    const clientX = Math.round(targetRect.left + Math.min(40, Math.max(16, targetRect.width / 2)))
+    const clientY = Math.round(targetRect.top + clientYOffset)
+    const sourceX = Math.round(sourceRect.left + Math.min(40, Math.max(16, sourceRect.width / 2)))
+    const sourceY = Math.round(sourceRect.top + (sourceRect.height / 2))
+    const dataTransfer = new DataTransfer()
+
+    source.dispatchEvent(new DragEvent('dragstart', {
+      bubbles: true,
+      cancelable: true,
+      clientX: sourceX,
+      clientY: sourceY,
+      dataTransfer,
+    }))
+    targetColumn.dispatchEvent(new DragEvent('dragover', {
+      bubbles: true,
+      cancelable: true,
+      clientX,
+      clientY,
+      dataTransfer,
+    }))
+    targetColumn.dispatchEvent(new DragEvent('drop', {
+      bubbles: true,
+      cancelable: true,
+      clientX,
+      clientY,
+      dataTransfer,
+    }))
+    source.dispatchEvent(new DragEvent('dragend', {
+      bubbles: true,
+      cancelable: true,
+      clientX,
+      clientY,
+      dataTransfer,
+    }))
+  }, { sourcePlaylistId, targetColumnIndex, clientYOffset })
+}
+
+async function createOwnedPlaylistFromUi(page, name) {
+  await page.click('#create-owned-playlist-btn')
+  await expect(page.locator('#playlist-editor')).toBeVisible()
+  await page.fill('#playlist-editor-name', name)
+  await page.click('#playlist-editor-save-btn')
+  await expect(page.locator('#playlist-editor')).toBeHidden()
+}
+
 async function scrollWallTo(page, top) {
   await page.locator('#wall-scroll').evaluate((node, nextTop) => {
     node.scrollTop = nextTop
@@ -279,6 +391,192 @@ test('owned playlist header order persists after reload', async ({ page }) => {
   await expect.poll(async () => getVisiblePlaylistOrder(page)).toEqual(['101', '103', '102'])
 })
 
+test('playlist headers can drop into the visible gap between playlists', async ({ page }) => {
+  await page.setViewportSize({ width: 360, height: 2600 })
+  await waitForWall(page)
+
+  await expect(page.locator('.wall-column')).toHaveCount(1)
+  await expect(page.locator('.playlist-card[data-playlist-id]')).toHaveCount(3)
+  await expect.poll(async () => getVisiblePlaylistOrder(page)).toEqual(['101', '102', '103'])
+
+  await dragPlaylistHeaderToGap(page, 103, 101, 102)
+
+  await expect.poll(async () => getVisiblePlaylistOrder(page)).toEqual(['101', '103', '102'])
+})
+
+test('collapsed playlist headers keep their collapsed state while dragging', async ({ page }) => {
+  await page.setViewportSize({ width: 360, height: 2600 })
+  await waitForWall(page)
+
+  const collapsedCard = page.locator('.playlist-card[data-playlist-id="102"]')
+  await collapsedCard.locator('[data-toggle-playlist-collapse="102"]').click()
+  await expect(collapsedCard).toHaveClass(/is-collapsed/)
+
+  const source = collapsedCard.locator('[data-drag-playlist="102"]')
+  const target = page.locator('.playlist-card[data-playlist-id="101"] [data-drag-playlist="101"]')
+  await source.dragTo(target)
+
+  await expect.poll(async () => getVisiblePlaylistOrder(page)).toEqual(['102', '101', '103'])
+  await expect(page.locator('.playlist-card[data-playlist-id="102"]')).toHaveClass(/is-collapsed/)
+})
+
+test('collapsed playlist drag does not immediately trigger a collapse click on release', async ({ page }) => {
+  await page.setViewportSize({ width: 360, height: 2600 })
+  await waitForWall(page)
+
+  const card = page.locator('.playlist-card[data-playlist-id="102"]')
+  const toggle = card.locator('[data-toggle-playlist-collapse="102"]')
+
+  await toggle.click()
+  await expect(card).toHaveClass(/is-collapsed/)
+
+  await dragPlaylistHeader(page, 102, 101, 'before')
+  await expect.poll(async () => getVisiblePlaylistOrder(page)).toEqual(['102', '101', '103'])
+  await expect(page.locator('.playlist-card[data-playlist-id="102"]')).toHaveClass(/is-collapsed/)
+
+  await toggle.click()
+  await expect(page.locator('.playlist-card[data-playlist-id="102"]')).toHaveClass(/is-collapsed/)
+
+  await page.waitForTimeout(320)
+  await toggle.click()
+  await expect(page.locator('.playlist-card[data-playlist-id="102"]')).not.toHaveClass(/is-collapsed/)
+})
+
+test('dragging one playlist does not reshuffle untouched columns', async ({ page }) => {
+  await waitForWall(page)
+
+  for (let index = 0; index < 7; index += 1) {
+    await createOwnedPlaylistFromUi(page, `布局测试 ${index + 1}`)
+  }
+
+  const scenario = await page.evaluate(() => {
+    const cards = Array.from(document.querySelectorAll('.playlist-card[data-playlist-id]')).map((node) => ({
+      id: Number(node.getAttribute('data-playlist-id')),
+      top: Math.round(node.getBoundingClientRect().top),
+      left: Math.round(node.getBoundingClientRect().left),
+    }))
+
+    const columns = [...new Map(
+      cards
+        .sort((left, right) => left.left - right.left || left.top - right.top)
+        .map((card) => [card.left, null])
+    ).keys()].map((left) => {
+      const items = cards
+        .filter((card) => card.left === left)
+        .sort((leftCard, rightCard) => leftCard.top - rightCard.top || leftCard.id - rightCard.id)
+      return { left, items }
+    })
+
+    const sourceColumn = columns.find((column) => column.items.length >= 2)
+    const witnessColumn = columns.find((column) => column.left !== sourceColumn?.left && column.items.length >= 1)
+    if (!sourceColumn || !witnessColumn) {
+      return null
+    }
+
+    return {
+      sourcePlaylistId: sourceColumn.items[1].id,
+      targetPlaylistId: sourceColumn.items[0].id,
+      witnessPlaylistId: witnessColumn.items[0].id,
+      witnessTop: witnessColumn.items[0].top,
+      witnessLeft: witnessColumn.items[0].left,
+    }
+  })
+
+  expect(scenario).not.toBeNull()
+  await dragPlaylistHeader(page, scenario.sourcePlaylistId, scenario.targetPlaylistId, 'before')
+
+  await expect.poll(async () => {
+    return page.evaluate((witnessPlaylistId) => {
+      const node = document.querySelector(`.playlist-card[data-playlist-id="${witnessPlaylistId}"]`)
+      if (!node) {
+        return null
+      }
+
+      const rect = node.getBoundingClientRect()
+      return {
+        top: Math.round(rect.top),
+        left: Math.round(rect.left),
+      }
+    }, scenario.witnessPlaylistId)
+  }).toEqual({
+    top: scenario.witnessTop,
+    left: scenario.witnessLeft,
+  })
+})
+
+test('playlist headers can move into an empty column', async ({ page }) => {
+  await waitForWall(page)
+
+  const initialColumns = await page.locator('.wall-column').count()
+  expect(initialColumns).toBeGreaterThan(3)
+
+  const before = await page.evaluate(() => {
+    const columns = Array.from(document.querySelectorAll('.wall-column'))
+    const cards = Array.from(document.querySelectorAll('.playlist-card[data-playlist-id]')).map((node) => {
+      const rect = node.getBoundingClientRect()
+      return {
+        id: Number(node.getAttribute('data-playlist-id')),
+        left: Math.round(rect.left),
+      }
+    })
+
+    const occupiedLefts = new Set(cards.map((card) => card.left))
+    const emptyColumnIndex = columns.findIndex((column) => {
+      const rect = column.getBoundingClientRect()
+      return !occupiedLefts.has(Math.round(rect.left))
+    })
+
+    return {
+      emptyColumnIndex,
+      playlist101Left: cards.find((card) => card.id === 101)?.left || 0,
+      playlist102Left: cards.find((card) => card.id === 102)?.left || 0,
+      playlist103Left: cards.find((card) => card.id === 103)?.left || 0,
+      emptyColumnLeft: emptyColumnIndex >= 0
+        ? Math.round(columns[emptyColumnIndex].getBoundingClientRect().left)
+        : -1,
+    }
+  })
+
+  expect(before.emptyColumnIndex).toBeGreaterThanOrEqual(0)
+  await dragPlaylistHeaderToColumn(page, 101, before.emptyColumnIndex)
+
+  await expect.poll(async () => {
+    return page.evaluate(() => {
+      const readCard = (playlistId) => {
+        const node = document.querySelector(`.playlist-card[data-playlist-id="${playlistId}"]`)
+        if (!node) {
+          return null
+        }
+
+        const rect = node.getBoundingClientRect()
+        return {
+          left: Math.round(rect.left),
+          top: Math.round(rect.top),
+        }
+      }
+
+      return {
+        playlist101: readCard(101),
+        playlist102: readCard(102),
+        playlist103: readCard(103),
+      }
+    })
+  }).toEqual({
+    playlist101: {
+      left: before.emptyColumnLeft,
+      top: expect.any(Number),
+    },
+    playlist102: {
+      left: before.playlist102Left,
+      top: expect.any(Number),
+    },
+    playlist103: {
+      left: before.playlist103Left,
+      top: expect.any(Number),
+    },
+  })
+})
+
 test('owned and subscribed collapsed playlists persist after reload', async ({ page }) => {
   await waitForWall(page)
 
@@ -433,6 +731,80 @@ test('artist playlists show a computed summary and can expand to all tracks', as
     displayed: summaryInfo.displayed,
     total: 160,
   })
+})
+
+test('owned playlists can create edit metadata and delete custom playlists', async ({ page }) => {
+  await waitForWall(page)
+
+  const cards = page.locator('.playlist-card')
+  const beforeCount = await cards.count()
+
+  await page.click('#create-owned-playlist-btn')
+  await expect(page.locator('#playlist-editor')).toBeVisible()
+  await page.fill('#playlist-editor-name', '通勤混音')
+  await page.fill('#playlist-editor-description', '早高峰备用')
+  await page.click('#playlist-editor-save-btn')
+
+  const createdCard = page.locator('.playlist-card', {
+    has: page.locator('.playlist-title', { hasText: '通勤混音' }),
+  }).first()
+  await expect(createdCard).toBeVisible()
+  await expect(cards).toHaveCount(beforeCount + 1)
+
+  const createdPlaylistId = Number(await createdCard.getAttribute('data-playlist-id'))
+  const initialHeaderStyle = await createdCard.locator('.playlist-header').getAttribute('style')
+
+  await createdCard.locator(`[data-open-owned-playlist-editor="${createdPlaylistId}"]`).click()
+  await expect(page.locator('#playlist-editor-description')).toHaveValue('早高峰备用')
+  await page.fill('#playlist-editor-name', '深夜通勤')
+  await page.fill('#playlist-editor-description', '地铁循环')
+  await page.locator('#playlist-editor-cover-input').setInputFiles({
+    name: 'cover.svg',
+    mimeType: 'image/svg+xml',
+    buffer: Buffer.from(`
+      <svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+        <rect width="128" height="128" rx="22" fill="#111111"/>
+        <circle cx="64" cy="64" r="38" fill="#f4d35e"/>
+      </svg>
+    `),
+  })
+  await expect(page.locator('#playlist-editor-cover-preview')).toHaveAttribute('src', /^data:image\/jpeg/)
+  await page.click('#playlist-editor-save-btn')
+
+  const updatedCard = page.locator('.playlist-card', {
+    has: page.locator('.playlist-title', { hasText: '深夜通勤' }),
+  }).first()
+  await expect(updatedCard).toBeVisible()
+  const updatedHeaderStyle = await updatedCard.locator('.playlist-header').getAttribute('style')
+  expect(updatedHeaderStyle).not.toBe(initialHeaderStyle)
+
+  await updatedCard.locator(`[data-open-owned-playlist-editor="${createdPlaylistId}"]`).click()
+  await expect(page.locator('#playlist-editor-description')).toHaveValue('地铁循环')
+  page.once('dialog', (dialog) => dialog.accept())
+  await page.click('#playlist-editor-delete-btn')
+
+  await expect(page.locator(`.playlist-card[data-playlist-id="${createdPlaylistId}"]`)).toHaveCount(0)
+  await expect(cards).toHaveCount(beforeCount)
+})
+
+test('renaming an owned playlist keeps its loaded tracks', async ({ page }) => {
+  await waitForWall(page)
+
+  const targetPlaylistId = 102
+  const targetCard = page.locator(`.playlist-card[data-playlist-id="${targetPlaylistId}"]`)
+  const firstTrackName = ((await targetCard.locator('.track-row .track-name').first().textContent()) || '').trim()
+  expect(firstTrackName).not.toBe('')
+
+  await targetCard.locator(`[data-open-owned-playlist-editor="${targetPlaylistId}"]`).click()
+  await page.fill('#playlist-editor-name', '自建电子夜航')
+  await page.click('#playlist-editor-save-btn')
+
+  const renamedCard = page.locator('.playlist-card', {
+    has: page.locator('.playlist-title', { hasText: '自建电子夜航' }),
+  }).first()
+  await expect(renamedCard).toBeVisible()
+  await expect(renamedCard.locator('.track-row')).not.toHaveCount(0)
+  await expect(renamedCard.locator('.track-row .track-name').first()).toHaveText(firstTrackName)
 })
 
 test('audio quality settings affect playback requests and persist across reload', async ({ page }) => {

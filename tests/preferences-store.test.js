@@ -58,3 +58,21 @@ test('normalizePreferences persists owned playlist order ids', () => {
 
   assert.deepEqual(preferences.ownedPlaylistOrderIds, [103, 102])
 })
+
+test('normalizePreferences persists window state', () => {
+  const preferences = normalizePreferences({
+    windowState: {
+      x: '48.6',
+      y: 96,
+      width: '1400',
+      height: '900.2',
+    },
+  })
+
+  assert.deepEqual(preferences.windowState, {
+    x: 49,
+    y: 96,
+    width: 1400,
+    height: 900,
+  })
+})

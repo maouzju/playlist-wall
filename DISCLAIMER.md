@@ -11,8 +11,10 @@ This project is an independent third-party desktop client. It is not affiliated 
 
 ## Interface and usage boundary
 
+- This repository is a personal interest project intended primarily for learning and technical exchange.
 - This repository uses a community-maintained unofficial API integration.
 - Publishing this repository under MIT only applies to the code contained in this repository.
+- Open-sourcing this repository does not grant any rights to third-party services, brands, or content.
 - Use of third-party services through this project is your own responsibility. Please review and comply with the applicable service terms, copyright requirements, and local laws before using, distributing, or commercializing any derivative workflow.
 
 ## Local session storage

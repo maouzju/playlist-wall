@@ -1,6 +1,7 @@
 const fs = require('fs')
 
 const { getUserDataFilePath } = require('./session-store')
+const { getDefaultWindowState, normalizeWindowState } = require('./window-state')
 
 const PREFERENCES_FILE_NAME = 'preferences.json'
 const UI_SCALE_MIN = 80
@@ -123,6 +124,7 @@ function normalizePreferences(input = {}) {
     collapsedPlaylistIds: normalizeCollapsedPlaylistIds(input?.collapsedPlaylistIds),
     ownedPlaylistOrderIds: normalizePlaylistOrderIds(input?.ownedPlaylistOrderIds),
     uiScale: normalizeUiScale(input?.uiScale),
+    windowState: normalizeWindowState(input?.windowState, getDefaultWindowState()),
   }
 }
 
@@ -143,7 +145,17 @@ function readPreferences() {
 
 function writePreferences(input = {}) {
   const filePath = getUserDataFilePath(PREFERENCES_FILE_NAME)
-  const next = normalizePreferences(input)
+  const current = readPreferences()
+  const next = normalizePreferences({
+    ...current,
+    ...input,
+    windowState: input?.windowState === undefined
+      ? current.windowState
+      : {
+        ...(current.windowState || getDefaultWindowState()),
+        ...(input.windowState && typeof input.windowState === 'object' ? input.windowState : {}),
+      },
+  })
 
   try {
     fs.mkdirSync(require('path').dirname(filePath), { recursive: true })
