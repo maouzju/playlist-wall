@@ -4,15 +4,27 @@ installSafeConsole()
 
 const fs = require('fs')
 const path = require('path')
-const { app, BrowserWindow, ipcMain } = require('electron')
+const { app, BrowserWindow, ipcMain, screen } = require('electron')
 
+const { createAppUpdater } = require('./app-updater')
 const { getPlaybackStats, incrementLocalPlayCount, writeCloudPlayCounts } = require('./playback-store')
 const { readPreferences, writePreferences } = require('./preferences-store')
 const { clearSession, getUserDataFilePath, readSession, writeSession } = require('./session-store')
 const { NeteaseService } = require('./netease-service')
+const {
+  WINDOW_DEFAULT_MIN_HEIGHT,
+  WINDOW_DEFAULT_MIN_WIDTH,
+  areWindowStatesEqual,
+  getDefaultWindowState,
+  needsWindowStateCorrection,
+  normalizeWindowState,
+  resolveWindowState,
+} = require('./window-state')
 
 const HYDRATE_CONCURRENCY = 5
 const PLAYLIST_UNDO_NOTICE_MS = 20000
+const WINDOW_STATE_SAVE_DELAY_MS = 250
+const PLAYLIST_TRACK_BATCH_SIZE = 100
 
 const TEXT = {
   windowTitle: '\u6b4c\u5355\u5899',
@@ -29,6 +41,9 @@ const TEXT = {
   privatePlaylist: '\u8be5\u6b4c\u5355\u662f\u79c1\u5bc6\u6b4c\u5355\uff0c\u6682\u65f6\u65e0\u6cd5\u5c55\u5f00\u3002',
   playlistUnavailable: '\u8be5\u6b4c\u5355\u6682\u65f6\u65e0\u6cd5\u5c55\u5f00\u3002',
   partialPlaylistUnavailable: '\u5269\u4f59\u66f2\u76ee\u6682\u65f6\u65e0\u6cd5\u5c55\u5f00\u3002',
+  createOwnedPlaylistFailed: '\u65b0\u5efa\u6b4c\u5355\u5931\u8d25',
+  updateOwnedPlaylistFailed: '\u7f16\u8f91\u6b4c\u5355\u5931\u8d25',
+  deleteOwnedPlaylistFailed: '\u5220\u9664\u81ea\u5efa\u6b4c\u5355\u5931\u8d25',
   removeSubscribedPlaylistFailed: '\u5220\u9664\u6536\u85cf\u6b4c\u5355\u5931\u8d25',
   restoreSubscribedPlaylistFailed: '\u64a4\u9500\u5220\u9664\u6b4c\u5355\u5931\u8d25',
 }
@@ -39,6 +54,13 @@ let hydrationRunId = 0
 let flushingPendingSubscribedPlaylistRemovals = false
 const pendingSubscribedPlaylistRemovals = new Map()
 let mainProcessDiagnosticsRegistered = false
+let windowStateSaveTimer = null
+let displayTopologyListenersRegistered = false
+const appUpdater = createAppUpdater({
+  app,
+  owner: 'maouzju',
+  repo: 'playlist-wall',
+})
 
 function logRuntimeDiagnostic(label, payload) {
   if (payload === undefined) {
@@ -99,6 +121,172 @@ function attachWindowDiagnostics(targetWindow) {
     }
 
     console.log(prefix, message)
+  })
+}
+
+function readWindowState() {
+  return normalizeWindowState(readPreferences()?.windowState, getDefaultWindowState())
+}
+
+function writeWindowState(windowState) {
+  const nextWindowState = normalizeWindowState(windowState, getDefaultWindowState())
+  const currentPreferences = readPreferences()
+
+  if (areWindowStatesEqual(currentPreferences?.windowState, nextWindowState)) {
+    return currentPreferences
+  }
+
+  return writePreferences({
+    windowState: nextWindowState,
+  })
+}
+
+function resolveWindowStateForCurrentDisplays(windowState) {
+  return resolveWindowState(windowState, screen.getAllDisplays(), {
+    minWidth: WINDOW_DEFAULT_MIN_WIDTH,
+    minHeight: WINDOW_DEFAULT_MIN_HEIGHT,
+  })
+}
+
+function applyWindowMinimumSize(targetWindow, windowState) {
+  if (!targetWindow || targetWindow.isDestroyed()) {
+    return null
+  }
+
+  const resolvedWindowState = resolveWindowStateForCurrentDisplays(windowState)
+  targetWindow.setMinimumSize(resolvedWindowState.minWidth, resolvedWindowState.minHeight)
+  return resolvedWindowState
+}
+
+function clearPendingWindowStateSave() {
+  if (windowStateSaveTimer) {
+    clearTimeout(windowStateSaveTimer)
+    windowStateSaveTimer = null
+  }
+}
+
+function persistNormalWindowState(targetWindow = win) {
+  clearPendingWindowStateSave()
+
+  if (
+    !targetWindow
+    || targetWindow.isDestroyed()
+    || targetWindow.isMaximized()
+    || targetWindow.isFullScreen()
+  ) {
+    return
+  }
+
+  const bounds = normalizeWindowState(targetWindow.getBounds(), getDefaultWindowState())
+  applyWindowMinimumSize(targetWindow, bounds)
+  writeWindowState(bounds)
+}
+
+function scheduleNormalWindowStatePersist(targetWindow = win) {
+  if (
+    !targetWindow
+    || targetWindow.isDestroyed()
+    || targetWindow.isMaximized()
+    || targetWindow.isFullScreen()
+  ) {
+    clearPendingWindowStateSave()
+    return
+  }
+
+  clearPendingWindowStateSave()
+  windowStateSaveTimer = setTimeout(() => {
+    persistNormalWindowState(targetWindow)
+  }, WINDOW_STATE_SAVE_DELAY_MS)
+}
+
+function correctWindowPlacementIfNeeded(targetWindow = win, { persist = false } = {}) {
+  if (!targetWindow || targetWindow.isDestroyed()) {
+    return null
+  }
+
+  const referenceBounds = normalizeWindowState(
+    typeof targetWindow.getNormalBounds === 'function'
+      ? targetWindow.getNormalBounds()
+      : targetWindow.getBounds(),
+    getDefaultWindowState()
+  )
+  const resolvedWindowState = applyWindowMinimumSize(targetWindow, referenceBounds)
+
+  if (!resolvedWindowState || targetWindow.isMaximized() || targetWindow.isFullScreen()) {
+    return resolvedWindowState
+  }
+
+  const currentBounds = normalizeWindowState(targetWindow.getBounds(), getDefaultWindowState())
+  if (!needsWindowStateCorrection(currentBounds, screen.getAllDisplays())) {
+    return resolvedWindowState
+  }
+
+  const nextBounds = {
+    x: resolvedWindowState.x,
+    y: resolvedWindowState.y,
+    width: resolvedWindowState.width,
+    height: resolvedWindowState.height,
+  }
+
+  if (!areWindowStatesEqual(currentBounds, nextBounds)) {
+    targetWindow.setBounds(nextBounds)
+  }
+
+  if (persist) {
+    writeWindowState(nextBounds)
+  }
+
+  return resolvedWindowState
+}
+
+function handleDisplayTopologyChange() {
+  if (!win || win.isDestroyed()) {
+    return
+  }
+
+  correctWindowPlacementIfNeeded(win, { persist: true })
+}
+
+function registerDisplayTopologyListeners() {
+  if (displayTopologyListenersRegistered) {
+    return
+  }
+
+  displayTopologyListenersRegistered = true
+  screen.on('display-added', handleDisplayTopologyChange)
+  screen.on('display-removed', handleDisplayTopologyChange)
+  screen.on('display-metrics-changed', handleDisplayTopologyChange)
+}
+
+function registerWindowStateTracking(targetWindow) {
+  if (!targetWindow || targetWindow.isDestroyed()) {
+    return
+  }
+
+  targetWindow.on('move', () => {
+    scheduleNormalWindowStatePersist(targetWindow)
+  })
+
+  targetWindow.on('resize', () => {
+    scheduleNormalWindowStatePersist(targetWindow)
+  })
+
+  targetWindow.on('unmaximize', () => {
+    setTimeout(() => {
+      correctWindowPlacementIfNeeded(targetWindow, { persist: true })
+      scheduleNormalWindowStatePersist(targetWindow)
+    }, 0)
+  })
+
+  targetWindow.on('leave-full-screen', () => {
+    setTimeout(() => {
+      correctWindowPlacementIfNeeded(targetWindow, { persist: true })
+      scheduleNormalWindowStatePersist(targetWindow)
+    }, 0)
+  })
+
+  targetWindow.on('close', () => {
+    persistNormalWindowState(targetWindow)
   })
 }
 
@@ -214,6 +402,7 @@ function normalizeAccount(account) {
     userId: Number(account?.userId || 0),
     nickname: account?.nickname || '',
     avatarUrl: account?.avatarUrl || '',
+    sourcePlatform: account?.sourcePlatform || '',
   }
 }
 
@@ -221,6 +410,9 @@ function normalizePlaylistMeta(playlist) {
   return {
     id: Number(playlist?.id || 0),
     sourcePlaylistId: Number(playlist?.sourcePlaylistId || playlist?.id || 0),
+    sourcePlatform: playlist?.sourcePlatform || '',
+    platformPlaylistId: String(playlist?.platformPlaylistId || '').trim(),
+    platformOwnerId: String(playlist?.platformOwnerId || '').trim(),
     name: playlist?.name || '',
     trackCount: Number(playlist?.trackCount || 0),
     coverUrl: playlist?.coverUrl || playlist?.coverImgUrl || '',
@@ -233,9 +425,12 @@ function normalizePlaylistMeta(playlist) {
       || 0
     ),
     creatorName: playlist?.creatorName || playlist?.creator?.nickname || '',
+    description: String(playlist?.description || playlist?.desc || ''),
     playCount: Number(playlist?.playCount || 0),
     copywriter: playlist?.copywriter || '',
     exploreSourceLabel: playlist?.exploreSourceLabel || '',
+    externalUrl: playlist?.externalUrl || '',
+    importReadOnly: Boolean(playlist?.importReadOnly),
     isExplore: Boolean(playlist?.isExplore),
   }
 }
@@ -253,6 +448,7 @@ function normalizeTrackArtistEntries(track) {
   return artistEntries.map((artist) => ({
     id: Number(artist?.id || artist?.artistId || 0),
     name: String(artist?.name || '').trim(),
+    sourceArtistId: String(artist?.sourceArtistId || '').trim(),
   })).filter((artist) => artist.name)
 }
 
@@ -262,6 +458,12 @@ function normalizeTracks(tracks) {
 
     return {
       id: Number(track?.id || 0),
+      sourceTrackId: String(track?.sourceTrackId || '').trim(),
+      sourcePlatform: String(track?.sourcePlatform || '').trim(),
+      platformTrackUri: String(track?.platformTrackUri || '').trim(),
+      playbackTrackId: Number(track?.playbackTrackId || 0),
+      playbackSourcePlatform: String(track?.playbackSourcePlatform || '').trim(),
+      resolvedTrackId: Number(track?.resolvedTrackId || 0),
       name: track?.name || '',
       artists: artistEntries.map((artist) => artist.name),
       artistEntries,
@@ -270,6 +472,7 @@ function normalizeTracks(tracks) {
       albumCoverUrl: track?.albumCoverUrl || '',
       durationMs: Number(track?.durationMs || 0),
       position: Number(track?.position || index + 1),
+      externalUrl: String(track?.externalUrl || '').trim(),
     }
   }).filter((track) => track.id > 0)
 }
@@ -281,6 +484,109 @@ function normalizeTrackIds(trackIds, fallbackTrackId = 0) {
   return [...new Set(ids.map((id) => Number(id)).filter((id) => id > 0))]
 }
 
+function normalizeSyncLookupText(input) {
+  return String(input || '')
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[锛?锛籠[{銆怾[^锛?\]銆憓]*[锛?\]銆憓]/g, ' ')
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function buildPlaylistNameKey(name) {
+  return normalizeSyncLookupText(name)
+}
+
+function buildTrackLookupKey(sourcePlatform, track) {
+  const normalizedSourcePlatform = String(sourcePlatform || '').trim() || String(track?.sourcePlatform || '').trim() || 'unknown'
+  const sourceTrackId = String(track?.sourceTrackId || '').trim()
+  if (sourceTrackId) {
+    return `${normalizedSourcePlatform}:${sourceTrackId}`
+  }
+
+  const artistKey = (Array.isArray(track?.artists) ? track.artists : [])
+    .map((artist) => normalizeSyncLookupText(artist))
+    .filter(Boolean)
+    .join('|')
+
+  return [
+    normalizedSourcePlatform,
+    normalizeSyncLookupText(track?.name),
+    artistKey,
+    normalizeSyncLookupText(track?.album),
+    Math.round(Number(track?.durationMs || 0) / 1000),
+  ].join(':')
+}
+
+function cloneNormalizedTrack(track) {
+  if (!track || typeof track !== 'object') {
+    return null
+  }
+
+  return {
+    ...track,
+    artists: Array.isArray(track.artists) ? [...track.artists] : [],
+    artistEntries: Array.isArray(track.artistEntries)
+      ? track.artistEntries.map((artist) => ({ ...artist }))
+      : [],
+  }
+}
+
+function chunkArray(items, size = PLAYLIST_TRACK_BATCH_SIZE) {
+  const list = Array.isArray(items) ? items : []
+  const normalizedSize = Math.max(1, Math.round(Number(size || 0) || PLAYLIST_TRACK_BATCH_SIZE))
+  const chunks = []
+
+  for (let index = 0; index < list.length; index += normalizedSize) {
+    chunks.push(list.slice(index, index + normalizedSize))
+  }
+
+  return chunks
+}
+
+async function mapWithConcurrency(items, concurrency, mapper) {
+  const sourceItems = Array.isArray(items) ? items : []
+  if (!sourceItems.length) {
+    return []
+  }
+
+  const normalizedConcurrency = Math.max(1, Math.floor(Number(concurrency || 1) || 1))
+  const results = new Array(sourceItems.length)
+  let nextIndex = 0
+
+  async function runWorker() {
+    while (nextIndex < sourceItems.length) {
+      const currentIndex = nextIndex
+      nextIndex += 1
+      results[currentIndex] = await mapper(sourceItems[currentIndex], currentIndex)
+    }
+  }
+
+  await Promise.all(Array.from(
+    { length: Math.min(normalizedConcurrency, sourceItems.length) },
+    () => runWorker()
+  ))
+
+  return results
+}
+
+function buildPlaylistLookupByName(playlists) {
+  const lookup = new Map()
+
+  for (const playlist of playlists || []) {
+    const key = buildPlaylistNameKey(playlist?.name)
+    if (!key || lookup.has(key)) {
+      continue
+    }
+
+    lookup.set(key, playlist)
+  }
+
+  return lookup
+}
+
 function normalizePlaylistPayload(playlist) {
   return {
     ...normalizePlaylistMeta(playlist),
@@ -289,6 +595,59 @@ function normalizePlaylistPayload(playlist) {
     hydrated: Boolean(playlist?.hydrated),
     hydrating: Boolean(playlist?.hydrating) && !playlist?.hydrated,
   }
+}
+
+function normalizeCoverUploadFile(file) {
+  const fileName = String(file?.name || '').trim()
+  const fileData = file?.data
+  if (!fileName || !fileData) {
+    return null
+  }
+
+  return {
+    name: fileName,
+    data: Buffer.isBuffer(fileData)
+      ? fileData
+      : Buffer.from(fileData),
+  }
+}
+
+function mergeManagedPlaylistPayload(existingPlaylist, playlistMeta) {
+  const existingTracks = normalizeTracks(existingPlaylist?.tracks || [])
+  const metaTracks = normalizeTracks(playlistMeta?.tracks || [])
+  const nextTracks = existingTracks.length ? existingTracks : metaTracks
+  const nextTrackCount = Math.max(
+    Number(playlistMeta?.trackCount || 0),
+    Number(existingPlaylist?.trackCount || 0),
+    nextTracks.length
+  )
+  const hydrated = existingPlaylist?.hydrated !== undefined
+    ? Boolean(existingPlaylist.hydrated)
+    : nextTracks.length >= nextTrackCount
+  const hydrating = !hydrated && (
+    Boolean(existingPlaylist?.hydrating)
+    || nextTrackCount > nextTracks.length
+  )
+
+  return normalizePlaylistPayload({
+    ...(existingPlaylist || {}),
+    ...playlistMeta,
+    id: Number(playlistMeta?.id || existingPlaylist?.id || 0),
+    sourcePlaylistId: Number(
+      playlistMeta?.sourcePlaylistId
+      || playlistMeta?.id
+      || existingPlaylist?.sourcePlaylistId
+      || existingPlaylist?.id
+      || 0
+    ),
+    subscribed: false,
+    isExplore: false,
+    trackCount: nextTrackCount,
+    tracks: nextTracks,
+    tracksError: existingPlaylist?.tracksError || playlistMeta?.tracksError || '',
+    hydrated,
+    hydrating,
+  })
 }
 
 function normalizeSubscribedPlaylistPayload(playlist) {
@@ -373,6 +732,41 @@ function loadPlaylistDetailCache(playlistId) {
   return normalizeTracks(snapshot.tracks || snapshot.playlist?.tracks || [])
 }
 
+function loadPlaylistPayloadFromCache(playlistId) {
+  const normalizedPlaylistId = Number(playlistId || 0)
+  if (normalizedPlaylistId <= 0) {
+    return null
+  }
+
+  const bootstrap = readJsonCache('playlists-current.json')
+  const bootstrapPlaylist = Array.isArray(bootstrap?.playlists)
+    ? bootstrap.playlists.find((playlist) => Number(playlist?.id || 0) === normalizedPlaylistId) || null
+    : null
+  const detail = readJsonCache(`playlist-detail-${normalizedPlaylistId}.json`)
+  const detailPlaylist = detail?.playlist || null
+  const rawTracks = Array.isArray(detail?.tracks)
+    ? detail.tracks
+    : Array.isArray(detailPlaylist?.tracks)
+      ? detailPlaylist.tracks
+      : []
+
+  if (!bootstrapPlaylist && !detailPlaylist && !rawTracks.length) {
+    return null
+  }
+
+  return normalizePlaylistPayload({
+    ...(bootstrapPlaylist || {}),
+    ...(detailPlaylist || {}),
+    id: normalizedPlaylistId,
+    sourcePlaylistId: Number(
+      detailPlaylist?.sourcePlaylistId
+      || bootstrapPlaylist?.sourcePlaylistId
+      || normalizedPlaylistId
+    ),
+    tracks: rawTracks,
+  })
+}
+
 function saveBootstrapCache(account, playlists) {
   writeJsonCache('playlists-current.json', {
     ok: true,
@@ -380,13 +774,14 @@ function saveBootstrapCache(account, playlists) {
     account,
     playlists: playlists.map((playlist) => ({
       id: playlist.id,
-        name: playlist.name,
-        trackCount: playlist.trackCount,
-        coverUrl: playlist.coverUrl,
-        specialType: playlist.specialType,
-        subscribed: playlist.subscribed,
-        creatorUserId: playlist.creatorId,
-      })),
+      name: playlist.name,
+      trackCount: playlist.trackCount,
+      coverUrl: playlist.coverUrl,
+      specialType: playlist.specialType,
+      subscribed: playlist.subscribed,
+      creatorUserId: playlist.creatorId,
+      description: playlist.description || '',
+    })),
   })
 }
 
@@ -416,6 +811,7 @@ function savePlaylistDetailCache(playlist, tracks) {
       name: playlist.name,
       trackCount: playlist.trackCount,
       coverImgUrl: playlist.coverUrl,
+      description: playlist.description || '',
     },
     tracks,
   })
@@ -431,6 +827,9 @@ function replacePlaylistTracksInCache(playlistId, tracks) {
     ...track,
     position: index + 1,
   }))
+  const detailFileName = `playlist-detail-${normalizedPlaylistId}.json`
+  const detail = readJsonCache(detailFileName) || {}
+  const detailPlaylist = detail.playlist || {}
 
   const bootstrap = readJsonCache('playlists-current.json')
   const bootstrapPlaylists = Array.isArray(bootstrap?.playlists) ? bootstrap.playlists : []
@@ -444,14 +843,11 @@ function replacePlaylistTracksInCache(playlistId, tracks) {
       return {
         ...playlist,
         trackCount: normalizedTracks.length,
+        description: detailPlaylist.description || playlist.description || '',
       }
     })
     writeJsonCache('playlists-current.json', bootstrap)
   }
-
-  const detailFileName = `playlist-detail-${normalizedPlaylistId}.json`
-  const detail = readJsonCache(detailFileName) || {}
-  const detailPlaylist = detail.playlist || {}
 
   detail.ok = true
   detail.updatedAt = new Date().toISOString()
@@ -461,6 +857,7 @@ function replacePlaylistTracksInCache(playlistId, tracks) {
     name: detailPlaylist.name || bootstrapPlaylist?.name || '',
     trackCount: normalizedTracks.length,
     coverImgUrl: detailPlaylist.coverImgUrl || bootstrapPlaylist?.coverUrl || '',
+    description: detailPlaylist.description || bootstrapPlaylist?.description || '',
   }
   detail.tracks = normalizedTracks
 
@@ -585,6 +982,7 @@ function upsertPlaylistInCache(playlist) {
     specialType: normalizedPlaylist.specialType,
     subscribed: normalizedPlaylist.subscribed,
     creatorUserId: normalizedPlaylist.creatorId,
+    description: normalizedPlaylist.description || '',
   }
   const existingIndex = currentPlaylists.findIndex((item) => Number(item?.id || 0) === normalizedPlaylist.id)
 
@@ -795,12 +1193,16 @@ async function hydratePlaylistsInBackground(account, playlists) {
 
 function createWindow() {
   registerMainProcessDiagnostics()
+  registerDisplayTopologyListeners()
+  const initialWindowState = resolveWindowStateForCurrentDisplays(readWindowState())
 
   win = new BrowserWindow({
-    width: 1680,
-    height: 980,
-    minWidth: 1180,
-    minHeight: 760,
+    x: initialWindowState.x,
+    y: initialWindowState.y,
+    width: initialWindowState.width,
+    height: initialWindowState.height,
+    minWidth: initialWindowState.minWidth,
+    minHeight: initialWindowState.minHeight,
     backgroundColor: '#ffffff',
     autoHideMenuBar: true,
     show: false,
@@ -814,9 +1216,14 @@ function createWindow() {
   })
 
   attachWindowDiagnostics(win)
+  registerWindowStateTracking(win)
   win.loadFile(path.join(__dirname, '../renderer/index.html'))
-  win.once('ready-to-show', () => win.show())
+  win.once('ready-to-show', () => {
+    correctWindowPlacementIfNeeded(win, { persist: true })
+    win.show()
+  })
   win.on('closed', () => {
+    clearPendingWindowStateSave()
     win = null
     hydrationRunId += 1
   })
@@ -934,6 +1341,40 @@ function registerIpc() {
     }
   })
 
+  ipcMain.handle('checkAppUpdate', async (_event, options = {}) => {
+    try {
+      return await appUpdater.checkForUpdates({
+        force: options?.force === true,
+      })
+    } catch (error) {
+      return {
+        ok: false,
+        error: error.message || String(error),
+        currentVersion: app.getVersion(),
+        latestVersion: '',
+        releaseName: '',
+        releaseUrl: 'https://github.com/maouzju/playlist-wall/releases/latest',
+        publishedAt: '',
+        updateAvailable: false,
+        assetName: '',
+        downloadUrl: '',
+        installSupported: false,
+        installMessage: '',
+      }
+    }
+  })
+
+  ipcMain.handle('installAppUpdate', async () => {
+    try {
+      return await appUpdater.installUpdate()
+    } catch (error) {
+      return {
+        ok: false,
+        error: error.message || String(error),
+      }
+    }
+  })
+
   ipcMain.handle('init', async () => {
     try {
       return await buildBootstrapPayload()
@@ -1013,13 +1454,16 @@ function registerIpc() {
     }
   })
 
-  ipcMain.handle('getArtistSongs', async (_event, artistId, maxCount) => {
+  ipcMain.handle('getArtistSongs', async (_event, artistId, maxCount, options) => {
     try {
       if (!svc) {
         throw new Error(TEXT.serviceNotReady)
       }
 
-      const result = await svc.getArtistSongs(artistId, maxCount, { includeArtistId: true })
+      const result = await svc.getArtistSongs(artistId, maxCount, {
+        includeArtistId: true,
+        resolveContext: options?.resolveContext || null,
+      })
       return {
         ok: true,
         artistId: Number(result?.artistId || 0),
@@ -1027,6 +1471,20 @@ function registerIpc() {
       }
     } catch (error) {
       return { ok: false, error: error.message || String(error), artistId: 0, tracks: [] }
+    }
+  })
+
+  ipcMain.handle('getOwnedPlaylistSummary', async (_event, playlistId) => {
+    try {
+      const service = ensureServiceReady()
+      const summary = normalizePlaylistPayload(await service.getPlaylistDetailSummary(playlistId))
+      const cachedPlaylist = loadPlaylistPayloadFromCache(playlistId)
+      const playlist = cachedPlaylist
+        ? mergeManagedPlaylistPayload(cachedPlaylist, summary)
+        : summary
+      return { ok: true, playlist }
+    } catch (error) {
+      return { ok: false, error: error.message || String(error) }
     }
   })
 
@@ -1098,6 +1556,98 @@ function registerIpc() {
       }
     } catch (error) {
       return { ok: false, error: error.message || String(error) }
+    }
+  })
+
+  ipcMain.handle('createOwnedPlaylist', async (_event, payload) => {
+    try {
+      const service = ensureServiceReady()
+      const createdSummary = await service.createPlaylist(payload?.name)
+      const coverFile = normalizeCoverUploadFile(payload?.coverFile)
+      const description = String(payload?.description || '')
+
+      if (description) {
+        await service.updatePlaylistDescription(createdSummary.id, description)
+      }
+
+      if (coverFile) {
+        await service.updatePlaylistCover(createdSummary.id, coverFile)
+      }
+
+      const refreshedSummary = await service.getPlaylistDetailSummary(createdSummary.id)
+      const playlist = mergeManagedPlaylistPayload(null, {
+        ...refreshedSummary,
+        description,
+      })
+      upsertPlaylistInCache(playlist)
+      return { ok: true, playlist }
+    } catch (error) {
+      return { ok: false, error: error.message || String(error) || TEXT.createOwnedPlaylistFailed }
+    }
+  })
+
+  ipcMain.handle('updateOwnedPlaylist', async (_event, payload) => {
+    try {
+      const service = ensureServiceReady()
+      const currentPlaylist = normalizePlaylistPayload(payload?.playlist || {})
+      const playlistId = Number(currentPlaylist.id || payload?.id || 0)
+      if (playlistId <= 0) {
+        throw new Error(TEXT.updateOwnedPlaylistFailed)
+      }
+
+      const cachedPlaylist = loadPlaylistPayloadFromCache(playlistId)
+      const editablePlaylist = currentPlaylist.tracks.length > 0
+        ? currentPlaylist
+        : cachedPlaylist
+          ? mergeManagedPlaylistPayload(cachedPlaylist, currentPlaylist)
+          : currentPlaylist
+
+      const nextName = String(payload?.name || editablePlaylist.name || '').trim()
+      const nextDescription = String(payload?.description ?? editablePlaylist.description ?? '')
+      const coverFile = normalizeCoverUploadFile(payload?.coverFile)
+
+      if (!nextName) {
+        throw new Error(TEXT.updateOwnedPlaylistFailed)
+      }
+
+      if (nextName !== editablePlaylist.name) {
+        await service.renamePlaylist(playlistId, nextName)
+      }
+
+      if (nextDescription !== String(editablePlaylist.description || '')) {
+        await service.updatePlaylistDescription(playlistId, nextDescription)
+      }
+
+      if (coverFile) {
+        await service.updatePlaylistCover(playlistId, coverFile)
+      }
+
+      const refreshedSummary = await service.getPlaylistDetailSummary(playlistId)
+      const playlist = mergeManagedPlaylistPayload(editablePlaylist, {
+        ...refreshedSummary,
+        description: nextDescription,
+      })
+      upsertPlaylistInCache(playlist)
+      return { ok: true, playlist }
+    } catch (error) {
+      return { ok: false, error: error.message || String(error) || TEXT.updateOwnedPlaylistFailed }
+    }
+  })
+
+  ipcMain.handle('deleteOwnedPlaylist', async (_event, payload) => {
+    try {
+      const service = ensureServiceReady()
+      const playlist = normalizePlaylistPayload(payload?.playlist || payload || {})
+      const playlistId = Number(playlist.id || payload?.id || 0)
+      if (playlistId <= 0) {
+        throw new Error(TEXT.deleteOwnedPlaylistFailed)
+      }
+
+      await service.deletePlaylist(playlistId)
+      removePlaylistFromCache(playlistId)
+      return { ok: true, playlistId }
+    } catch (error) {
+      return { ok: false, error: error.message || String(error) || TEXT.deleteOwnedPlaylistFailed, playlistId: 0 }
     }
   })
 
@@ -1279,3 +1829,5 @@ app.on('window-all-closed', () => {
     app.quit()
   }
 })
+
+

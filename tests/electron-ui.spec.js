@@ -177,6 +177,41 @@ async function dragPlaylistHeaderToGap(page, sourcePlaylistId, beforePlaylistId,
   }, { sourcePlaylistId, beforePlaylistId, afterPlaylistId })
 }
 
+async function dragPlaylistHeaderToVisibleGapNative(page, sourcePlaylistId, beforePlaylistId, afterPlaylistId) {
+  const target = await page.evaluate(({ beforePlaylistId, afterPlaylistId }) => {
+    const beforeCard = beforePlaylistId
+      ? document.querySelector(`.playlist-card[data-playlist-id="${beforePlaylistId}"]`)
+      : null
+    const afterCard = afterPlaylistId
+      ? document.querySelector(`.playlist-card[data-playlist-id="${afterPlaylistId}"]`)
+      : null
+    const column = beforeCard?.closest('.wall-column') || afterCard?.closest('.wall-column')
+    const columns = Array.from(document.querySelectorAll('.wall-column'))
+
+    if (!column || !beforeCard || !afterCard) {
+      throw new Error(`playlist native gap target missing: ${beforePlaylistId}/${afterPlaylistId}`)
+    }
+
+    const beforeRect = beforeCard.getBoundingClientRect()
+    const afterRect = afterCard.getBoundingClientRect()
+    const columnRect = column.getBoundingClientRect()
+    return {
+      columnIndex: columns.indexOf(column),
+      targetX: Math.round(Math.min(40, Math.max(16, columnRect.width / 2))),
+      targetY: Math.round(((beforeRect.bottom + afterRect.top) / 2) - columnRect.top),
+    }
+  }, { beforePlaylistId, afterPlaylistId })
+
+  const source = page.locator(`.playlist-card[data-playlist-id="${sourcePlaylistId}"] [data-drag-playlist="${sourcePlaylistId}"]`)
+  const column = page.locator('.wall-column').nth(target.columnIndex)
+  await source.dragTo(column, {
+    targetPosition: {
+      x: target.targetX,
+      y: target.targetY,
+    },
+  })
+}
+
 async function dragPlaylistHeaderToColumn(page, sourcePlaylistId, targetColumnIndex, clientYOffset = 2) {
   await page.evaluate(({ sourcePlaylistId, targetColumnIndex, clientYOffset }) => {
     const source = document.querySelector(`.playlist-card[data-playlist-id="${sourcePlaylistId}"] [data-drag-playlist="${sourcePlaylistId}"]`)
@@ -400,6 +435,30 @@ test('playlist headers can drop into the visible gap between playlists', async (
   await expect.poll(async () => getVisiblePlaylistOrder(page)).toEqual(['101', '102', '103'])
 
   await dragPlaylistHeaderToGap(page, 103, 101, 102)
+
+  await expect.poll(async () => getVisiblePlaylistOrder(page)).toEqual(['101', '103', '102'])
+})
+
+test('playlist headers use rendered card bounds when native-dragging into a visible gap', async ({ page }) => {
+  await page.setViewportSize({ width: 360, height: 3400 })
+  await waitForWall(page)
+
+  await page.evaluate(() => {
+    const rows = document.querySelector('.playlist-card[data-playlist-id="101"] .playlist-rows')
+    rows.style.height = '40px'
+    rows.style.overflow = 'hidden'
+  })
+
+  const visibleGap = await page.evaluate(() => {
+    const beforeCard = document.querySelector('.playlist-card[data-playlist-id="101"]')
+    const afterCard = document.querySelector('.playlist-card[data-playlist-id="102"]')
+    const beforeRect = beforeCard.getBoundingClientRect()
+    const afterRect = afterCard.getBoundingClientRect()
+    return Math.round(afterRect.top - beforeRect.bottom)
+  })
+  expect(visibleGap).toBeGreaterThan(500)
+
+  await dragPlaylistHeaderToVisibleGapNative(page, 103, 101, 102)
 
   await expect.poll(async () => getVisiblePlaylistOrder(page)).toEqual(['101', '103', '102'])
 })
@@ -845,6 +904,26 @@ test('audio quality settings affect playback requests and persist across reload'
   await page.click('#settings-btn')
   await expect(page.locator('#default-audio-quality-select')).toHaveValue('exhigh')
   await expect(page.locator('#auto-adjust-audio-quality-toggle')).not.toBeChecked()
+})
+
+test('settings auto-detect a GitHub update and expose the one-click update button', async ({ page }) => {
+  await waitForWall(page, `${PAGE_URL}&appUpdate=available&appUpdateVersion=0.22.0`)
+
+  await page.click('#settings-btn')
+  await expect(page.locator('#settings-panel')).toHaveClass(/is-open/)
+  await expect(page.locator('#settings-update-status')).toContainText('v0.22.0')
+  await expect(page.locator('#settings-update-install-btn')).toBeVisible()
+  await expect(page.locator('#settings-update-install-btn')).toHaveText('一键更新到 v0.22.0')
+
+  await page.click('#settings-update-install-btn')
+
+  await expect.poll(async () => {
+    return page.evaluate(() => window.__mockAppUpdateCheckCount || 0)
+  }).toBeGreaterThan(0)
+
+  await expect.poll(async () => {
+    return page.evaluate(() => window.__mockAppUpdateInstallCount || 0)
+  }).toBe(1)
 })
 
 test('network auto quality changes do not reload the current track mid-playback', async ({ page }) => {
@@ -1573,6 +1652,25 @@ test('owned tracks can be removed via context menu', async ({ page }) => {
   await expect(page.locator(`.track-row[data-track-id="${trackId}"]`)).toHaveCount(0)
 })
 
+test('owned tracks can be pinned to the top via context menu', async ({ page }) => {
+  await waitForWall(page)
+
+  const card = page.locator('.playlist-card[data-playlist-id="102"]')
+  const row = card.locator('.track-row[data-track-id="102003"]')
+
+  await row.click({ button: 'right' })
+  await expect(page.locator('#context-menu')).toBeVisible()
+  await expect(page.locator('#context-pin-track-btn')).toBeVisible()
+  await page.click('#context-pin-track-btn')
+
+  await expect(page.locator('#context-menu')).toBeHidden()
+  await expect.poll(async () => {
+    return card.locator('.track-row').evaluateAll((nodes) => {
+      return nodes.slice(0, 3).map((node) => node.getAttribute('data-track-id'))
+    })
+  }).toEqual(['102003', '102001', '102002'])
+})
+
 test('selected owned tracks can be removed together via context menu', async ({ page }) => {
   await waitForWall(page)
 
@@ -1643,6 +1741,34 @@ test('selected subscribed tracks can be added together via context menu', async 
   await expect(targetCard.locator('.track-row[data-track-id="201002"]')).toHaveCount(1)
 })
 
+test('context menu transfers place tracks below matching artists in the target playlist', async ({ page }) => {
+  await waitForWall(page)
+
+  const sourceCard = page.locator('.playlist-card[data-playlist-id="102"]')
+  const targetCard = page.locator('.playlist-card[data-playlist-id="103"]')
+  const row = sourceCard.locator('.track-row[data-track-id="102002"]')
+
+  await row.click({ button: 'right' })
+  await expect(page.locator('#context-menu')).toBeVisible()
+
+  const moveTrigger = page.locator('#context-menu .context-menu-item--submenu-trigger')
+  await moveTrigger.click()
+
+  const targetButton = page.locator(
+    '#context-menu .context-menu-submenu [data-context-action="transfer-track"][data-target-playlist-id="103"]'
+  )
+  await expect(targetButton).toBeVisible()
+  await targetButton.click()
+
+  await expect.poll(async () => {
+    return targetCard.locator('.track-row').evaluateAll((nodes) => {
+      return nodes.slice(-4).map((node) => node.getAttribute('data-track-id'))
+    })
+  }).toEqual(['103026', '103027', '102002', '103028'])
+
+  await expect(sourceCard.locator('.track-row[data-track-id="102002"]')).toHaveCount(0)
+})
+
 test('tracks can be drag-sorted within the same playlist', async ({ page }) => {
   await waitForWall(page)
 
@@ -1708,9 +1834,9 @@ test('tracks can be dragged into another playlist at a chosen position', async (
 
   await expect.poll(async () => {
     return targetCard.locator('.track-row').evaluateAll((nodes) => {
-      return nodes.slice(0, 4).map((node) => node.getAttribute('data-track-id'))
+      return nodes.slice(-5).map((node) => node.getAttribute('data-track-id'))
     })
-  }).toEqual(['103001', '102001', '103002', '103003'])
+  }).toEqual(['103025', '103026', '102001', '103027', '103028'])
 
   await expect.poll(async () => {
     return sourceCard.locator('.track-row').evaluateAll((nodes) => {
@@ -1720,6 +1846,28 @@ test('tracks can be dragged into another playlist at a chosen position', async (
 
   await expect(sourceCard.locator('.playlist-meta')).toContainText(String(sourceCountBefore - 1))
   await expect(targetCard.locator('.playlist-meta')).toContainText(String(targetCountBefore + 1))
+})
+
+test('tracks dropped on another playlist card land below matching artists', async ({ page }) => {
+  await waitForWall(page)
+
+  const sourceCard = page.locator('.playlist-card[data-playlist-id="102"]')
+  const targetCard = page.locator('.playlist-card[data-playlist-id="103"]')
+
+  await dragTrack(
+    page,
+    '.playlist-card[data-playlist-id="102"] .track-row[data-track-id="102002"]',
+    '.playlist-card[data-playlist-id="103"]',
+    'after'
+  )
+
+  await expect.poll(async () => {
+    return targetCard.locator('.track-row').evaluateAll((nodes) => {
+      return nodes.slice(-4).map((node) => node.getAttribute('data-track-id'))
+    })
+  }).toEqual(['103026', '103027', '102002', '103028'])
+
+  await expect(sourceCard.locator('.track-row[data-track-id="102002"]')).toHaveCount(0)
 })
 
 test('selected tracks drag together into another playlist', async ({ page }) => {
@@ -1747,9 +1895,9 @@ test('selected tracks drag together into another playlist', async ({ page }) => 
 
   await expect.poll(async () => {
     return targetCard.locator('.track-row').evaluateAll((nodes) => {
-      return nodes.slice(0, 5).map((node) => node.getAttribute('data-track-id'))
+      return nodes.slice(-5).map((node) => node.getAttribute('data-track-id'))
     })
-  }).toEqual(['103001', '102001', '102002', '103002', '103003'])
+  }).toEqual(['103026', '103027', '102001', '102002', '103028'])
 
   await expect.poll(async () => {
     return sourceCard.locator('.track-row').evaluateAll((nodes) => {

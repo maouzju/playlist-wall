@@ -31,6 +31,14 @@
       <div class="auth-actions">
         <button class="auth-btn" id="auth-refresh-btn" type="button">刷新二维码</button>
       </div>
+      <div class="auth-divider hidden" aria-hidden="true"></div>
+      <div class="auth-import-shell hidden">
+        <div class="auth-import-title">Spotify 导入</div>
+        <div class="auth-import-copy">打开应用内 Spotify 登录窗口并自动接入歌单；这里只做歌单读取和整理。</div>
+        <div class="auth-actions">
+          <button class="auth-btn" id="auth-spotify-auto-login-btn" type="button">登录 Spotify（应用内登录）</button>
+        </div>
+      </div>
       <div class="auth-note">登录状态和缓存只会保存在当前电脑的本地应用目录。</div>
     </div>
   </div>
@@ -46,6 +54,17 @@
                 <path d="M5.5 18.5c1.8-3 11.2-3 13 0"></path>
               </svg>
               <span class="tab-btn__count" id="tab-owned-count">0</span>
+            </span>
+          </button>
+          <button class="tab-btn tab-btn--icon hidden" id="tab-spotify" type="button" role="tab" aria-selected="false" aria-label="Spotify 歌单">
+            <span class="tab-btn__content">
+              <svg class="icon-stroke tab-btn__icon" viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="12" cy="12" r="6.75"></circle>
+                <path d="M8.25 10.1c2.55-.65 5.15-.5 7.55.55"></path>
+                <path d="M8.9 12.75c1.95-.45 3.85-.3 5.6.5"></path>
+                <path d="M9.65 15.25c1.2-.25 2.3-.15 3.35.35"></path>
+              </svg>
+              <span class="tab-btn__count" id="tab-spotify-count">0</span>
             </span>
           </button>
           <button class="tab-btn tab-btn--icon" id="tab-subscribed" type="button" role="tab" aria-selected="false" aria-label="收藏订阅">
@@ -86,6 +105,12 @@
       </div>
 
       <div class="top-actions">
+        <button class="top-action-btn top-action-btn--icon hidden" id="create-owned-playlist-btn" type="button" aria-label="新建歌单" title="新建歌单">
+          <svg class="icon-stroke" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 5v14"></path>
+            <path d="M5 12h14"></path>
+          </svg>
+        </button>
         <button class="top-action-btn top-action-btn--icon" id="locate-current-btn" type="button" aria-label="定位当前播放" title="定位当前播放">
           <svg class="icon-stroke" viewBox="0 0 24 24" aria-hidden="true">
             <circle cx="12" cy="12" r="3"></circle>
@@ -270,6 +295,17 @@
       </div>
       <input id="auto-adjust-audio-quality-toggle" type="checkbox" checked>
     </label>
+    <div class="settings-row settings-row--stack">
+      <div class="settings-copy">
+        <div class="settings-label">版本更新</div>
+        <div class="settings-hint" id="settings-update-hint">启动后会自动检查 GitHub Releases；发现新版本后，可以直接一键下载并重启更新。</div>
+      </div>
+      <div class="settings-status" id="settings-update-status">正在读取当前版本...</div>
+      <div class="settings-inline-actions">
+        <button class="settings-action-btn" id="settings-update-check-btn" type="button">检查更新</button>
+        <button class="settings-action-btn hidden" id="settings-update-install-btn" type="button">一键更新</button>
+      </div>
+    </div>
     <div class="settings-row settings-row--actions">
       <div class="settings-copy">
         <div class="settings-label">账号</div>
@@ -277,7 +313,74 @@
       </div>
       <button class="settings-action-btn" id="settings-logout-btn" type="button">退出登录</button>
     </div>
+    <div class="settings-row settings-row--stack hidden">
+      <div class="settings-copy">
+        <div class="settings-label">Spotify 导入</div>
+        <div class="settings-hint">打开应用内 Spotify 登录窗口，登录后自动把歌单读进当前整理墙。</div>
+      </div>
+      <div class="settings-inline-actions">
+        <button class="settings-action-btn" id="settings-spotify-auto-login-btn" type="button">登录 Spotify（应用内登录）</button>
+        <button class="settings-action-btn" id="settings-spotify-refresh-btn" type="button">刷新</button>
+        <button class="settings-action-btn" id="settings-spotify-clear-btn" type="button">清除</button>
+      </div>
+      <div class="settings-status" id="settings-spotify-status">未连接</div>
+      <div class="settings-inline-actions">
+        <button class="settings-action-btn" id="settings-spotify-sync-to-netease-btn" type="button">Spotify -> 网易云</button>
+        <button class="settings-action-btn" id="settings-spotify-sync-to-spotify-btn" type="button">网易云 -> Spotify</button>
+      </div>
+    </div>
   </aside>
+
+  <div id="playlist-editor-backdrop" class="hidden"></div>
+  <section id="playlist-editor" class="hidden" role="dialog" aria-modal="true" aria-labelledby="playlist-editor-title">
+    <form id="playlist-editor-form" class="playlist-editor-card">
+      <div class="playlist-editor-header">
+        <div>
+          <div class="playlist-editor-kicker" id="playlist-editor-kicker">歌单</div>
+          <h2 class="playlist-editor-title" id="playlist-editor-title">编辑歌单</h2>
+        </div>
+        <button class="playlist-editor-close" id="playlist-editor-close-btn" type="button" aria-label="关闭" title="关闭">
+          <svg class="icon-stroke" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M6 6l12 12"></path>
+            <path d="M18 6 6 18"></path>
+          </svg>
+        </button>
+      </div>
+
+      <label class="playlist-editor-row" for="playlist-editor-name">
+        <span class="playlist-editor-label">歌单名</span>
+        <input id="playlist-editor-name" class="playlist-editor-input" type="text" maxlength="200" placeholder="给这张歌单起个名字" required>
+      </label>
+
+      <label class="playlist-editor-row" for="playlist-editor-description">
+        <span class="playlist-editor-label">简介</span>
+        <textarea id="playlist-editor-description" class="playlist-editor-textarea" rows="5" maxlength="2000" placeholder="可以写这张歌单的气质、场景或备注"></textarea>
+      </label>
+
+      <div class="playlist-editor-row">
+        <span class="playlist-editor-label">封面</span>
+        <div class="playlist-editor-cover-panel">
+          <div class="playlist-editor-cover-preview">
+            <img id="playlist-editor-cover-preview" alt="">
+            <span id="playlist-editor-cover-empty">未选择</span>
+          </div>
+          <div class="playlist-editor-cover-actions">
+            <label class="playlist-editor-secondary-btn" for="playlist-editor-cover-input">选择图片</label>
+            <button class="playlist-editor-secondary-btn hidden" id="playlist-editor-cover-reset-btn" type="button">恢复当前</button>
+          </div>
+          <input id="playlist-editor-cover-input" class="hidden" type="file" accept="image/*">
+        </div>
+      </div>
+
+      <div class="playlist-editor-actions">
+        <button class="playlist-editor-danger-btn hidden" id="playlist-editor-delete-btn" type="button">删除歌单</button>
+        <div class="playlist-editor-actions-right">
+          <button class="playlist-editor-secondary-btn" id="playlist-editor-cancel-btn" type="button">取消</button>
+          <button class="playlist-editor-primary-btn" id="playlist-editor-save-btn" type="submit">保存</button>
+        </div>
+      </div>
+    </form>
+  </section>
 
   <div id="context-menu" class="hidden">
     <button class="context-menu-item" id="context-remove-track-btn" type="button">移出歌单</button>

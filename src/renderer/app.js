@@ -51,6 +51,7 @@ const AUDIO_QUALITY_REFRESH_REASON_NETWORK = 'network'
 
 const TEXT = {
   tabOwned: '\u81ea\u5df1\u521b\u5efa',
+  tabSpotify: 'Spotify 歌单',
   tabSubscribed: '\u6536\u85cf\u8ba2\u9605',
   tabExplore: '\u63a2\u7d22\u6b4c\u5355',
   tabArtists: '\u827a\u4eba\u6b4c\u5355',
@@ -60,6 +61,7 @@ const TEXT = {
   noPlaylists: '\u6ca1\u6709\u52a0\u8f7d\u5230\u6b4c\u5355\uff0c\u8bf7\u68c0\u67e5\u767b\u5f55\u6001\u6216\u7f13\u5b58\u3002',
   noMatch: '\u5f53\u524d\u641c\u7d22\u6ca1\u6709\u547d\u4e2d\u4efb\u4f55\u6b4c\u5355',
   emptyTab: '\u5f53\u524d\u5206\u533a\u8fd8\u6ca1\u6709\u6b4c\u5355',
+  emptySpotify: '还没有读取到 Spotify 歌单',
   emptyExplore: '\u8fd8\u6ca1\u52a0\u8f7d\u5230\u53ef\u63a2\u7d22\u7684\u6b4c\u5355',
   emptyArtists: '\u8fd8\u6ca1\u751f\u6210\u827a\u4eba\u6b4c\u5355',
   loadingExplore: '\u6b63\u5728\u52a0\u8f7d\u63a2\u7d22\u6b4c\u5355...',
@@ -70,6 +72,7 @@ const TEXT = {
   subscribePlaylistDone: '\u5df2\u6536\u85cf\u6b4c\u5355',
   subscribePlaylistFailed: '\u6536\u85cf\u6b4c\u5355\u5931\u8d25',
   searchExplorePlaceholder: '\u641c\u7d22\u793e\u533a\u6b4c\u5355',
+  searchSpotifyPlaceholder: '搜索 Spotify 歌单、歌曲、专辑、歌手',
   searchArtistsPlaceholder: '\u641c\u7d22\u827a\u4eba\u6216\u6b4c\u66f2',
   searchLibraryPlaceholder: '\u641c\u7d22\u6b4c\u5355\u3001\u6b4c\u66f2\u3001\u4e13\u8f91\u3001\u6b4c\u624b',
   collapsePlaylist: '\u538b\u7f29\u6b4c\u5355',
@@ -105,6 +108,31 @@ const TEXT = {
   removeFromPlaylist: '\u79fb\u51fa\u6b4c\u5355',
   removeFromPlaylistDone: '\u5df2\u4ece\u6b4c\u5355\u79fb\u51fa',
   removeFromPlaylistFailed: '\u79fb\u51fa\u6b4c\u5355\u5931\u8d25',
+  createOwnedPlaylist: '\u65b0\u5efa\u6b4c\u5355',
+  createOwnedPlaylistDone: '\u5df2\u65b0\u5efa\u6b4c\u5355',
+  createOwnedPlaylistFailed: '\u65b0\u5efa\u6b4c\u5355\u5931\u8d25',
+  editOwnedPlaylist: '\u7f16\u8f91\u6b4c\u5355',
+  updateOwnedPlaylistDone: '\u5df2\u66f4\u65b0\u6b4c\u5355',
+  updateOwnedPlaylistFailed: '\u7f16\u8f91\u6b4c\u5355\u5931\u8d25',
+  deleteOwnedPlaylist: '\u5220\u9664\u81ea\u5efa\u6b4c\u5355',
+  deleteOwnedPlaylistDone: '\u5df2\u5220\u9664\u6b4c\u5355',
+  deleteOwnedPlaylistFailed: '\u5220\u9664\u81ea\u5efa\u6b4c\u5355\u5931\u8d25',
+  playlistEditorCreateTitle: '\u65b0\u5efa\u6b4c\u5355',
+  playlistEditorEditTitle: '\u7f16\u8f91\u6b4c\u5355',
+  playlistEditorName: '\u6b4c\u5355\u540d',
+  playlistEditorNamePlaceholder: '\u7ed9\u8fd9\u5f20\u6b4c\u5355\u8d77\u4e2a\u540d\u5b57',
+  playlistEditorDescription: '\u7b80\u4ecb',
+  playlistEditorDescriptionPlaceholder: '\u53ef\u4ee5\u5199\u8fd9\u5f20\u6b4c\u5355\u7684\u6c14\u8d28\u3001\u573a\u666f\u6216\u5907\u6ce8',
+  playlistEditorCover: '\u5c01\u9762',
+  playlistEditorChooseCover: '\u9009\u62e9\u56fe\u7247',
+  playlistEditorResetCover: '\u6062\u590d\u5f53\u524d',
+  playlistEditorNoCover: '\u672a\u9009\u62e9',
+  playlistEditorCancel: '\u53d6\u6d88',
+  playlistEditorSaveCreate: '\u521b\u5efa',
+  playlistEditorSaveUpdate: '\u4fdd\u5b58',
+  playlistEditorDeleteConfirm: '\u786e\u5b9a\u5220\u9664\u8fd9\u5f20\u81ea\u5efa\u6b4c\u5355\uff1f',
+  playlistEditorPickCoverFailed: '\u8fd9\u5f20\u56fe\u7247\u6682\u65f6\u7528\u4e0d\u4e86\uff0c\u8bf7\u6362\u4e00\u5f20\u8bd5\u8bd5',
+  playlistEditorNameRequired: '\u8bf7\u5148\u8f93\u5165\u6b4c\u5355\u540d',
   removeSubscribedPlaylist: '\u5220\u9664\u6b4c\u5355',
   removeSubscribedPlaylistFailed: '\u5220\u9664\u6536\u85cf\u6b4c\u5355\u5931\u8d25',
   restoreSubscribedPlaylist: '\u64a4\u9500',
@@ -116,6 +144,7 @@ const TEXT = {
   moveToPlaylistDone: '\u5df2\u79fb\u52a8\u5230\u6b4c\u5355',
   copyToPlaylistDone: '\u5df2\u52a0\u5165\u5230\u6b4c\u5355',
   moveToPlaylistFailed: '\u79fb\u52a8\u5230\u6b4c\u5355\u5931\u8d25',
+  pinToTop: '\u7f6e\u9876',
   goToArtistPlaylist: '\u8f6c\u5230\u827a\u4eba\u6b4c\u5355',
   goToArtistPlaylistDone: '\u5df2\u8df3\u8f6c\u5230\u827a\u4eba\u6b4c\u5355',
   goToArtistPlaylistFailed: '\u6ca1\u627e\u5230\u5bf9\u5e94\u7684\u827a\u4eba\u6b4c\u5355',
@@ -143,11 +172,43 @@ const TEXT = {
   logout: '\u9000\u51fa\u767b\u5f55',
   logoutDone: '\u5df2\u9000\u51fa\u5f53\u524d\u8d26\u53f7',
   logoutFailed: '\u9000\u51fa\u767b\u5f55\u5931\u8d25',
+  spotifyImportConnectFailed: 'Spotify 导入失败：',
+  spotifyImportConnected: '已接入 Spotify 歌单',
+  spotifyImportLoginWindowOpened: '请在弹出的 Spotify 窗口里完成登录',
+  spotifyImportCleared: '已清除 Spotify 导入',
+  spotifyImportReadonlyTrack: '这批 Spotify 歌单当前只做整理，不在这里站内播放',
+  spotifyPlaybackResolving: '正在匹配网易云音源...',
+  spotifyPlaybackUnmatched: '这首歌还没匹配到网易云可播放版本',
+  spotifyOpenPlaylist: '\u5728 Spotify \u4e2d\u6253\u5f00\u6b4c\u5355',
+  spotifyOpenTrack: '\u5728 Spotify \u4e2d\u6253\u5f00\u6b4c\u66f2',
+  spotifyOpenFailed: '\u6253\u5f00 Spotify \u94fe\u63a5\u5931\u8d25',
+  spotifyImportStatusDisconnected: '未连接',
+  spotifyImportStatusConnected: '已连接 Spotify：',
+  spotifyImportLoading: '正在读取 Spotify 歌单...',
+  spotifyImportPlaintextWarning: '当前系统不支持安全存储，Spotify sp_dc 会以明文保存在 userData/spotify-session.json 。',
+  spotifySyncToNeteaseDone: '已把 Spotify 歌单增量合并进网易云',
+  spotifySyncToSpotifyDone: '已把网易云歌单增量合并进 Spotify',
+  spotifySyncFailed: 'Spotify 双向同步失败',
+  exploreRequiresNetease: '探索和站内播放仍需要网易云登录',
+  appUpdateChecking: '正在检查 GitHub 新版本...',
+  appUpdateLatest: '当前已经是最新版本',
+  appUpdateAvailable: '发现新版本',
+  appUpdateCheckFailed: '检查更新失败',
+  appUpdateCheckButton: '检查更新',
+  appUpdateCheckBusy: '检查中...',
+  appUpdateInstallButton: '一键更新',
+  appUpdateInstallBusy: '下载并更新中...',
+  appUpdateRestarting: '更新包已准备完成，应用即将重启',
+  appUpdateInstallFailed: '启动更新失败',
 }
+
+TEXT.spotifyImportLoginWindowOpened = '已打开 Spotify 登录窗口，请在窗口里完成登录'
+TEXT.spotifyImportPlaintextWarning = '当前系统不支持安全存储，Spotify 登录凭据会以明文保存在 userData/spotify-session.json 。'
 
 const state = {
   account: null,
   playlists: [],
+  spotifyPlaylists: [],
   explorePlaylists: [],
   artistPlaylists: [],
   playlistMap: new Map(),
@@ -188,9 +249,36 @@ const state = {
   currentPlaybackResolvedLevel: '',
   tabScrollPositions: {
     owned: 0,
+    spotify: 0,
     subscribed: 0,
     explore: 0,
     artists: 0,
+  },
+  neteaseAuthenticated: false,
+  spotifyImport: {
+    connected: false,
+    account: null,
+    storageMode: '',
+    updatedAt: '',
+    busy: false,
+  },
+  spotifySync: {
+    busy: false,
+  },
+  appUpdate: {
+    busy: false,
+    action: '',
+    checked: false,
+    currentVersion: '',
+    latestVersion: '',
+    releaseName: '',
+    releaseUrl: '',
+    publishedAt: '',
+    updateAvailable: false,
+    installSupported: false,
+    installMessage: '',
+    error: '',
+    errorStage: '',
   },
 }
 
@@ -255,6 +343,7 @@ const renderRuntime = {
   focusFlashTimer: 0,
   audioQualityRefreshTimer: 0,
   pendingAudioQualityRefreshReason: '',
+  playlistEditorState: null,
 }
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -278,6 +367,8 @@ async function bootstrapApp() {
   applyUiScale(state.settings.uiScale)
   applyTheme(state.theme, { silent: true, persistLocal: false })
   renderSettings()
+  void refreshAppUpdateStatus({ silent: true })
+  await fetchSpotifyImportState()
   bindEvents()
   wireBridge()
   silentlyPreloadExplorePlaylists()
@@ -325,6 +416,9 @@ function createMockBridge() {
   const authAuto = params.get('authAuto') !== '0'
   const initDelay = Math.max(0, Number(params.get('initDelay') || 0) || 0)
   const exploreDelay = Math.max(0, Number(params.get('exploreDelay') || 0) || 0)
+  const mockAppVersion = String(params.get('appVersion') || '0.21.0').trim().replace(/^[vV]/, '')
+  const mockAppUpdateMode = String(params.get('appUpdate') || 'latest').trim().toLowerCase()
+  const mockLatestVersion = String(params.get('appUpdateVersion') || '0.22.0').trim().replace(/^[vV]/, '')
   const progressListeners = new Set()
   const patchListeners = new Set()
   const subscribedPlaylistRemovalFailureListeners = new Set()
@@ -373,6 +467,11 @@ function createMockBridge() {
   const defaultExplorePlaylists = buildMockExplorePlaylists()
   const artistTrackStore = buildMockArtistSongStore(basePlaylists)
   const recommendationStore = new Map()
+  let nextMockPlaylistId = Math.max(0, ...basePlaylists.map((playlist) => Number(playlist.id || 0))) + 1
+  let mockAppUpdateCheckCount = 0
+  let mockAppUpdateInstallCount = 0
+  window.__mockAppUpdateCheckCount = 0
+  window.__mockAppUpdateInstallCount = 0
   const emitProgress = (payload) => progressListeners.forEach((listener) => listener(payload))
   const emitPatch = (payload) => patchListeners.forEach((listener) => listener(payload))
   const clearPendingMockSubscribedPlaylistRemoval = (entry) => {
@@ -404,8 +503,151 @@ function createMockBridge() {
       artistRequestCount,
     }
   }
+  const buildMockPlaylistSummary = (playlist) => ({
+    id: Number(playlist?.id || 0),
+    sourcePlaylistId: Number(playlist?.sourcePlaylistId || playlist?.id || 0),
+    name: playlist?.name || '',
+    trackCount: Number(playlist?.trackCount || 0),
+    coverUrl: playlist?.coverUrl || '',
+    specialType: Number(playlist?.specialType || 0),
+    subscribed: Boolean(playlist?.subscribed),
+    creatorId: Number(playlist?.creatorId || 0),
+    creatorName: playlist?.creatorName || '',
+    description: String(playlist?.description || ''),
+    playCount: Number(playlist?.playCount || 0),
+    copywriter: playlist?.copywriter || '',
+    exploreSourceLabel: playlist?.exploreSourceLabel || '',
+    isExplore: Boolean(playlist?.isExplore),
+  })
+  const buildMockAppUpdateResult = () => {
+    if (mockAppUpdateMode === 'error') {
+      return {
+        ok: false,
+        error: 'mock update check failed',
+        currentVersion: mockAppVersion,
+        latestVersion: '',
+        releaseName: '',
+        releaseUrl: 'https://github.com/maouzju/playlist-wall/releases/latest',
+        publishedAt: '',
+        updateAvailable: false,
+        assetName: '',
+        downloadUrl: '',
+        installSupported: false,
+        installMessage: '',
+      }
+    }
+
+    const updateAvailable = mockAppUpdateMode === 'available' || mockAppUpdateMode === 'unsupported'
+    const installSupported = mockAppUpdateMode === 'available'
+    const latestVersion = updateAvailable ? mockLatestVersion : mockAppVersion
+
+    return {
+      ok: true,
+      currentVersion: mockAppVersion,
+      latestVersion,
+      releaseName: `v${latestVersion}`,
+      releaseUrl: `https://github.com/maouzju/playlist-wall/releases/tag/v${latestVersion}`,
+      publishedAt: '2026-04-04T12:00:00.000Z',
+      updateAvailable,
+      assetName: updateAvailable ? `playlist-wall-${latestVersion}-windows-x64.zip` : '',
+      downloadUrl: updateAvailable ? 'https://example.com/playlist-wall.zip' : '',
+      installSupported,
+      installMessage: updateAvailable && !installSupported
+        ? '当前是开发模式，一键更新仅支持 GitHub Releases 解压版。'
+        : '',
+    }
+  }
 
   return {
+    getSpotifyImportState: async () => ({
+      ok: true,
+      connected: false,
+      storageMode: '',
+      updatedAt: '',
+      account: null,
+    }),
+    startSpotifyImportLogin: async () => ({
+      ok: false,
+      error: 'mock bridge does not implement Spotify import',
+      cancelled: false,
+      account: null,
+      playlists: [],
+      storageMode: '',
+    }),
+    refreshSpotifyImport: async () => ({
+      ok: false,
+      error: 'mock bridge does not implement Spotify import',
+      account: null,
+      playlists: [],
+      storageMode: '',
+    }),
+    clearSpotifyImport: async () => ({
+      ok: true,
+    }),
+    resolveSpotifyPlayback: async () => ({
+      ok: false,
+      error: TEXT.spotifyImportReadonlyTrack,
+      resolvedTracks: [],
+      unresolvedTrackIds: [],
+    }),
+    syncSpotifyLibraryToNetease: async () => ({
+      ok: true,
+      playlists: [],
+      summary: {
+        processedCount: 0,
+        createdCount: 0,
+        addedTrackCount: 0,
+        resolvedTrackCount: 0,
+        unresolvedTrackCount: 0,
+      },
+    }),
+    syncNeteaseLibraryToSpotify: async () => ({
+      ok: true,
+      summary: {
+        processedCount: 0,
+        createdCount: 0,
+        addedTrackCount: 0,
+        resolvedTrackCount: 0,
+        unresolvedTrackCount: 0,
+      },
+    }),
+    openExternalUrl: async (url) => {
+      const normalizedUrl = String(url || '').trim()
+      if (!normalizedUrl) {
+        return { ok: false, error: TEXT.spotifyOpenFailed }
+      }
+
+      try {
+        window.open(normalizedUrl, '_blank', 'noopener,noreferrer')
+      } catch {}
+
+      return { ok: true }
+    },
+    checkAppUpdate: async () => {
+      mockAppUpdateCheckCount += 1
+      window.__mockAppUpdateCheckCount = mockAppUpdateCheckCount
+      return buildMockAppUpdateResult()
+    },
+    installAppUpdate: async () => {
+      mockAppUpdateInstallCount += 1
+      window.__mockAppUpdateInstallCount = mockAppUpdateInstallCount
+      const result = buildMockAppUpdateResult()
+      if (!result?.ok) {
+        return { ok: false, error: result?.error || TEXT.appUpdateInstallFailed }
+      }
+      if (!result.updateAvailable) {
+        return { ok: false, error: TEXT.appUpdateLatest }
+      }
+      if (!result.installSupported) {
+        return { ok: false, error: result.installMessage || TEXT.appUpdateInstallFailed }
+      }
+      return {
+        ok: true,
+        scheduled: true,
+        currentVersion: mockAppVersion,
+        latestVersion: mockLatestVersion,
+      }
+    },
     getPreferences: async () => ({
       ok: true,
       preferences: {
@@ -560,6 +802,15 @@ function createMockBridge() {
         tracks: normalizedLimit > 0 ? sourceTracks.slice(0, normalizedLimit) : sourceTracks.slice(),
       }
     },
+    getOwnedPlaylistSummary: async (playlistId) => {
+      const normalizedPlaylistId = Number(playlistId || 0)
+      const playlist = basePlaylists.find((item) => Number(item.id || 0) === normalizedPlaylistId) || null
+      if (!playlist) {
+        return { ok: false, error: TEXT.updateOwnedPlaylistFailed }
+      }
+
+      return { ok: true, playlist: buildMockPlaylistSummary(playlist) }
+    },
     recordTrackPlay: async (_userId, trackId) => {
       const key = String(Number(trackId || 0))
       localPlayCounts[key] = Number(localPlayCounts[key] || 0) + 1
@@ -613,6 +864,64 @@ function createMockBridge() {
 
       updateMockStats()
       return { ok: true, playlist: nextPlaylist }
+    },
+    createOwnedPlaylist: async (payload = {}) => {
+      const normalizedName = String(payload?.name || '').trim()
+      if (!normalizedName) {
+        return { ok: false, error: TEXT.createOwnedPlaylistFailed }
+      }
+
+      const nextPlaylist = buildMockPlaylist(
+        nextMockPlaylistId,
+        normalizedName,
+        0,
+        account.userId,
+        false,
+        '',
+        {
+          tracks: [],
+          description: String(payload?.description || ''),
+          coverUrl: payload?.coverFile?.previewUrl || buildMockCover(nextMockPlaylistId),
+        }
+      )
+      nextMockPlaylistId += 1
+      basePlaylists.unshift(nextPlaylist)
+      updateMockStats()
+      return { ok: true, playlist: nextPlaylist }
+    },
+    updateOwnedPlaylist: async (payload = {}) => {
+      const playlistId = Number(payload?.playlist?.id || payload?.id || 0)
+      const existingIndex = basePlaylists.findIndex((item) => Number(item.id || 0) === playlistId)
+      if (existingIndex < 0) {
+        return { ok: false, error: TEXT.updateOwnedPlaylistFailed }
+      }
+
+      const existingPlaylist = basePlaylists[existingIndex]
+      const nextName = String(payload?.name || existingPlaylist.name || '').trim()
+      if (!nextName) {
+        return { ok: false, error: TEXT.updateOwnedPlaylistFailed }
+      }
+
+      const nextPlaylist = {
+        ...existingPlaylist,
+        name: nextName,
+        description: String(payload?.description ?? existingPlaylist.description ?? ''),
+        coverUrl: payload?.coverFile?.previewUrl || existingPlaylist.coverUrl,
+      }
+      basePlaylists[existingIndex] = nextPlaylist
+      updateMockStats()
+      return { ok: true, playlist: buildMockPlaylistSummary(nextPlaylist) }
+    },
+    deleteOwnedPlaylist: async (payload = {}) => {
+      const playlistId = Number(payload?.playlist?.id || payload?.id || 0)
+      const existingIndex = basePlaylists.findIndex((item) => Number(item.id || 0) === playlistId)
+      if (existingIndex < 0) {
+        return { ok: false, error: TEXT.deleteOwnedPlaylistFailed }
+      }
+
+      basePlaylists.splice(existingIndex, 1)
+      updateMockStats()
+      return { ok: true, playlistId }
     },
     addTrackToPlaylist: async () => ({ ok: true }),
     removeTrackFromPlaylist: async () => ({ ok: true }),
@@ -792,11 +1101,12 @@ function buildMockPlaylist(id, name, trackCount, creatorId, subscribed, trackErr
     sourcePlaylistId: Number(options.sourcePlaylistId || id),
     name,
     trackCount,
-    coverUrl: buildMockCover(id),
+    coverUrl: options.coverUrl || buildMockCover(id),
     specialType: Number(options.specialType || 0),
     subscribed,
     creatorId,
     creatorName: options.creatorName || '',
+    description: options.description || '',
     playCount: Number(options.playCount || 0),
     copywriter: options.copywriter || '',
     exploreSourceLabel: options.exploreSourceLabel || '',
@@ -1089,15 +1399,47 @@ function normalizePlaylistOrderIds(input) {
 function normalizePlaylistOrderByTab(input = {}) {
   return {
     owned: normalizePlaylistOrderIds(input?.owned),
+    spotify: normalizePlaylistOrderIds(input?.spotify),
     subscribed: normalizePlaylistOrderIds(input?.subscribed),
     explore: normalizePlaylistOrderIds(input?.explore),
     artists: normalizePlaylistOrderIds(input?.artists),
   }
 }
 
+function normalizePlaylistWallLayout(input = {}) {
+  const rawColumns = Math.trunc(Number(input?.columns || 0))
+  const rawColumnPlaylistIds = Array.isArray(input?.columnPlaylistIds)
+    ? input.columnPlaylistIds
+    : []
+  const normalizedColumnPlaylistIds = rawColumnPlaylistIds
+    .map((columnPlaylistIds) => normalizePlaylistOrderIds(columnPlaylistIds))
+    .slice(0, WALL_MAX_COLUMNS)
+  const columns = clamp(
+    rawColumns > 0 ? rawColumns : normalizedColumnPlaylistIds.length,
+    0,
+    WALL_MAX_COLUMNS
+  )
+
+  return {
+    columns,
+    columnPlaylistIds: Array.from({ length: columns }, (_, index) => normalizedColumnPlaylistIds[index] || []),
+  }
+}
+
+function normalizePlaylistWallLayoutByTab(input = {}) {
+  return {
+    owned: normalizePlaylistWallLayout(input?.owned),
+    spotify: normalizePlaylistWallLayout(input?.spotify),
+    subscribed: normalizePlaylistWallLayout(input?.subscribed),
+    explore: normalizePlaylistWallLayout(input?.explore),
+    artists: normalizePlaylistWallLayout(input?.artists),
+  }
+}
+
 function normalizeUiSessionState(input = {}) {
   return {
     playlistOrderByTab: normalizePlaylistOrderByTab(input?.playlistOrderByTab),
+    playlistWallLayoutByTab: normalizePlaylistWallLayoutByTab(input?.playlistWallLayoutByTab),
     collapsedPlaylistIds: normalizeCollapsedPlaylistIds(input?.collapsedPlaylistIds),
   }
 }
@@ -1249,29 +1591,58 @@ function cacheRefs() {
   refs.authQrImage = document.getElementById('auth-qr-image')
   refs.authStage = document.getElementById('auth-stage')
   refs.authRefreshBtn = document.getElementById('auth-refresh-btn')
+  refs.authSpotifyAutoLoginBtn = document.getElementById('auth-spotify-auto-login-btn')
   refs.app = document.getElementById('app')
   refs.accountLine = document.getElementById('account-line')
   refs.tabOwned = document.getElementById('tab-owned')
+  refs.tabSpotify = document.getElementById('tab-spotify')
   refs.tabSubscribed = document.getElementById('tab-subscribed')
   refs.tabExplore = document.getElementById('tab-explore')
   refs.tabArtists = document.getElementById('tab-artists')
   refs.tabOwnedCount = document.getElementById('tab-owned-count')
+  refs.tabSpotifyCount = document.getElementById('tab-spotify-count')
   refs.tabSubscribedCount = document.getElementById('tab-subscribed-count')
   refs.tabExploreCount = document.getElementById('tab-explore-count')
   refs.tabArtistsCount = document.getElementById('tab-artists-count')
   refs.searchInput = document.getElementById('search-input')
+  refs.createOwnedPlaylistBtn = document.getElementById('create-owned-playlist-btn')
   refs.themeToggleBtn = document.getElementById('theme-toggle-btn')
   refs.locateCurrentBtn = document.getElementById('locate-current-btn')
   refs.settingsBtn = document.getElementById('settings-btn')
   refs.settingsPanel = document.getElementById('settings-panel')
   refs.settingsBackdrop = document.getElementById('settings-backdrop')
+  refs.playlistEditorBackdrop = document.getElementById('playlist-editor-backdrop')
+  refs.playlistEditor = document.getElementById('playlist-editor')
+  refs.playlistEditorForm = document.getElementById('playlist-editor-form')
+  refs.playlistEditorKicker = document.getElementById('playlist-editor-kicker')
+  refs.playlistEditorTitle = document.getElementById('playlist-editor-title')
+  refs.playlistEditorCloseBtn = document.getElementById('playlist-editor-close-btn')
+  refs.playlistEditorName = document.getElementById('playlist-editor-name')
+  refs.playlistEditorDescription = document.getElementById('playlist-editor-description')
+  refs.playlistEditorCoverInput = document.getElementById('playlist-editor-cover-input')
+  refs.playlistEditorCoverPreview = document.getElementById('playlist-editor-cover-preview')
+  refs.playlistEditorCoverEmpty = document.getElementById('playlist-editor-cover-empty')
+  refs.playlistEditorCoverResetBtn = document.getElementById('playlist-editor-cover-reset-btn')
+  refs.playlistEditorDeleteBtn = document.getElementById('playlist-editor-delete-btn')
+  refs.playlistEditorCancelBtn = document.getElementById('playlist-editor-cancel-btn')
+  refs.playlistEditorSaveBtn = document.getElementById('playlist-editor-save-btn')
   refs.uiScaleRange = document.getElementById('ui-scale-range')
   refs.uiScaleValue = document.getElementById('ui-scale-value')
   refs.playlistRecommendationsToggle = document.getElementById('playlist-recommendations-toggle')
   refs.likedPlaylistDisplayModeSelect = document.getElementById('liked-playlist-display-mode-select')
   refs.defaultAudioQualitySelect = document.getElementById('default-audio-quality-select')
   refs.autoAdjustAudioQualityToggle = document.getElementById('auto-adjust-audio-quality-toggle')
+  refs.settingsUpdateHint = document.getElementById('settings-update-hint')
+  refs.settingsUpdateStatus = document.getElementById('settings-update-status')
+  refs.settingsUpdateCheckBtn = document.getElementById('settings-update-check-btn')
+  refs.settingsUpdateInstallBtn = document.getElementById('settings-update-install-btn')
   refs.settingsLogoutBtn = document.getElementById('settings-logout-btn')
+  refs.settingsSpotifyAutoLoginBtn = document.getElementById('settings-spotify-auto-login-btn')
+  refs.settingsSpotifyRefreshBtn = document.getElementById('settings-spotify-refresh-btn')
+  refs.settingsSpotifyClearBtn = document.getElementById('settings-spotify-clear-btn')
+  refs.settingsSpotifyStatus = document.getElementById('settings-spotify-status')
+  refs.settingsSpotifySyncToNeteaseBtn = document.getElementById('settings-spotify-sync-to-netease-btn')
+  refs.settingsSpotifySyncToSpotifyBtn = document.getElementById('settings-spotify-sync-to-spotify-btn')
   refs.contextMenu = document.getElementById('context-menu')
   refs.contextRemoveTrackBtn = document.getElementById('context-remove-track-btn')
   refs.albumHoverPreview = document.getElementById('album-hover-preview')
@@ -1298,14 +1669,31 @@ function cacheRefs() {
   refs.totalTime = document.getElementById('player-time-total')
   refs.volumeRange = document.getElementById('volume-range')
   refs.toastWrap = document.getElementById('toast-wrap')
+  syncSpotifyImportActionLabels()
+}
+
+function syncSpotifyImportActionLabels() {
+  if (refs.authSpotifyAutoLoginBtn) {
+    refs.authSpotifyAutoLoginBtn.textContent = '登录 Spotify（应用内登录）'
+  }
+
+  if (refs.settingsSpotifyAutoLoginBtn) {
+    refs.settingsSpotifyAutoLoginBtn.textContent = '登录 Spotify（应用内登录）'
+  }
 }
 
 function bindEvents() {
   refs.authRefreshBtn.addEventListener('click', () => {
     void startQrLoginFlow()
   })
+  refs.authSpotifyAutoLoginBtn.addEventListener('click', () => {
+    void handleAuthSpotifyAutoLogin()
+  })
   refs.tabOwned.addEventListener('click', () => {
     void setActiveTab('owned')
+  })
+  refs.tabSpotify.addEventListener('click', () => {
+    void setActiveTab('spotify')
   })
   refs.tabSubscribed.addEventListener('click', () => {
     void setActiveTab('subscribed')
@@ -1316,18 +1704,56 @@ function bindEvents() {
   refs.tabArtists.addEventListener('click', () => {
     void setActiveTab('artists')
   })
+  refs.createOwnedPlaylistBtn.addEventListener('click', () => {
+    openPlaylistEditorForCreate()
+  })
   refs.themeToggleBtn.addEventListener('click', toggleTheme)
   refs.locateCurrentBtn.addEventListener('click', locateCurrentTrack)
   refs.settingsBtn.addEventListener('click', toggleSettingsPanel)
   refs.settingsBackdrop.addEventListener('click', closeSettingsPanel)
+  refs.playlistEditorBackdrop.addEventListener('click', closePlaylistEditor)
+  refs.playlistEditorCloseBtn.addEventListener('click', closePlaylistEditor)
+  refs.playlistEditorCancelBtn.addEventListener('click', closePlaylistEditor)
+  refs.playlistEditorForm.addEventListener('submit', (event) => {
+    event.preventDefault()
+    void submitPlaylistEditor()
+  })
+  refs.playlistEditorCoverInput.addEventListener('change', () => {
+    void handlePlaylistEditorCoverChange()
+  })
+  refs.playlistEditorCoverResetBtn.addEventListener('click', resetPlaylistEditorCoverSelection)
+  refs.playlistEditorDeleteBtn.addEventListener('click', () => {
+    void deleteOwnedPlaylistFromEditor()
+  })
   refs.uiScaleRange.addEventListener('input', handleUiScaleInput)
   refs.uiScaleRange.addEventListener('change', handleUiScaleCommit)
   refs.playlistRecommendationsToggle.addEventListener('change', handleSettingsChange)
   refs.likedPlaylistDisplayModeSelect.addEventListener('change', handleSettingsChange)
   refs.defaultAudioQualitySelect.addEventListener('change', handleSettingsChange)
   refs.autoAdjustAudioQualityToggle.addEventListener('change', handleSettingsChange)
+  refs.settingsUpdateCheckBtn.addEventListener('click', () => {
+    void refreshAppUpdateStatus({ force: true })
+  })
+  refs.settingsUpdateInstallBtn.addEventListener('click', () => {
+    void installLatestAppUpdate()
+  })
   refs.settingsLogoutBtn.addEventListener('click', () => {
     void handleLogout()
+  })
+  refs.settingsSpotifyAutoLoginBtn.addEventListener('click', () => {
+    void handleSettingsSpotifyAutoLogin()
+  })
+  refs.settingsSpotifyRefreshBtn.addEventListener('click', () => {
+    void refreshSpotifyImportLibrary()
+  })
+  refs.settingsSpotifyClearBtn.addEventListener('click', () => {
+    void clearSpotifyImportConnection()
+  })
+  refs.settingsSpotifySyncToNeteaseBtn.addEventListener('click', () => {
+    void handleSpotifySyncToNetease()
+  })
+  refs.settingsSpotifySyncToSpotifyBtn.addEventListener('click', () => {
+    void handleNeteaseSyncToSpotify()
   })
   refs.searchInput.addEventListener('input', (event) => {
     state.search = event.target.value
@@ -1440,6 +1866,537 @@ function wireBridge() {
   }
 }
 
+function setSpotifyImportBusy(busy) {
+  state.spotifyImport.busy = Boolean(busy)
+  if (refs.authSpotifyAutoLoginBtn) {
+    refs.authSpotifyAutoLoginBtn.disabled = Boolean(busy)
+  }
+  if (refs.settingsSpotifyAutoLoginBtn) {
+    refs.settingsSpotifyAutoLoginBtn.disabled = Boolean(busy)
+  }
+  renderSettings()
+}
+
+function setSpotifySyncBusy(busy) {
+  state.spotifySync.busy = Boolean(busy)
+  renderSettings()
+}
+
+async function fetchSpotifyImportState() {
+  if (!appBridge || typeof appBridge.getSpotifyImportState !== 'function') {
+    state.spotifyImport = {
+      ...state.spotifyImport,
+      connected: false,
+      account: null,
+      storageMode: '',
+      updatedAt: '',
+      busy: false,
+    }
+    renderSettings()
+    return state.spotifyImport
+  }
+
+  const result = await appBridge.getSpotifyImportState()
+  if (!result?.ok) {
+    return state.spotifyImport
+  }
+
+  state.spotifyImport = {
+    ...state.spotifyImport,
+    connected: Boolean(result.connected),
+    account: result.account || null,
+    storageMode: result.storageMode || '',
+    updatedAt: result.updatedAt || '',
+    busy: state.spotifyImport.busy,
+  }
+  renderSettings()
+  return state.spotifyImport
+}
+
+function formatAppVersion(version) {
+  const normalized = String(version || '').trim().replace(/^[vV]/, '')
+  return normalized ? `v${normalized}` : '未知版本'
+}
+
+function formatAppUpdateDate(value) {
+  if (!value) {
+    return ''
+  }
+
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) {
+    return ''
+  }
+
+  return parsed.toLocaleDateString('zh-CN', {
+    year: 'numeric',
+    month: 'numeric',
+    day: 'numeric',
+  })
+}
+
+function setAppUpdateBusy(busy, action = '') {
+  state.appUpdate.busy = Boolean(busy)
+  state.appUpdate.action = busy ? action : ''
+  renderSettings()
+}
+
+function applyAppUpdateResult(result, errorStage = '') {
+  state.appUpdate.checked = true
+  state.appUpdate.currentVersion = String(
+    result?.currentVersion || state.appUpdate.currentVersion || ''
+  ).trim()
+  state.appUpdate.latestVersion = String(result?.latestVersion || '').trim()
+  state.appUpdate.releaseName = String(result?.releaseName || '').trim()
+  state.appUpdate.releaseUrl = String(result?.releaseUrl || '').trim()
+  state.appUpdate.publishedAt = String(result?.publishedAt || '').trim()
+  state.appUpdate.updateAvailable = Boolean(result?.updateAvailable)
+  state.appUpdate.installSupported = Boolean(result?.installSupported)
+  state.appUpdate.installMessage = String(result?.installMessage || '').trim()
+  state.appUpdate.error = result?.ok ? '' : String(result?.error || '').trim()
+  state.appUpdate.errorStage = state.appUpdate.error ? errorStage : ''
+  state.appUpdate.busy = false
+  state.appUpdate.action = ''
+  renderSettings()
+}
+
+function getAppUpdateStatusText() {
+  if (state.appUpdate.busy && state.appUpdate.action === 'install') {
+    const targetVersion = state.appUpdate.latestVersion
+      ? ` ${formatAppVersion(state.appUpdate.latestVersion)}`
+      : ''
+    return `正在下载${targetVersion} 更新包...`
+  }
+
+  if (state.appUpdate.busy) {
+    return TEXT.appUpdateChecking
+  }
+
+  if (state.appUpdate.error) {
+    const prefix = state.appUpdate.errorStage === 'install'
+      ? TEXT.appUpdateInstallFailed
+      : TEXT.appUpdateCheckFailed
+    return `${prefix}：${state.appUpdate.error}`
+  }
+
+  if (state.appUpdate.updateAvailable) {
+    const dateLabel = formatAppUpdateDate(state.appUpdate.publishedAt)
+    return dateLabel
+      ? `${TEXT.appUpdateAvailable} ${formatAppVersion(state.appUpdate.latestVersion)} · 发布于 ${dateLabel}`
+      : `${TEXT.appUpdateAvailable} ${formatAppVersion(state.appUpdate.latestVersion)}`
+  }
+
+  if (state.appUpdate.checked) {
+    return `${TEXT.appUpdateLatest} · 当前 ${formatAppVersion(state.appUpdate.currentVersion)}`
+  }
+
+  return `当前版本 ${formatAppVersion(state.appUpdate.currentVersion)}`
+}
+
+function getAppUpdateHintText() {
+  if (state.appUpdate.busy && state.appUpdate.action === 'install') {
+    return '更新包下载完成后，会自动关闭应用、替换当前目录并重新打开。'
+  }
+
+  if (state.appUpdate.busy) {
+    return '正在访问 GitHub Releases 检查最新发布。'
+  }
+
+  if (state.appUpdate.updateAvailable && state.appUpdate.installMessage) {
+    return state.appUpdate.installMessage
+  }
+
+  if (state.appUpdate.updateAvailable) {
+    return '一键更新会覆盖当前便携版目录，登录状态和偏好设置仍保存在 Electron 的 userData 目录。'
+  }
+
+  if (state.appUpdate.installMessage) {
+    return state.appUpdate.installMessage
+  }
+
+  if (state.appUpdate.error) {
+    return '这不会影响当前使用，可以稍后重试。'
+  }
+
+  return '启动后会自动检查 GitHub Releases；发现新版本后，可以直接一键下载并重启更新。'
+}
+
+async function refreshAppUpdateStatus({ force = false, silent = false } = {}) {
+  if (state.appUpdate.busy) {
+    return false
+  }
+
+  if (!appBridge || typeof appBridge.checkAppUpdate !== 'function') {
+    applyAppUpdateResult({
+      ok: false,
+      error: '当前环境不支持更新检查。',
+      currentVersion: state.appUpdate.currentVersion,
+      latestVersion: '',
+      releaseName: '',
+      releaseUrl: '',
+      publishedAt: '',
+      updateAvailable: false,
+      installSupported: false,
+      installMessage: '',
+    }, 'check')
+    if (!silent) {
+      showToast('当前环境不支持更新检查。', 'error')
+    }
+    return false
+  }
+
+  setAppUpdateBusy(true, 'check')
+
+  let result = null
+  try {
+    result = await appBridge.checkAppUpdate({ force })
+  } catch (error) {
+    result = {
+      ok: false,
+      error: error?.message || String(error),
+      currentVersion: state.appUpdate.currentVersion,
+      latestVersion: '',
+      releaseName: '',
+      releaseUrl: '',
+      publishedAt: '',
+      updateAvailable: false,
+      installSupported: false,
+      installMessage: '',
+    }
+  }
+
+  applyAppUpdateResult(result, 'check')
+
+  if (!silent) {
+    if (!result?.ok) {
+      showToast(result?.error || TEXT.appUpdateCheckFailed, 'error')
+    } else if (result.updateAvailable) {
+      showToast(`${TEXT.appUpdateAvailable} ${formatAppVersion(result.latestVersion)}`)
+    } else {
+      showToast(`${TEXT.appUpdateLatest}（${formatAppVersion(result.currentVersion)}）`)
+    }
+  }
+
+  return Boolean(result?.ok)
+}
+
+async function installLatestAppUpdate() {
+  if (state.appUpdate.busy) {
+    return false
+  }
+
+  if (!state.appUpdate.updateAvailable) {
+    const checked = await refreshAppUpdateStatus({ force: true, silent: true })
+    if (!checked || !state.appUpdate.updateAvailable) {
+      showToast(TEXT.appUpdateLatest)
+      return false
+    }
+  }
+
+  if (!appBridge || typeof appBridge.installAppUpdate !== 'function') {
+    showToast(TEXT.appUpdateInstallFailed, 'error')
+    return false
+  }
+
+  setAppUpdateBusy(true, 'install')
+
+  let result = null
+  try {
+    result = await appBridge.installAppUpdate()
+  } catch (error) {
+    result = {
+      ok: false,
+      error: error?.message || String(error),
+    }
+  }
+
+  if (!result?.ok) {
+    state.appUpdate.busy = false
+    state.appUpdate.action = ''
+    state.appUpdate.error = String(result?.error || TEXT.appUpdateInstallFailed)
+    state.appUpdate.errorStage = 'install'
+    renderSettings()
+    showToast(state.appUpdate.error, 'error')
+    return false
+  }
+
+  showToast(TEXT.appUpdateRestarting)
+  return true
+}
+
+function replaceImportedPlatformPlaylists(sourcePlatform, playlists) {
+  const normalizedSourcePlatform = String(sourcePlatform || '').trim()
+  const nextImportedPlaylists = (playlists || []).map(normalizePlaylist)
+  if (normalizedSourcePlatform === 'spotify') {
+    setSpotifyPlaylists(sortWallPlaylists(nextImportedPlaylists))
+  } else {
+    const nextPlaylists = [
+      ...state.playlists.filter((playlist) => getPlaylistSourcePlatform(playlist) !== normalizedSourcePlatform),
+      ...nextImportedPlaylists,
+    ]
+    setPlaylists(sortWallPlaylists(nextPlaylists))
+  }
+
+  if (
+    state.activeTab === 'owned'
+    && !getOwnedPlaylists().length
+    && !getSubscribedPlaylists().length
+    && getSpotifyPlaylists().length
+  ) {
+    state.activeTab = 'spotify'
+  } else if (state.activeTab === 'owned' && !getOwnedPlaylists().length && getSubscribedPlaylists().length) {
+    state.activeTab = 'subscribed'
+  }
+  if (!(state.queuePlaylistId === null && state.currentTrackId === null)) {
+    syncQueueWithPlaylists()
+  }
+  renderTabs()
+  renderHeader()
+  renderPlayer()
+  applyFilters({ syncAll: true })
+}
+
+async function applySpotifyImportResult(result, { replaceApp = false } = {}) {
+  if (!result?.ok) {
+    return false
+  }
+
+  if (replaceApp) {
+    resetAppState()
+    state.neteaseAuthenticated = false
+  }
+
+  await fetchSpotifyImportState()
+
+  if (!state.account || !state.neteaseAuthenticated) {
+    state.account = result.account || {
+      userId: 0,
+      nickname: 'Spotify 导入',
+      avatarUrl: '',
+      sourcePlatform: 'spotify',
+      spotifyUserId: '',
+    }
+  }
+
+  replaceImportedPlatformPlaylists('spotify', result.playlists || [])
+
+  if (refs.app.classList.contains('hidden')) {
+    await revealApp()
+  }
+
+  if (result.storageMode === 'plain-text-fallback') {
+    showToast(TEXT.spotifyImportPlaintextWarning, 'error')
+  }
+
+  return true
+}
+
+async function startSpotifyImportLogin({ replaceApp = false, silent = false } = {}) {
+  if (!appBridge || typeof appBridge.startSpotifyImportLogin !== 'function') {
+    showToast(TEXT.spotifyImportConnectFailed, 'error')
+    return false
+  }
+
+  setSpotifyImportBusy(true)
+  if (!silent) {
+    showToast(TEXT.spotifyImportLoginWindowOpened)
+  }
+
+  const result = await appBridge.startSpotifyImportLogin()
+  setSpotifyImportBusy(false)
+
+  if (!result?.ok) {
+    if (result?.cancelled) {
+      return false
+    }
+
+    if (replaceApp) {
+      showAuthScreen(`${TEXT.spotifyImportConnectFailed}${result?.error || TEXT.initFailed}`)
+    }
+    showToast(`${TEXT.spotifyImportConnectFailed}${result?.error || TEXT.initFailed}`, 'error')
+    return false
+  }
+
+  const applied = await applySpotifyImportResult(result, { replaceApp })
+  if (applied && !silent) {
+    showToast(TEXT.spotifyImportConnected)
+  }
+
+  return applied
+}
+
+async function refreshSpotifyImportLibrary({ replaceApp = false, silent = false } = {}) {
+  const spotifyImportState = await fetchSpotifyImportState()
+  if (!spotifyImportState.connected) {
+    return false
+  }
+
+  if (!appBridge || typeof appBridge.refreshSpotifyImport !== 'function') {
+    return false
+  }
+
+  setSpotifyImportBusy(true)
+  if (replaceApp) {
+    showLoadingScreen(TEXT.spotifyImportLoading)
+  }
+
+  const result = await appBridge.refreshSpotifyImport()
+  setSpotifyImportBusy(false)
+
+  if (!result?.ok) {
+    if (!silent) {
+      showToast(`${TEXT.spotifyImportConnectFailed}${result?.error || TEXT.initFailed}`, 'error')
+    }
+    return false
+  }
+
+  const applied = await applySpotifyImportResult(result, { replaceApp })
+  if (applied && !silent) {
+    showToast(TEXT.spotifyImportConnected)
+  }
+
+  return applied
+}
+
+async function clearSpotifyImportConnection({ silent = false } = {}) {
+  if (!appBridge || typeof appBridge.clearSpotifyImport !== 'function') {
+    return
+  }
+
+  setSpotifyImportBusy(true)
+  const result = await appBridge.clearSpotifyImport()
+  setSpotifyImportBusy(false)
+
+  if (!result?.ok) {
+    showToast(result?.error || TEXT.spotifyImportConnectFailed, 'error')
+    return
+  }
+
+  state.spotifyImport = {
+    ...state.spotifyImport,
+    connected: false,
+    account: null,
+    storageMode: '',
+    updatedAt: '',
+    busy: false,
+  }
+
+  setSpotifyPlaylists([])
+  if (state.activeTab === 'spotify') {
+    state.activeTab = getOwnedPlaylists().length
+      ? 'owned'
+      : getSubscribedPlaylists().length
+        ? 'subscribed'
+        : 'owned'
+  }
+  if (!(state.queuePlaylistId === null && state.currentTrackId === null)) {
+    syncQueueWithPlaylists()
+  }
+  renderTabs()
+  renderHeader()
+  renderPlayer()
+  applyFilters({ syncAll: true })
+  renderSettings()
+
+  if (!state.neteaseAuthenticated && !state.playlists.length && !state.spotifyPlaylists.length) {
+    resetAppState()
+    showAuthScreen()
+    await startQrLoginFlow()
+    return
+  }
+
+  if (!silent) {
+    showToast(TEXT.spotifyImportCleared)
+  }
+}
+
+async function handleAuthSpotifyAutoLogin() {
+  await startSpotifyImportLogin({
+    replaceApp: true,
+  })
+}
+
+async function handleSettingsSpotifyAutoLogin() {
+  await startSpotifyImportLogin()
+}
+
+function applySyncedNeteasePlaylists(playlists) {
+  let nextPlaylists = state.playlists.slice()
+
+  for (const playlist of (playlists || []).map(normalizePlaylist)) {
+    nextPlaylists = upsertPlaylistIntoLibrary(nextPlaylists, playlist)
+  }
+
+  setPlaylists(sortWallPlaylists(nextPlaylists))
+  if (!(state.queuePlaylistId === null && state.currentTrackId === null)) {
+    syncQueueWithPlaylists()
+  }
+  renderTabs()
+  renderHeader()
+  renderPlayer()
+  applyFilters({ syncAll: true })
+}
+
+async function handleSpotifySyncToNetease() {
+  if (!canUseNeteaseFeatures() || !appBridge || typeof appBridge.syncSpotifyLibraryToNetease !== 'function') {
+    showToast(TEXT.exploreRequiresNetease, 'error')
+    return
+  }
+
+  setSpotifySyncBusy(true)
+  let result = null
+
+  try {
+    result = await appBridge.syncSpotifyLibraryToNetease(state.spotifyPlaylists)
+  } finally {
+    setSpotifySyncBusy(false)
+  }
+
+  if (!result?.ok) {
+    showToast(result?.error || TEXT.spotifySyncFailed, 'error')
+    return
+  }
+
+  applySyncedNeteasePlaylists(result.playlists || [])
+  const summary = result.summary || {}
+  const summaryText = [
+    summary.createdCount ? `新建 ${summary.createdCount} 张` : '',
+    summary.addedTrackCount ? `新增 ${summary.addedTrackCount} 首` : '',
+    summary.unresolvedTrackCount ? `未匹配 ${summary.unresolvedTrackCount} 首` : '',
+  ].filter(Boolean).join('，')
+  showToast(summaryText ? `${TEXT.spotifySyncToNeteaseDone} · ${summaryText}` : TEXT.spotifySyncToNeteaseDone)
+}
+
+async function handleNeteaseSyncToSpotify() {
+  if (!canUseNeteaseFeatures() || !appBridge || typeof appBridge.syncNeteaseLibraryToSpotify !== 'function') {
+    showToast(TEXT.exploreRequiresNetease, 'error')
+    return
+  }
+
+  setSpotifySyncBusy(true)
+  let result = null
+
+  try {
+    result = await appBridge.syncNeteaseLibraryToSpotify(state.playlists)
+  } finally {
+    setSpotifySyncBusy(false)
+  }
+
+  if (!result?.ok) {
+    showToast(result?.error || TEXT.spotifySyncFailed, 'error')
+    return
+  }
+
+  await refreshSpotifyImportLibrary({ silent: true })
+  const summary = result.summary || {}
+  const summaryText = [
+    summary.createdCount ? `新建 ${summary.createdCount} 张` : '',
+    summary.addedTrackCount ? `新增 ${summary.addedTrackCount} 首` : '',
+    summary.unresolvedTrackCount ? `未匹配 ${summary.unresolvedTrackCount} 首` : '',
+  ].filter(Boolean).join('，')
+  showToast(summaryText ? `${TEXT.spotifySyncToSpotifyDone} · ${summaryText}` : TEXT.spotifySyncToSpotifyDone)
+}
+
 async function init() {
   showLoadingScreen()
   const result = await appBridge.init()
@@ -1452,11 +2409,17 @@ async function init() {
 
   if (result.needsLogin) {
     resetAppState()
+    state.neteaseAuthenticated = false
+    const restoredSpotify = await refreshSpotifyImportLibrary({ replaceApp: true, silent: true })
+    if (restoredSpotify) {
+      return
+    }
     showAuthScreen()
     await startQrLoginFlow()
     return
   }
 
+  state.neteaseAuthenticated = true
   state.account = result.account || null
   hydratePlaybackStats(result.playback)
   setPlaylists(sortWallPlaylists((result.playlists || []).map(normalizePlaylist)))
@@ -1474,6 +2437,8 @@ async function init() {
   if (!state.playlists.length) {
     showToast(TEXT.noPlaylists, 'error')
   }
+
+  await refreshSpotifyImportLibrary({ silent: true })
 }
 
 function renderExploreLoadingState() {
@@ -1486,6 +2451,10 @@ function renderExploreLoadingState() {
 }
 
 function silentlyPreloadExplorePlaylists() {
+  if (!canUseNeteaseFeatures()) {
+    return
+  }
+
   if (state.activeTab === 'explore') {
     return
   }
@@ -1507,6 +2476,10 @@ function silentlyPreloadExplorePlaylists() {
 }
 
 function silentlyPreloadArtistPlaylists() {
+  if (!canUseNeteaseFeatures()) {
+    return
+  }
+
   if (!appBridge || typeof appBridge.getArtistSongs !== 'function') {
     return
   }
@@ -1692,14 +2665,17 @@ function resetAppState() {
   stopAuthPolling()
   closeContextMenu()
   hideAlbumHoverPreview()
+  closePlaylistEditor()
   dismissPlaylistUndoNotice()
   cancelWallRenderWork()
   state.account = null
   state.playlists = []
+  state.spotifyPlaylists = []
   state.explorePlaylists = []
   state.artistPlaylists = []
   state.playlistMap = new Map()
   state.recommendations = new Map()
+  state.activeTab = 'owned'
   state.visiblePlaylists = []
   state.search = ''
   state.exploreLoaded = false
@@ -1748,7 +2724,11 @@ function resetAppState() {
   renderRuntime.playlistDragState = null
   renderRuntime.playlistDragSourceCard = null
   renderRuntime.playlistDragIndicator = null
+  renderRuntime.playlistEditorState = null
   refs.searchInput.value = ''
+  refs.playlistEditorForm.reset()
+  refs.playlistEditorBackdrop.classList.add('hidden')
+  refs.playlistEditor.classList.add('hidden')
   refs.playlistUndoLayer.replaceChildren()
   refs.wallColumns.replaceChildren()
   refs.wallEmpty.classList.add('hidden')
@@ -1757,6 +2737,7 @@ function resetAppState() {
   refs.audio.load()
   state.currentPlaybackRequestedQuality = ''
   state.currentPlaybackResolvedLevel = ''
+  state.spotifySync.busy = false
   renderPlayer()
 }
 
@@ -1770,7 +2751,12 @@ async function handleLogout() {
   }
 
   resetAppState()
+  state.neteaseAuthenticated = false
   showToast(TEXT.logoutDone)
+  const restoredSpotify = await refreshSpotifyImportLibrary({ replaceApp: true, silent: true })
+  if (restoredSpotify) {
+    return
+  }
   showAuthScreen()
   await startQrLoginFlow()
 }
@@ -2226,6 +3212,12 @@ function normalizePlaylistTrack(track, index = 0) {
 
   return {
     id: Number(track?.id || 0),
+    sourceTrackId: String(track?.sourceTrackId || '').trim(),
+    sourcePlatform: String(track?.sourcePlatform || '').trim(),
+    platformTrackUri: String(track?.platformTrackUri || '').trim(),
+    playbackTrackId: Number(track?.playbackTrackId || 0),
+    playbackSourcePlatform: String(track?.playbackSourcePlatform || '').trim(),
+    resolvedTrackId: Number(track?.resolvedTrackId || 0),
     position: Number(track?.position || index + 1),
     name: track?.name || '\u672a\u547d\u540d',
     artists,
@@ -2234,6 +3226,7 @@ function normalizePlaylistTrack(track, index = 0) {
     albumId: Number(track?.albumId || 0),
     albumCoverUrl: track?.albumCoverUrl || '',
     durationMs: Number(track?.durationMs || 0),
+    externalUrl: String(track?.externalUrl || '').trim(),
     searchText: normalizeQuery([
       track?.name || '',
       track?.album || '',
@@ -2260,6 +3253,9 @@ function normalizePlaylist(playlist) {
   return {
     id: isExplore ? -Math.abs(sourcePlaylistId) : Number(playlist.id),
     sourcePlaylistId,
+    sourcePlatform: String(playlist.sourcePlatform || '').trim(),
+    platformPlaylistId: String(playlist.platformPlaylistId || '').trim(),
+    platformOwnerId: String(playlist.platformOwnerId || '').trim(),
     name: playlist.name || '\u672a\u547d\u540d\u6b4c\u5355',
     trackCount: Number(playlist.trackCount || tracks.length || 0),
     coverUrl: playlist.coverUrl || '',
@@ -2267,10 +3263,13 @@ function normalizePlaylist(playlist) {
     specialType: Number(playlist.specialType || 0),
     creatorId: Number(playlist.creatorId || 0),
     creatorName: playlist.creatorName || '',
+    description: String(playlist.description || ''),
     subscribed: Boolean(playlist.subscribed),
     playCount: Number(playlist.playCount || 0),
     copywriter: playlist.copywriter || '',
     exploreSourceLabel: playlist.exploreSourceLabel || '',
+    externalUrl: String(playlist.externalUrl || '').trim(),
+    importReadOnly: Boolean(playlist.importReadOnly),
     isExplore,
     isArtist,
     artistKey: playlist.artistKey || '',
@@ -2320,6 +3319,7 @@ function normalizePlaylist(playlist) {
 function refreshPlaylistMap() {
   state.playlistMap = new Map([
     ...state.playlists.map((playlist) => [playlist.id, playlist]),
+    ...state.spotifyPlaylists.map((playlist) => [playlist.id, playlist]),
     ...state.explorePlaylists.map((playlist) => [playlist.id, playlist]),
     ...state.artistPlaylists.map((playlist) => [playlist.id, playlist]),
   ])
@@ -2387,6 +3387,12 @@ function setPlaylists(playlists) {
   rebuildArtistPlaylists()
   refreshPlaylistMap()
   silentlyPreloadArtistPlaylists()
+  refreshAllRecommendationTracks()
+}
+
+function setSpotifyPlaylists(playlists) {
+  state.spotifyPlaylists = playlists
+  refreshPlaylistMap()
   refreshAllRecommendationTracks()
 }
 
@@ -2488,18 +3494,28 @@ function flushPlaylistPatches() {
 function syncQueueWithPlaylists() {
   if (state.queueMode !== 'playlist' || !state.queuePlaylistId) return
   const playlist = getPlaylistById(state.queuePlaylistId)
-  if (!playlist || !playlist.tracks.length) return
+  if (!playlist) {
+    clearCurrentPlayback()
+    renderPlayer()
+    syncWallPlaybackState()
+    return
+  }
+  if (getPlaylistSourcePlatform(playlist) === 'spotify') {
+    return
+  }
+  if (!playlist.tracks.length) return
+  const queueTracks = (playlist.tracks || []).filter((track) => String(track?.sourcePlatform || '').trim() !== 'spotify')
   const currentTrackId = state.currentTrackId
-  state.queue = playlist.tracks
+  state.queue = queueTracks
   if (currentTrackId) {
-    const nextIndex = playlist.tracks.findIndex((track) => track.id === currentTrackId)
+    const nextIndex = queueTracks.findIndex((track) => track.id === currentTrackId)
     if (nextIndex >= 0) {
       state.queueIndex = nextIndex
       return
     }
   }
-  if (state.queueIndex >= playlist.tracks.length) {
-    state.queueIndex = playlist.tracks.length - 1
+  if (state.queueIndex >= queueTracks.length) {
+    state.queueIndex = queueTracks.length - 1
   }
 }
 
@@ -2517,6 +3533,10 @@ function getSubscribedPlaylists() {
     state.playlists.filter((playlist) => Number(playlist.creatorId || 0) !== accountId),
     'subscribed'
   )
+}
+
+function getSpotifyPlaylists() {
+  return applyStoredPlaylistOrder(state.spotifyPlaylists, 'spotify')
 }
 
 function getExplorePlaylists() {
@@ -2550,12 +3570,49 @@ function isExplorePlaylistSubscribing(playlist) {
   return Boolean(playlist?.isExplore && renderRuntime.subscribingPlaylistIds.has(Number(playlist.id)))
 }
 
+function getPlaylistSourcePlatform(playlist) {
+  return String(playlist?.sourcePlatform || '').trim() || 'netease'
+}
+
+function getTrackSourcePlatform(track) {
+  return String(track?.sourcePlatform || '').trim() || 'netease'
+}
+
+function isImportedReadOnlyPlaylist(playlist) {
+  return Boolean(playlist?.importReadOnly || getPlaylistSourcePlatform(playlist) !== 'netease')
+}
+
+function canOpenSpotifyPlaylist(playlist) {
+  return getPlaylistSourcePlatform(playlist) === 'spotify'
+    && Boolean(String(playlist?.externalUrl || '').trim())
+}
+
+function canOpenSpotifyTrack(track) {
+  return getTrackSourcePlatform(track) === 'spotify'
+    && Boolean(String(track?.externalUrl || '').trim())
+}
+
+function canUseNeteaseFeatures() {
+  return Boolean(state.neteaseAuthenticated)
+}
+
 function canRemoveSubscribedPlaylist(playlist) {
   return Boolean(
     playlist
     && !playlist.isExplore
     && !playlist.isArtist
     && !isOwnedPlaylist(playlist)
+    && !isImportedReadOnlyPlaylist(playlist)
+  )
+}
+
+function canEditOwnedPlaylist(playlist) {
+  return Boolean(
+    playlist
+    && !playlist.isExplore
+    && !playlist.isArtist
+    && isOwnedPlaylist(playlist)
+    && !isLikedPlaylist(playlist)
   )
 }
 
@@ -2576,6 +3633,19 @@ function buildLibraryPlaylistFromExplore(playlist, overrides = {}) {
   })
 }
 
+function shouldPreserveExistingPlaylistTracks(existingPlaylist, nextPlaylist) {
+  if (!Array.isArray(existingPlaylist?.tracks) || !existingPlaylist.tracks.length) {
+    return false
+  }
+
+  const nextTracks = Array.isArray(nextPlaylist?.tracks) ? nextPlaylist.tracks : []
+  if (nextTracks.length) {
+    return false
+  }
+
+  return Number(nextPlaylist?.trackCount || 0) > 0 || Boolean(nextPlaylist?.hydrating)
+}
+
 function upsertPlaylistIntoLibrary(playlists, playlist) {
   const nextPlaylist = normalizePlaylist({
     ...playlist,
@@ -2586,14 +3656,41 @@ function upsertPlaylistIntoLibrary(playlists, playlist) {
     return [...playlists, nextPlaylist]
   }
 
+  const existingPlaylist = playlists[existingIndex]
+  const preserveExistingTracks = shouldPreserveExistingPlaylistTracks(existingPlaylist, playlist)
+  const expectedTrackCount = Math.max(
+    Number(playlist?.trackCount || 0),
+    Number(existingPlaylist?.trackCount || 0),
+    existingPlaylist.tracks.length
+  )
+  const preservedHydrated = existingPlaylist?.hydrated !== undefined
+    ? Boolean(existingPlaylist.hydrated)
+    : existingPlaylist.tracks.length >= expectedTrackCount
+  const preservedHydrating = !preservedHydrated && (
+    Boolean(existingPlaylist?.hydrating)
+    || expectedTrackCount > existingPlaylist.tracks.length
+  )
   const nextPlaylists = playlists.slice()
-  nextPlaylists[existingIndex] = nextPlaylist
+  nextPlaylists[existingIndex] = preserveExistingTracks
+    ? normalizePlaylist({
+      ...existingPlaylist,
+      ...playlist,
+      _normalized: false,
+      tracks: existingPlaylist.tracks,
+      tracksError: playlist?.tracksError || existingPlaylist.tracksError || '',
+      hydrated: preservedHydrated,
+      hydrating: preservedHydrating,
+    })
+    : nextPlaylist
   return nextPlaylists
 }
 
 function getSourcePlaylists() {
   if (state.activeTab === 'explore') {
     return getExplorePlaylists()
+  }
+  if (state.activeTab === 'spotify') {
+    return getSpotifyPlaylists()
   }
   if (state.activeTab === 'artists') {
     return getArtistPlaylists()
@@ -2614,6 +3711,10 @@ function getPlaylistTab(playlistOrId) {
     return 'explore'
   }
 
+  if (getPlaylistSourcePlatform(playlist) === 'spotify') {
+    return 'spotify'
+  }
+
   if (playlist.isArtist) {
     return 'artists'
   }
@@ -2626,7 +3727,7 @@ function shouldPersistPlaylistOrderForTab(tab) {
 }
 
 function shouldPersistCollapsedStateForTab(tab) {
-  return tab === 'owned' || tab === 'subscribed'
+  return tab === 'owned' || tab === 'spotify' || tab === 'subscribed'
 }
 
 function getPlaylistOrderIdsForTab(tab) {
@@ -2660,6 +3761,39 @@ function setPlaylistOrderIdsForTab(tab, orderIds, { persist = true } = {}) {
   state.uiSession.playlistOrderByTab = {
     ...normalizePlaylistOrderByTab(state.uiSession.playlistOrderByTab),
     [tab]: normalizedOrderIds,
+  }
+  if (persist) {
+    saveUiSessionState()
+  }
+  return true
+}
+
+function playlistWallLayoutsEqual(left, right) {
+  const normalizedLeft = normalizePlaylistWallLayout(left)
+  const normalizedRight = normalizePlaylistWallLayout(right)
+  if (normalizedLeft.columns !== normalizedRight.columns) {
+    return false
+  }
+
+  return normalizedLeft.columnPlaylistIds.every((columnPlaylistIds, columnIndex) => {
+    return arraysEqual(columnPlaylistIds, normalizedRight.columnPlaylistIds[columnIndex] || [])
+  })
+}
+
+function getPlaylistWallLayoutForTab(tab) {
+  return normalizePlaylistWallLayout(state.uiSession?.playlistWallLayoutByTab?.[tab])
+}
+
+function setPlaylistWallLayoutForTab(tab, layout, { persist = true } = {}) {
+  const normalizedLayout = normalizePlaylistWallLayout(layout)
+  const currentLayout = getPlaylistWallLayoutForTab(tab)
+  if (playlistWallLayoutsEqual(currentLayout, normalizedLayout)) {
+    return false
+  }
+
+  state.uiSession.playlistWallLayoutByTab = {
+    ...normalizePlaylistWallLayoutByTab(state.uiSession.playlistWallLayoutByTab),
+    [tab]: normalizedLayout,
   }
   if (persist) {
     saveUiSessionState()
@@ -2795,6 +3929,10 @@ function activateTab(tab, { restoreTargetScroll = true } = {}) {
 async function setActiveTab(tab) {
   if (state.activeTab === tab) return
   closeContextMenu()
+  if (tab === 'explore' && !canUseNeteaseFeatures()) {
+    showToast(TEXT.exploreRequiresNetease, 'error')
+    return
+  }
   activateTab(tab)
   if (tab === 'explore') {
     await loadExplorePlaylists(state.search)
@@ -2805,25 +3943,32 @@ async function setActiveTab(tab) {
 
 function renderTabs() {
   const ownedCount = formatNumber(getOwnedPlaylists().length)
+  const spotifyCount = formatNumber(getSpotifyPlaylists().length)
   const subscribedCount = formatNumber(getSubscribedPlaylists().length)
   const exploreCount = formatNumber(getExplorePlaylists().length)
   const artistsCount = formatNumber(getArtistPlaylists().length)
   refs.tabOwnedCount.textContent = ownedCount
+  refs.tabSpotifyCount.textContent = spotifyCount
   refs.tabSubscribedCount.textContent = subscribedCount
   refs.tabExploreCount.textContent = exploreCount
   refs.tabArtistsCount.textContent = artistsCount
   setButtonLabel(refs.tabOwned, `${TEXT.tabOwned} ${ownedCount}`)
+  setButtonLabel(refs.tabSpotify, `${TEXT.tabSpotify} ${spotifyCount}`)
   setButtonLabel(refs.tabSubscribed, `${TEXT.tabSubscribed} ${subscribedCount}`)
   setButtonLabel(refs.tabExplore, `${TEXT.tabExplore} ${exploreCount}`)
   setButtonLabel(refs.tabArtists, `${TEXT.tabArtists} ${artistsCount}`)
   refs.tabOwned.classList.toggle('is-active', state.activeTab === 'owned')
+  refs.tabSpotify.classList.toggle('is-active', state.activeTab === 'spotify')
   refs.tabSubscribed.classList.toggle('is-active', state.activeTab === 'subscribed')
   refs.tabExplore.classList.toggle('is-active', state.activeTab === 'explore')
   refs.tabArtists.classList.toggle('is-active', state.activeTab === 'artists')
   refs.tabOwned.setAttribute('aria-selected', String(state.activeTab === 'owned'))
+  refs.tabSpotify.setAttribute('aria-selected', String(state.activeTab === 'spotify'))
   refs.tabSubscribed.setAttribute('aria-selected', String(state.activeTab === 'subscribed'))
   refs.tabExplore.setAttribute('aria-selected', String(state.activeTab === 'explore'))
   refs.tabArtists.setAttribute('aria-selected', String(state.activeTab === 'artists'))
+  refs.tabSpotify.classList.toggle('hidden', !state.spotifyImport.connected && !state.spotifyPlaylists.length)
+  refs.tabExplore.disabled = !canUseNeteaseFeatures()
 }
 
 function renderHeader() {
@@ -2831,8 +3976,11 @@ function renderHeader() {
   if (refs.accountLine) {
     refs.accountLine.textContent = nickname
   }
+  refs.createOwnedPlaylistBtn.classList.toggle('hidden', state.activeTab !== 'owned' || !canUseNeteaseFeatures())
   refs.searchInput.placeholder = state.activeTab === 'explore'
     ? TEXT.searchExplorePlaceholder
+    : state.activeTab === 'spotify'
+      ? TEXT.searchSpotifyPlaceholder
     : state.activeTab === 'artists'
       ? TEXT.searchArtistsPlaceholder
       : TEXT.searchLibraryPlaceholder
@@ -2974,11 +4122,15 @@ function renderEmptyState(sourcePlaylists) {
   if (!sourcePlaylists.length) {
     refs.wallEmpty.querySelector('.empty-title').textContent = state.activeTab === 'explore'
       ? TEXT.emptyExplore
+      : state.activeTab === 'spotify'
+        ? TEXT.emptySpotify
       : state.activeTab === 'artists'
         ? TEXT.emptyArtists
         : TEXT.emptyTab
     refs.wallEmpty.querySelector('.empty-copy').textContent = state.activeTab === 'explore'
       ? '\u53ef\u4ee5\u76f4\u63a5\u641c\u7d22\u793e\u533a\u6b4c\u5355\uff0c\u6216\u7a0d\u540e\u518d\u8bd5\u3002'
+      : state.activeTab === 'spotify'
+        ? '连上 Spotify 之后，这里会单独显示你的 Spotify 歌单。'
       : state.activeTab === 'artists'
         ? '\u8fd9\u91cc\u4f1a\u81ea\u52a8\u6309\u4f60\u5df2\u52a0\u8f7d\u7684\u66f2\u5e93\u805a\u5408\u51fa\u827a\u4eba\u6b4c\u5355\u3002'
         : '\u8fd9\u4e2a\u5206\u533a\u8fd8\u6ca1\u6709\u6b4c\u5355\u3002'
@@ -3046,36 +4198,53 @@ function renderWall({ syncAll = false } = {}) {
   restorePendingTabScrollPosition()
 }
 
-function buildWallPlan(playlists, columns) {
+function placeWallItem({
+  item,
+  columnIndex,
+  metrics,
+  placementsByColumn,
+  columnHeights,
+  trackAnchors,
+}) {
+  const height = estimateCardHeight(item)
+  const top = columnHeights[columnIndex]
+  const placement = {
+    key: String(item.playlist.id),
+    columnIndex,
+    item,
+    top,
+    height,
+    bottom: top + height,
+  }
+
+  placementsByColumn[columnIndex].push(placement)
+  const visibleTracks = getRenderablePlaylistTracks(item.playlist)
+  for (let trackIndex = 0; trackIndex < visibleTracks.length; trackIndex += 1) {
+    const track = visibleTracks[trackIndex]
+    trackAnchors.set(`${item.playlist.id}:${track.id}`, {
+      top: placement.top + metrics.headerHeight + (trackIndex * metrics.rowHeight),
+      playlistId: item.playlist.id,
+    })
+  }
+
+  columnHeights[columnIndex] = placement.bottom + metrics.gap
+}
+
+function buildBalancedWallPlan(playlists, columns) {
   const metrics = getLayoutMetrics()
   const columnHeights = new Array(columns).fill(0)
   const placementsByColumn = Array.from({ length: columns }, () => [])
   const trackAnchors = new Map()
 
   for (const item of playlists) {
-    const columnIndex = indexOfSmallest(columnHeights)
-    const height = estimateCardHeight(item)
-    const top = columnHeights[columnIndex]
-    const placement = {
-      key: String(item.playlist.id),
-      columnIndex,
+    placeWallItem({
       item,
-      top,
-      height,
-      bottom: top + height,
-    }
-
-    placementsByColumn[columnIndex].push(placement)
-    const visibleTracks = getRenderablePlaylistTracks(item.playlist)
-    for (let trackIndex = 0; trackIndex < visibleTracks.length; trackIndex += 1) {
-      const track = visibleTracks[trackIndex]
-      trackAnchors.set(`${item.playlist.id}:${track.id}`, {
-        top: placement.top + metrics.headerHeight + (trackIndex * metrics.rowHeight),
-        playlistId: item.playlist.id,
-      })
-    }
-
-    columnHeights[columnIndex] = placement.bottom + metrics.gap
+      columnIndex: indexOfSmallest(columnHeights),
+      metrics,
+      placementsByColumn,
+      columnHeights,
+      trackAnchors,
+    })
   }
 
   return {
@@ -3083,6 +4252,71 @@ function buildWallPlan(playlists, columns) {
     columnHeights: columnHeights.map((height) => Math.max(0, height - metrics.gap)),
     trackAnchors,
   }
+}
+
+function buildWallPlanFromColumnLayout(playlists, columns, columnLayout) {
+  const normalizedLayout = normalizePlaylistWallLayout(columnLayout)
+  const metrics = getLayoutMetrics()
+  const columnHeights = new Array(columns).fill(0)
+  const placementsByColumn = Array.from({ length: columns }, () => [])
+  const trackAnchors = new Map()
+  const itemByPlaylistId = new Map(
+    playlists.map((item) => [Number(item?.playlist?.id || 0), item]).filter(([playlistId]) => playlistId > 0)
+  )
+  const usedPlaylistIds = new Set()
+
+  for (let columnIndex = 0; columnIndex < columns; columnIndex += 1) {
+    const columnPlaylistIds = normalizedLayout.columnPlaylistIds[columnIndex] || []
+    for (const playlistId of columnPlaylistIds) {
+      if (usedPlaylistIds.has(playlistId) || !itemByPlaylistId.has(playlistId)) {
+        continue
+      }
+
+      placeWallItem({
+        item: itemByPlaylistId.get(playlistId),
+        columnIndex,
+        metrics,
+        placementsByColumn,
+        columnHeights,
+        trackAnchors,
+      })
+      usedPlaylistIds.add(playlistId)
+    }
+  }
+
+  for (const item of playlists) {
+    const playlistId = Number(item?.playlist?.id || 0)
+    if (playlistId <= 0 || usedPlaylistIds.has(playlistId)) {
+      continue
+    }
+
+    placeWallItem({
+      item,
+      columnIndex: indexOfSmallest(columnHeights),
+      metrics,
+      placementsByColumn,
+      columnHeights,
+      trackAnchors,
+    })
+  }
+
+  return {
+    placementsByColumn,
+    columnHeights: columnHeights.map((height) => Math.max(0, height - metrics.gap)),
+    trackAnchors,
+  }
+}
+
+function buildWallPlan(playlists, columns) {
+  const preferredLayout = getPlaylistWallLayoutForTab(state.activeTab)
+  if (
+    preferredLayout.columns === columns
+    && preferredLayout.columnPlaylistIds.some((columnPlaylistIds) => columnPlaylistIds.length)
+  ) {
+    return buildWallPlanFromColumnLayout(playlists, columns, preferredLayout)
+  }
+
+  return buildBalancedWallPlan(playlists, columns)
 }
 
 function buildWallItems(playlists) {
@@ -3340,6 +4574,36 @@ function renderPlaylistHeaderAction(playlist) {
     `
   }
 
+  if (canOpenSpotifyPlaylist(playlist)) {
+    const label = TEXT.spotifyOpenPlaylist
+    return `
+      <div class="playlist-header-actions">
+        <button
+          class="playlist-header-action"
+          type="button"
+          data-open-spotify-playlist="${playlist.id}"
+          title="${escapeHtml(label)}"
+          aria-label="${escapeHtml(label)}"
+        >${renderOpenExternalIcon()}</button>
+      </div>
+    `
+  }
+
+  if (canEditOwnedPlaylist(playlist)) {
+    const label = TEXT.editOwnedPlaylist
+    return `
+      <div class="playlist-header-actions">
+        <button
+          class="playlist-header-action"
+          type="button"
+          data-open-owned-playlist-editor="${playlist.id}"
+          title="${escapeHtml(label)}"
+          aria-label="${escapeHtml(label)}"
+        >${renderPlaylistEditIcon()}</button>
+      </div>
+    `
+  }
+
   if (state.activeTab === 'subscribed' && canRemoveSubscribedPlaylist(playlist)) {
     const removing = isSubscribedPlaylistRemoving(playlist)
     const label = TEXT.removeSubscribedPlaylist
@@ -3419,7 +4683,35 @@ function renderArtistTrackExpansionIcon(expanded) {
   `
 }
 
+function renderPlaylistEditIcon() {
+  return `
+    <svg class="playlist-header-action-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+      <path d="M3 11.75 11.2 3.55a1.4 1.4 0 0 1 1.98 0l.27.27a1.4 1.4 0 0 1 0 1.98L5.25 14H3z"></path>
+      <path d="M9.9 4.85 12.15 7.1"></path>
+    </svg>
+  `
+}
+
+function renderOpenExternalIcon() {
+  return `
+    <svg class="playlist-header-action-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+      <path d="M9.5 2.5H13.5V6.5"></path>
+      <path d="M8 8 13.5 2.5"></path>
+      <path d="M13.5 8.5V12a1.5 1.5 0 0 1-1.5 1.5H4A1.5 1.5 0 0 1 2.5 12V4A1.5 1.5 0 0 1 4 2.5H7.5"></path>
+    </svg>
+  `
+}
+
 function describePlaylistMeta(playlist, totalCount) {
+  if (isImportedReadOnlyPlaylist(playlist)) {
+    const parts = [
+      'Spotify',
+      `${formatNumber(totalCount)} \u9996`,
+      playlist.creatorName || '',
+    ].filter(Boolean)
+    return parts.join(' \u00b7 ')
+  }
+
   if (playlist.isArtist) {
     const displayedCount = Number(playlist.artistDisplayedTrackCount || playlist.tracks?.length || 0)
     const knownTotalCount = Math.max(
@@ -3525,6 +4817,7 @@ function shouldRenderPlaylistRecommendations(item) {
     && !isPlaylistCollapsed(item.playlist)
     && !item.playlist.isExplore
     && !item.playlist.isArtist
+    && !isImportedReadOnlyPlaylist(item.playlist)
     && item.playlist.hydrated
     && !item.playlist.tracksError
     && item.playlist.tracks.length > 0
@@ -3772,12 +5065,51 @@ function primeVisibleArtistPlaylists() {
   }
 }
 
+function buildArtistResolveContext(artistKey) {
+  const entry = state.artistPlaylistEntriesByKey.get(artistKey)
+  if (!entry?.trackMap?.size) {
+    return null
+  }
+
+  const trackStats = getArtistTrackStats(entry).sort(compareArtistTracks)
+  const trackNames = []
+  const albumNames = []
+  const seenTrackNames = new Set()
+  const seenAlbumNames = new Set()
+
+  for (const track of trackStats) {
+    const normalizedTrackName = normalizeQuery(track?.name || '')
+    if (normalizedTrackName && !seenTrackNames.has(normalizedTrackName) && trackNames.length < 6) {
+      seenTrackNames.add(normalizedTrackName)
+      trackNames.push(String(track.name || '').trim())
+    }
+
+    const normalizedAlbumName = normalizeQuery(track?.album || '')
+    if (normalizedAlbumName && !seenAlbumNames.has(normalizedAlbumName) && albumNames.length < 6) {
+      seenAlbumNames.add(normalizedAlbumName)
+      albumNames.push(String(track.album || '').trim())
+    }
+
+    if (trackNames.length >= 6 && albumNames.length >= 6) {
+      break
+    }
+  }
+
+  if (!trackNames.length && !albumNames.length) {
+    return null
+  }
+
+  return { trackNames, albumNames }
+}
+
 function resolveArtistHydrationRef(playlist, remoteState = null) {
+  const artistKey = String(playlist?.artistKey || '')
   const artistId = Number(playlist?.artistId || remoteState?.artistId || 0)
   if (artistId > 0) {
     return {
       artistId,
       artistRef: artistId,
+      resolveContext: null,
     }
   }
 
@@ -3785,10 +5117,15 @@ function resolveArtistHydrationRef(playlist, remoteState = null) {
   return {
     artistId: 0,
     artistRef: artistName,
+    resolveContext: buildArtistResolveContext(artistKey),
   }
 }
 
 function queueArtistPlaylistHydration(playlistId, options = {}) {
+  if (!canUseNeteaseFeatures()) {
+    return
+  }
+
   const playlist = getPlaylistById(playlistId)
   const includeCollapsed = options.includeCollapsed === true
   const force = options.force === true
@@ -3802,6 +5139,10 @@ function queueArtistPlaylistHydration(playlistId, options = {}) {
   const expanded = isArtistPlaylistExpanded(artistKey)
   const requestedMaxCount = expanded ? 0 : ARTIST_SUMMARY_TRACK_COUNT_MAX
   if (!artistKey || !artistRequest.artistRef) {
+    return
+  }
+
+  if (!expanded && !force && Number(artistRequest.artistId || 0) <= 0) {
     return
   }
 
@@ -3895,7 +5236,9 @@ async function hydrateArtistPlaylistTracks(artistKey, sessionId) {
     return
   }
 
-  const result = await appBridge.getArtistSongs(artistRequest.artistRef, requestedMaxCount)
+  const result = await appBridge.getArtistSongs(artistRequest.artistRef, requestedMaxCount, {
+    resolveContext: artistRequest.resolveContext || null,
+  })
   if (sessionId !== renderRuntime.artistHydrationSessionId) {
     return
   }
@@ -4504,6 +5847,16 @@ function handleWallClick(event) {
     void subscribeExplorePlaylistFromCard(Number(subscribeButton.getAttribute('data-subscribe-playlist')))
     return
   }
+  const editOwnedPlaylistButton = target ? target.closest('[data-open-owned-playlist-editor]') : null
+  if (editOwnedPlaylistButton) {
+    void openPlaylistEditorForOwnedPlaylist(Number(editOwnedPlaylistButton.getAttribute('data-open-owned-playlist-editor')))
+    return
+  }
+  const openSpotifyPlaylistButton = target ? target.closest('[data-open-spotify-playlist]') : null
+  if (openSpotifyPlaylistButton) {
+    void openSpotifyPlaylistFromCard(Number(openSpotifyPlaylistButton.getAttribute('data-open-spotify-playlist')))
+    return
+  }
   const artistExpansionButton = target ? target.closest('[data-toggle-artist-track-expansion]') : null
   if (artistExpansionButton) {
     toggleArtistTrackExpansion(Number(artistExpansionButton.getAttribute('data-toggle-artist-track-expansion')))
@@ -4721,6 +6074,7 @@ function renderContextMenu() {
 }
 
 function buildContextMenuItems(context) {
+  const pinToTopPlan = getContextMenuPinToTopPlan(context)
   const transferItems = (context.transferTargets || []).length
     ? context.transferTargets.map((target) => ({
       action: 'transfer-track',
@@ -4736,14 +6090,43 @@ function buildContextMenuItems(context) {
       disabled: true,
     }]
 
-  const items = [{
-    children: transferItems,
-    label: context.transferLabel || '\u52a0\u5165\u5230',
-    type: 'submenu',
-  }]
+  const items = []
+
+  if (canOpenSpotifyTrack(context?.track)) {
+    items.push({
+      action: 'open-track-in-spotify',
+      label: TEXT.spotifyOpenTrack,
+      type: 'button',
+    })
+  }
+
+  if (!canOpenSpotifyTrack(context?.track) || (context.transferTargets || []).length) {
+    if (items.length) {
+      items.push({ type: 'divider' })
+    }
+
+    items.push({
+      children: transferItems,
+      label: context.transferLabel || '\u52a0\u5165\u5230',
+      type: 'submenu',
+    })
+  }
+
+  if (pinToTopPlan || context.canRemove) {
+    if (items.length) {
+      items.push({ type: 'divider' })
+    }
+    if (pinToTopPlan) {
+      items.push({
+        action: 'pin-track-to-top',
+        id: 'context-pin-track-btn',
+        label: TEXT.pinToTop,
+        type: 'button',
+      })
+    }
+  }
 
   if (context.canRemove) {
-    items.push({ type: 'divider' })
     items.push({
       action: 'remove-track',
       id: 'context-remove-track-btn',
@@ -4762,7 +6145,9 @@ function buildContextMenuItems(context) {
   }))
 
   if (artistTargets.length) {
-    items.push({ type: 'divider' })
+    if (items.length) {
+      items.push({ type: 'divider' })
+    }
     if (artistTargets.length === 1) {
       items.push({
         ...artistTargets[0],
@@ -4778,6 +6163,26 @@ function buildContextMenuItems(context) {
   }
 
   return items
+}
+
+function getContextMenuPinToTopPlan(context) {
+  const playlistId = Number(context?.playlistId || 0)
+  const trackId = Number(context?.trackId || 0)
+  const trackIds = (context?.tracks || [context?.track])
+    .map((track) => Number(track?.id || 0))
+    .filter((id) => id > 0)
+
+  if (playlistId <= 0 || trackId <= 0 || !trackIds.length) {
+    return null
+  }
+
+  return buildTrackMovePlan({
+    sourcePlaylistId: playlistId,
+    targetPlaylistId: playlistId,
+    trackId,
+    trackIds,
+    targetIndex: 0,
+  })
 }
 
 function resolveTrackContextMenuState(target) {
@@ -4829,8 +6234,9 @@ function resolveTrackContextMenuState(target) {
   }
 
   const keepSource = !isOwnedPlaylist(playlist) || isLikedPlaylist(playlist)
+  const importedReadOnly = isImportedReadOnlyPlaylist(playlist)
   return {
-    canRemove: isOwnedPlaylist(playlist),
+    canRemove: isOwnedPlaylist(playlist) && !importedReadOnly,
     artistTargets: tracks.length > 1
       ? []
       : getArtistContextTargets(track, {
@@ -4844,9 +6250,11 @@ function resolveTrackContextMenuState(target) {
     trackCount: Math.max(1, tracks.length),
     tracks: tracks.length ? tracks : [track],
     transferLabel: keepSource ? '\u52a0\u5165\u5230' : '\u79fb\u52a8\u5230',
-    transferTargets: getRecommendedTransferTargets(tracks.length ? tracks : [track], {
-      excludePlaylistIds: [playlist.id],
-    }),
+    transferTargets: importedReadOnly
+      ? []
+      : getRecommendedTransferTargets(tracks.length ? tracks : [track], {
+        excludePlaylistIds: [playlist.id],
+      }),
   }
 }
 
@@ -4855,6 +6263,10 @@ function getRecommendedTransferTargets(trackInput, options = {}) {
     .filter((track) => track && Number(track.id) > 0)
 
   if (!tracks.length) {
+    return []
+  }
+
+  if (tracks.some((track) => String(track?.sourcePlatform || '').trim() === 'spotify')) {
     return []
   }
 
@@ -5105,6 +6517,72 @@ async function jumpToArtistPlaylistFromContextMenu(artistPlaylistId, artistKey =
   showToast(TEXT.goToArtistPlaylistDone)
 }
 
+async function openExternalUrl(url, failureText = TEXT.spotifyOpenFailed) {
+  const normalizedUrl = String(url || '').trim()
+  if (!normalizedUrl) {
+    showToast(failureText, 'error')
+    return false
+  }
+
+  try {
+    if (appBridge && typeof appBridge.openExternalUrl === 'function') {
+      const result = await appBridge.openExternalUrl(normalizedUrl)
+      if (!result?.ok) {
+        showToast(result?.error || failureText, 'error')
+        return false
+      }
+
+      return true
+    }
+
+    const opened = window.open(normalizedUrl, '_blank', 'noopener,noreferrer')
+    if (!opened) {
+      showToast(failureText, 'error')
+      return false
+    }
+
+    return true
+  } catch (error) {
+    showToast(error?.message || failureText, 'error')
+    return false
+  }
+}
+
+async function openSpotifyPlaylistFromCard(playlistId) {
+  const playlist = getPlaylistById(playlistId)
+  if (!canOpenSpotifyPlaylist(playlist)) {
+    showToast(TEXT.spotifyOpenFailed, 'error')
+    return
+  }
+
+  await openExternalUrl(playlist.externalUrl, TEXT.spotifyOpenFailed)
+}
+
+async function openSpotifyTrackFromContextMenu() {
+  const track = renderRuntime.contextMenuTrack?.track || null
+  closeContextMenu()
+
+  if (!canOpenSpotifyTrack(track)) {
+    showToast(TEXT.spotifyOpenFailed, 'error')
+    return
+  }
+
+  await openExternalUrl(track.externalUrl, TEXT.spotifyOpenFailed)
+}
+
+async function pinTracksToTopFromContextMenu() {
+  const context = renderRuntime.contextMenuTrack
+  closeContextMenu()
+
+  const plan = getContextMenuPinToTopPlan(context)
+  if (!plan) {
+    return
+  }
+
+  await commitTrackMovePlan(plan)
+  clearTrackSelection()
+}
+
 function handleContextMenuClick(event) {
   const target = event.target instanceof Element ? event.target.closest('[data-context-action]') : null
   if (!target || !(target instanceof HTMLButtonElement) || target.disabled) {
@@ -5112,8 +6590,18 @@ function handleContextMenuClick(event) {
   }
 
   const action = target.dataset.contextAction || ''
+  if (action === 'open-track-in-spotify') {
+    void openSpotifyTrackFromContextMenu()
+    return
+  }
+
   if (action === 'remove-track') {
     void removeTrackFromContextMenu()
+    return
+  }
+
+  if (action === 'pin-track-to-top') {
+    void pinTracksToTopFromContextMenu()
     return
   }
 
@@ -5610,7 +7098,48 @@ function insertTracksAtIndex(tracks, movedTracks, targetIndex) {
   return normalizeTrackPositions(nextTracks)
 }
 
-function buildTrackMovePlan({ sourcePlaylistId, targetPlaylistId, trackId, trackIds, targetIndex }) {
+function resolveArtistAnchoredTrackIndex(targetTracks, movedTracks, fallbackTargetIndex, mode = 'prefer-artist') {
+  const artistKeys = new Set((movedTracks || []).flatMap((track) => getTrackArtistKeys(track)))
+  const normalizedFallbackIndex = clamp(Number(fallbackTargetIndex) || 0, 0, (targetTracks || []).length)
+  if (!artistKeys.size) {
+    return normalizedFallbackIndex
+  }
+
+  let lastMatchingIndex = -1
+  for (let index = 0; index < (targetTracks || []).length; index += 1) {
+    const targetTrack = targetTracks[index]
+    const hasArtistMatch = getTrackArtistKeys(targetTrack).some((artistKey) => artistKeys.has(artistKey))
+    if (hasArtistMatch) {
+      lastMatchingIndex = index
+    }
+  }
+
+  if (lastMatchingIndex === -1) {
+    return normalizedFallbackIndex
+  }
+
+  const artistAnchorIndex = lastMatchingIndex + 1
+  return mode === 'preserve-lower-bound'
+    ? Math.max(normalizedFallbackIndex, artistAnchorIndex)
+    : artistAnchorIndex
+}
+
+function insertTracksWithArtistAnchor(targetTracks, movedTracks, fallbackTargetIndex, mode = 'prefer-artist') {
+  return insertTracksAtIndex(
+    targetTracks,
+    movedTracks,
+    resolveArtistAnchoredTrackIndex(targetTracks, movedTracks, fallbackTargetIndex, mode)
+  )
+}
+
+function buildTrackMovePlan({
+  sourcePlaylistId,
+  targetPlaylistId,
+  trackId,
+  trackIds,
+  targetIndex,
+  targetPlacementMode = 'preserve-lower-bound',
+}) {
   const sourcePlaylist = getPlaylistById(sourcePlaylistId)
   const targetPlaylist = getPlaylistById(targetPlaylistId)
   const normalizedTrackIds = [...new Set((trackIds || [trackId]).map((id) => Number(id)).filter((id) => id > 0))]
@@ -5652,7 +7181,12 @@ function buildTrackMovePlan({ sourcePlaylistId, targetPlaylistId, trackId, track
   }
 
   const keepSource = isLikedPlaylist(sourcePlaylist)
-  const nextTargetTracks = insertTracksAtIndex(targetPlaylist.tracks, tracks, targetIndex)
+  const nextTargetTracks = insertTracksWithArtistAnchor(
+    targetPlaylist.tracks,
+    tracks,
+    targetIndex,
+    targetPlacementMode
+  )
   const movedTrackIdSet = new Set(normalizedTrackIds)
   const nextSourceTracks = keepSource
     ? sourcePlaylist.tracks.slice()
@@ -5706,7 +7240,7 @@ function applyTrackMovePlan(plan) {
 async function commitTrackMovePlan(plan) {
   if (!appBridge || typeof appBridge.commitPlaylistTrackMove !== 'function') {
     showToast(plan.samePlaylist ? TEXT.reorderPlaylistFailed : TEXT.moveToPlaylistFailed, 'error')
-    return
+    return false
   }
 
   renderRuntime.playlistMutationPending = true
@@ -5732,17 +7266,18 @@ async function commitTrackMovePlan(plan) {
       result?.error || (plan.samePlaylist ? TEXT.reorderPlaylistFailed : TEXT.moveToPlaylistFailed),
       'error'
     )
-    return
+    return false
   }
 
   applyTrackMovePlan(plan)
 
   if (plan.samePlaylist) {
     showToast(TEXT.reorderPlaylistDone)
-    return
+    return true
   }
 
   showToast(`${plan.keepSource ? TEXT.copyToPlaylistDone : TEXT.moveToPlaylistDone}\uff1a${plan.targetPlaylist.name}`)
+  return true
 }
 
 function reorderPlaylistCollection(playlists, sourcePlaylistId, targetPlaylistId, position) {
@@ -5766,9 +7301,113 @@ function reorderPlaylistCollection(playlists, sourcePlaylistId, targetPlaylistId
   return changed ? nextPlaylists : null
 }
 
-function buildPlaylistMovePlan({ sourcePlaylistId, targetPlaylistId, position }) {
+function getPlaylistWallLayoutFromPlacements(placementsByColumn = renderRuntime.wallPlacementsByColumn) {
+  if (!Array.isArray(placementsByColumn) || !placementsByColumn.length) {
+    return normalizePlaylistWallLayout()
+  }
+
+  return normalizePlaylistWallLayout({
+    columns: placementsByColumn.length,
+    columnPlaylistIds: placementsByColumn.map((placements) => {
+      return (placements || [])
+        .map((placement) => Number(placement?.item?.playlist?.id || 0))
+        .filter((playlistId) => playlistId > 0)
+    }),
+  })
+}
+
+function reorderPlaylistWallLayout(layout, sourcePlaylistId, targetPlaylistId, position, targetColumnIndex = -1) {
+  const normalizedLayout = normalizePlaylistWallLayout(layout)
+  if (!normalizedLayout.columns || !normalizedLayout.columnPlaylistIds.length) {
+    return null
+  }
+
+  const sourceId = Number(sourcePlaylistId || 0)
+  const targetId = Number(targetPlaylistId || 0)
+  if (sourceId <= 0) {
+    return null
+  }
+
+  const nextColumnPlaylistIds = normalizedLayout.columnPlaylistIds.map((columnPlaylistIds) => columnPlaylistIds.slice())
+  const sourceColumnIndex = nextColumnPlaylistIds.findIndex((columnPlaylistIds) => columnPlaylistIds.includes(sourceId))
+  const fallbackTargetColumnIndex = nextColumnPlaylistIds.findIndex((columnPlaylistIds) => columnPlaylistIds.includes(targetId))
+  const resolvedTargetColumnIndex = (
+    Number.isInteger(targetColumnIndex)
+    && targetColumnIndex >= 0
+    && targetColumnIndex < nextColumnPlaylistIds.length
+  )
+    ? targetColumnIndex
+    : fallbackTargetColumnIndex
+
+  if (sourceColumnIndex === -1 || resolvedTargetColumnIndex === -1) {
+    return null
+  }
+
+  const sourceColumnPlaylistIds = nextColumnPlaylistIds[sourceColumnIndex]
+  const sourceIndex = sourceColumnPlaylistIds.findIndex((playlistId) => playlistId === sourceId)
+  if (sourceIndex === -1) {
+    return null
+  }
+
+  sourceColumnPlaylistIds.splice(sourceIndex, 1)
+  const targetColumnPlaylistIds = nextColumnPlaylistIds[resolvedTargetColumnIndex]
+  let insertionIndex = 0
+  if (targetId > 0) {
+    const targetIndex = targetColumnPlaylistIds.findIndex((playlistId) => playlistId === targetId)
+    if (targetIndex === -1) {
+      return null
+    }
+
+    insertionIndex = position === 'after' ? targetIndex + 1 : targetIndex
+    if (sourceColumnIndex === resolvedTargetColumnIndex && sourceIndex < insertionIndex) {
+      insertionIndex -= 1
+    }
+  }
+
+  targetColumnPlaylistIds.splice(clamp(insertionIndex, 0, targetColumnPlaylistIds.length), 0, sourceId)
+  const nextLayout = normalizePlaylistWallLayout({
+    columns: normalizedLayout.columns,
+    columnPlaylistIds: nextColumnPlaylistIds,
+  })
+  return playlistWallLayoutsEqual(normalizedLayout, nextLayout)
+    ? null
+    : nextLayout
+}
+
+function getVisualPlaylistOrderIdsFromPlacements(placementsByColumn) {
+  return (placementsByColumn || [])
+    .flatMap((placements) => placements || [])
+    .slice()
+    .sort((left, right) => left.top - right.top || left.columnIndex - right.columnIndex)
+    .map((placement) => Number(placement?.item?.playlist?.id || 0))
+    .filter((playlistId) => playlistId > 0)
+}
+
+function buildPlaylistMovePlan({ sourcePlaylistId, targetPlaylistId, position, columnIndex = -1 }) {
   const tab = state.activeTab
-  const nextPlaylists = reorderPlaylistCollection(getSourcePlaylists(), sourcePlaylistId, targetPlaylistId, position)
+  const sourcePlaylists = getSourcePlaylists()
+  const currentWallLayout = getPlaylistWallLayoutFromPlacements()
+  const nextWallLayout = reorderPlaylistWallLayout(
+    currentWallLayout,
+    sourcePlaylistId,
+    targetPlaylistId,
+    position,
+    columnIndex
+  )
+
+  if (nextWallLayout) {
+    const nextWallPlan = buildWallPlanFromColumnLayout(buildWallItems(sourcePlaylists), nextWallLayout.columns, nextWallLayout)
+    return {
+      tab,
+      sourcePlaylistId: Number(sourcePlaylistId),
+      targetPlaylistId: Number(targetPlaylistId),
+      position,
+      orderIds: getVisualPlaylistOrderIdsFromPlacements(nextWallPlan.placementsByColumn),
+      wallLayout: nextWallLayout,
+    }
+  }
+
+  const nextPlaylists = reorderPlaylistCollection(sourcePlaylists, sourcePlaylistId, targetPlaylistId, position)
   if (!nextPlaylists) {
     return null
   }
@@ -5783,7 +7422,12 @@ function buildPlaylistMovePlan({ sourcePlaylistId, targetPlaylistId, position })
 }
 
 function applyPlaylistMovePlan(plan) {
-  if (!setPlaylistOrderIdsForTab(plan.tab, plan.orderIds)) {
+  const orderChanged = setPlaylistOrderIdsForTab(plan.tab, plan.orderIds)
+  const layoutChanged = plan.wallLayout
+    ? setPlaylistWallLayoutForTab(plan.tab, plan.wallLayout)
+    : false
+
+  if (!orderChanged && !layoutChanged) {
     return
   }
 
@@ -6016,9 +7660,62 @@ function resolvePlaylistDropColumn(target, clientX) {
   return bestCandidate
 }
 
-function resolvePlaylistGapTarget(columnIndex, clientY) {
+function getMeasuredPlaylistPlacementsForColumn(columnIndex) {
   const columnNode = renderRuntime.wallColumns[columnIndex]
   const placements = renderRuntime.wallPlacementsByColumn[columnIndex] || []
+  if (!columnNode || !placements.length) {
+    return {
+      columnNode,
+      placements,
+      columnHeight: 0,
+    }
+  }
+
+  const columnRect = columnNode.getBoundingClientRect()
+  const columnHeight = Math.max(0, columnRect.height)
+  const measuredBoundsByPlaylistId = new Map()
+
+  columnNode.querySelectorAll('.playlist-card[data-playlist-id]').forEach((card) => {
+    const playlistId = Number(card.getAttribute('data-playlist-id'))
+    if (playlistId <= 0) {
+      return
+    }
+
+    const rect = card.getBoundingClientRect()
+    const top = clamp(rect.top - columnRect.top, 0, columnHeight)
+    const bottom = clamp(rect.bottom - columnRect.top, 0, columnHeight)
+    measuredBoundsByPlaylistId.set(playlistId, {
+      top,
+      bottom: Math.max(top, bottom),
+    })
+  })
+
+  return {
+    columnNode,
+    columnHeight,
+    placements: placements.map((placement) => {
+      const playlistId = Number(placement?.item?.playlist?.id || 0)
+      const measuredBounds = measuredBoundsByPlaylistId.get(playlistId)
+      if (!measuredBounds) {
+        return placement
+      }
+
+      return {
+        ...placement,
+        top: measuredBounds.top,
+        bottom: measuredBounds.bottom,
+        height: Math.max(0, measuredBounds.bottom - measuredBounds.top),
+      }
+    }),
+  }
+}
+
+function resolvePlaylistGapTarget(columnIndex, clientY) {
+  const {
+    columnNode,
+    placements,
+    columnHeight,
+  } = getMeasuredPlaylistPlacementsForColumn(columnIndex)
   if (!columnNode) {
     return null
   }
@@ -6033,7 +7730,7 @@ function resolvePlaylistGapTarget(columnIndex, clientY) {
   }
 
   const columnRect = columnNode.getBoundingClientRect()
-  const relativeY = clamp(clientY - columnRect.top, 0, Math.max(0, columnRect.height))
+  const relativeY = clamp(clientY - columnRect.top, 0, columnHeight)
   const gapTargets = []
   const firstPlacement = placements[0]
   gapTargets.push({
@@ -6161,6 +7858,7 @@ function buildDropTargetForRow(dragState, row, clientY) {
     trackId: dragState.trackId,
     trackIds: dragState.trackIds,
     targetIndex,
+    targetPlacementMode: 'preserve-lower-bound',
   })
   if (!plan) {
     return null
@@ -6192,6 +7890,7 @@ function buildDropTargetForCard(dragState, card, position) {
     trackId: dragState.trackId,
     trackIds: dragState.trackIds,
     targetIndex,
+    targetPlacementMode: 'prefer-artist',
   })
   if (!plan) {
     return null
@@ -6411,8 +8110,13 @@ async function transferTrackFromContextMenu(targetPlaylistId) {
   const sourcePlaylist = getPlaylistById(context.playlistId)
   const targetPlaylist = getPlaylistById(targetPlaylistId)
   const tracks = (context.tracks || [context.track]).filter((track) => track && Number(track.id) > 0)
+  const keepSource = Boolean(context.keepSource)
 
-  if (!targetPlaylist || !tracks.length) {
+  if (!sourcePlaylist || !targetPlaylist || !tracks.length || !canMutatePlaylistOrder(targetPlaylist)) {
+    return
+  }
+
+  if (!keepSource && !canMutatePlaylistOrder(sourcePlaylist)) {
     return
   }
 
@@ -6421,75 +8125,32 @@ async function transferTrackFromContextMenu(targetPlaylistId) {
     return
   }
 
-  const nextPlaylists = state.playlists.slice()
-  let nextTargetPlaylist = nextPlaylists.find((playlist) => playlist.id === targetPlaylist.id) || targetPlaylist
-  let nextSourcePlaylist = sourcePlaylist
-  let removedCurrentTrack = false
-
-  for (const track of tracksToAdd) {
-    const addResult = await appBridge.addTrackToPlaylist(targetPlaylist.id, track)
-    if (!addResult.ok) {
-      if (nextTargetPlaylist !== targetPlaylist || nextSourcePlaylist !== sourcePlaylist) {
-        const partialPlaylists = nextPlaylists.map((playlist) => {
-          if (playlist.id === nextTargetPlaylist.id) {
-            return nextTargetPlaylist
-          }
-          if (nextSourcePlaylist && playlist.id === nextSourcePlaylist.id) {
-            return nextSourcePlaylist
-          }
-          return playlist
-        })
-        setPlaylists(sortWallPlaylists(partialPlaylists))
-        if (removedCurrentTrack) {
-          clearCurrentPlayback()
-        } else {
-          syncQueueWithPlaylists()
-        }
-        renderTabs()
-        renderHeader()
-        renderPlayer()
-        applyFilters({ syncAll: true })
-      }
-      showToast(addResult.error || TEXT.moveToPlaylistFailed, 'error')
-      clearTrackSelection()
-      return
-    }
-
-    nextTargetPlaylist = buildPlaylistWithTrackAdded(nextTargetPlaylist, track)
-
-    if (!context.keepSource && nextSourcePlaylist) {
-      const removeResult = await appBridge.removeTrackFromPlaylist(nextSourcePlaylist.id, track.id)
-      if (!removeResult.ok) {
-        const partialPlaylists = nextPlaylists.map((playlist) => {
-          if (playlist.id === nextTargetPlaylist.id) {
-            return nextTargetPlaylist
-          }
-          if (nextSourcePlaylist && playlist.id === nextSourcePlaylist.id) {
-            return nextSourcePlaylist
-          }
-          return playlist
-        })
-        setPlaylists(sortWallPlaylists(partialPlaylists))
-        if (removedCurrentTrack) {
-          clearCurrentPlayback()
-        } else {
-          syncQueueWithPlaylists()
-        }
-        renderTabs()
-        renderHeader()
-        renderPlayer()
-        applyFilters({ syncAll: true })
-        showToast(removeResult.error || TEXT.moveToPlaylistFailed, 'error')
-        clearTrackSelection()
-        return
-      }
-
-      nextSourcePlaylist = buildPlaylistWithoutTrack(nextSourcePlaylist, track.id)
-      removedCurrentTrack = removedCurrentTrack
-        || (state.queuePlaylistId === sourcePlaylist?.id && state.currentTrackId === track.id)
-    }
+  clearTrackSelection()
+  const movedTrackIdSet = new Set(tracksToAdd.map((track) => Number(track.id)))
+  const plan = {
+    samePlaylist: false,
+    keepSource,
+    sourcePlaylist,
+    targetPlaylist,
+    tracks: tracksToAdd,
+    trackIds: [...movedTrackIdSet],
+    track: tracksToAdd.find((track) => track.id === Number(context.track?.id)) || tracksToAdd[0] || null,
+    sourceTracks: normalizeTrackPositions(
+      keepSource
+        ? sourcePlaylist.tracks.slice()
+        : sourcePlaylist.tracks.filter((item) => !movedTrackIdSet.has(Number(item.id)))
+    ),
+    targetTracks: insertTracksWithArtistAnchor(
+      targetPlaylist.tracks,
+      tracksToAdd,
+      targetPlaylist.tracks.length,
+      'prefer-artist'
+    ),
   }
 
+  await commitTrackMovePlan(plan)
+
+  /*
   const finalPlaylists = nextPlaylists.map((playlist) => {
     if (playlist.id === nextTargetPlaylist.id) {
       return nextTargetPlaylist
@@ -6514,6 +8175,7 @@ async function transferTrackFromContextMenu(targetPlaylistId) {
   showToast(`${context.keepSource ? TEXT.copyToPlaylistDone : TEXT.moveToPlaylistDone}\uff1a${targetPlaylist.name}`)
   return
   showToast(`${context.keepSource ? TEXT.copyToPlaylistDone : TEXT.moveToPlaylistDone}：${targetPlaylist.name}`)
+  */
 }
 
 async function removeTrackFromContextMenu() {
@@ -6652,12 +8314,53 @@ function isLikedPlaylist(playlist) {
   return Number(playlist?.specialType || 0) === 5
 }
 
+async function playSpotifyPlaylist(playlist, trackId) {
+  if (!playlist || !playlist.tracks.length) {
+    return
+  }
+
+  if (!appBridge || typeof appBridge.resolveSpotifyPlayback !== 'function') {
+    showToast(TEXT.spotifyImportReadonlyTrack, 'error')
+    return
+  }
+
+  showToast(TEXT.spotifyPlaybackResolving)
+  const result = await appBridge.resolveSpotifyPlayback(playlist)
+  if (!result?.ok) {
+    showToast(result?.error || TEXT.spotifyImportReadonlyTrack, 'error')
+    return
+  }
+
+  const queueTracks = (result.resolvedTracks || []).map((track) => normalizePlaylistTrack(track))
+  const queueIndex = queueTracks.findIndex((track) => Number(track.id || 0) === Number(trackId || 0))
+  if (queueIndex === -1 || !queueTracks.length) {
+    showToast(TEXT.spotifyPlaybackUnmatched, 'error')
+    return
+  }
+
+  state.queue = queueTracks
+  state.queueMode = 'playlist'
+  state.queuePlaylistId = playlist.id
+  state.queueContextLabel = ''
+  await playQueueIndex(queueIndex)
+}
+
 async function playFromPlaylist(playlistId, trackId) {
   const playlist = getPlaylistById(playlistId)
   if (!playlist || !playlist.tracks.length) return
-  const queueIndex = playlist.tracks.findIndex((track) => track.id === trackId)
+  if (getPlaylistSourcePlatform(playlist) === 'spotify') {
+    await playSpotifyPlaylist(playlist, trackId)
+    return
+  }
+  const queueTracks = (playlist.tracks || []).filter((track) => String(track?.sourcePlatform || '').trim() !== 'spotify')
+  const selectedTrack = (playlist.tracks || []).find((track) => track.id === trackId)
+  if (!selectedTrack || String(selectedTrack?.sourcePlatform || '').trim() === 'spotify' || !queueTracks.length) {
+    showToast(TEXT.spotifyImportReadonlyTrack, 'error')
+    return
+  }
+  const queueIndex = queueTracks.findIndex((track) => track.id === trackId)
   if (queueIndex === -1) return
-  state.queue = playlist.tracks
+  state.queue = queueTracks
   state.queueMode = 'playlist'
   state.queuePlaylistId = playlistId
   state.queueContextLabel = ''
@@ -6757,6 +8460,7 @@ async function resolveQueueTrackSource(track, options = {}) {
   const autoplay = options?.autoplay !== false
   const resumeAtSeconds = Math.max(0, Number(options?.resumeAtSeconds || 0) || 0)
   const shouldRecordPlay = Boolean(options?.recordPlay)
+  const playbackTrackId = Number(track?.playbackTrackId || track?.id || 0)
 
   state.currentTrackId = track.id
   state.isResolving = true
@@ -6765,7 +8469,7 @@ async function resolveQueueTrackSource(track, options = {}) {
   renderPlayer()
 
   const token = ++state.playToken
-  const result = await appBridge.getSongUrl(track.id, {
+  const result = await appBridge.getSongUrl(playbackTrackId, {
     preferredQuality: requestedQuality,
   })
   if (token !== state.playToken) {
@@ -6793,8 +8497,8 @@ async function resolveQueueTrackSource(track, options = {}) {
     })
     state.currentPlaybackRequestedQuality = requestedQuality
     state.currentPlaybackResolvedLevel = String(result.level || '')
-    if (shouldRecordPlay) {
-      void recordTrackPlay(track.id)
+    if (shouldRecordPlay && playbackTrackId > 0) {
+      void recordTrackPlay(playbackTrackId)
     }
   } catch (error) {
     if ((error.message || '') !== TEXT.unavailableTrack) {
@@ -7042,6 +8746,7 @@ function applyTheme(theme, { silent = false, persistLocal = true } = {}) {
 }
 
 function renderSettings() {
+  syncSpotifyImportActionLabels()
   applyUiScale(state.settings.uiScale)
   refs.playlistRecommendationsToggle.checked = Boolean(state.settings.showPlaylistRecommendations)
   refs.likedPlaylistDisplayModeSelect.value = normalizeLikedPlaylistDisplayMode(
@@ -7051,16 +8756,390 @@ function renderSettings() {
     state.settings.defaultAudioQuality
   )
   refs.autoAdjustAudioQualityToggle.checked = state.settings.autoAdjustAudioQuality !== false
+  const spotifyBusy = Boolean(state.spotifyImport.busy)
+  const spotifyConnected = Boolean(state.spotifyImport.connected)
+  const spotifySyncBusy = Boolean(state.spotifySync.busy)
+  refs.settingsSpotifyAutoLoginBtn.disabled = spotifyBusy
+  refs.settingsSpotifyRefreshBtn.disabled = spotifyBusy || !spotifyConnected
+  refs.settingsSpotifyClearBtn.disabled = spotifyBusy || !spotifyConnected
+  refs.settingsSpotifySyncToNeteaseBtn.disabled = spotifyBusy || spotifySyncBusy || !spotifyConnected || !canUseNeteaseFeatures()
+  refs.settingsSpotifySyncToSpotifyBtn.disabled = spotifyBusy || spotifySyncBusy || !spotifyConnected || !canUseNeteaseFeatures()
+  refs.settingsSpotifyStatus.textContent = spotifyBusy
+    ? TEXT.spotifyImportLoading
+    : spotifyConnected
+      ? `${TEXT.spotifyImportStatusConnected}${state.spotifyImport.account?.nickname || 'Spotify'}`
+      : TEXT.spotifyImportStatusDisconnected
+  refs.settingsUpdateHint.textContent = getAppUpdateHintText()
+  refs.settingsUpdateStatus.textContent = getAppUpdateStatusText()
+  refs.settingsUpdateStatus.classList.toggle('is-error', Boolean(state.appUpdate.error) && !state.appUpdate.busy)
+  refs.settingsUpdateStatus.classList.toggle(
+    'is-highlight',
+    Boolean(state.appUpdate.updateAvailable) && !state.appUpdate.error
+  )
+  refs.settingsUpdateCheckBtn.disabled = Boolean(state.appUpdate.busy)
+  refs.settingsUpdateCheckBtn.textContent = state.appUpdate.busy && state.appUpdate.action !== 'install'
+    ? TEXT.appUpdateCheckBusy
+    : TEXT.appUpdateCheckButton
+  refs.settingsUpdateInstallBtn.classList.toggle('hidden', !state.appUpdate.updateAvailable)
+  refs.settingsUpdateInstallBtn.disabled = Boolean(state.appUpdate.busy) || !state.appUpdate.installSupported
+  refs.settingsUpdateInstallBtn.textContent = state.appUpdate.busy && state.appUpdate.action === 'install'
+    ? TEXT.appUpdateInstallBusy
+    : state.appUpdate.latestVersion
+      ? `一键更新到 ${formatAppVersion(state.appUpdate.latestVersion)}`
+      : TEXT.appUpdateInstallButton
 }
 
 function toggleSettingsPanel() {
   const open = refs.settingsPanel.classList.toggle('is-open')
   refs.settingsBackdrop.classList.toggle('hidden', !open)
+  if (open && !state.appUpdate.checked && !state.appUpdate.busy) {
+    void refreshAppUpdateStatus({ silent: true })
+  }
 }
 
 function closeSettingsPanel() {
   refs.settingsPanel.classList.remove('is-open')
   refs.settingsBackdrop.classList.add('hidden')
+}
+
+function syncPlaylistEditorUi() {
+  const editorState = renderRuntime.playlistEditorState
+  const open = Boolean(editorState)
+  refs.playlistEditor.classList.toggle('hidden', !open)
+  refs.playlistEditorBackdrop.classList.toggle('hidden', !open)
+  if (!open) {
+    return
+  }
+
+  const creating = editorState.mode === 'create'
+  const busy = Boolean(editorState.saving || editorState.deleting)
+  const previewUrl = editorState.coverUpload?.previewUrl || editorState.currentCoverUrl || ''
+
+  refs.playlistEditorKicker.textContent = creating ? TEXT.createOwnedPlaylist : TEXT.editOwnedPlaylist
+  refs.playlistEditorTitle.textContent = creating ? TEXT.playlistEditorCreateTitle : TEXT.playlistEditorEditTitle
+  refs.playlistEditorSaveBtn.textContent = creating ? TEXT.playlistEditorSaveCreate : TEXT.playlistEditorSaveUpdate
+  refs.playlistEditorDeleteBtn.classList.toggle('hidden', creating)
+  refs.playlistEditorDeleteBtn.textContent = editorState.deleting
+    ? `${TEXT.deleteOwnedPlaylist}...`
+    : TEXT.deleteOwnedPlaylist
+  refs.playlistEditorSaveBtn.disabled = busy
+  refs.playlistEditorDeleteBtn.disabled = busy
+  refs.playlistEditorCancelBtn.disabled = busy
+  refs.playlistEditorCloseBtn.disabled = busy
+  refs.playlistEditorName.disabled = busy
+  refs.playlistEditorDescription.disabled = busy
+  refs.playlistEditorCoverInput.disabled = busy
+  refs.playlistEditorCoverResetBtn.disabled = busy
+
+  refs.playlistEditorCoverPreview.classList.toggle('hidden', !previewUrl)
+  refs.playlistEditorCoverEmpty.classList.toggle('hidden', Boolean(previewUrl))
+  if (previewUrl) {
+    refs.playlistEditorCoverPreview.src = previewUrl
+    refs.playlistEditorCoverPreview.alt = `${refs.playlistEditorName.value || TEXT.playlistEditorName} ${TEXT.playlistEditorCover}`
+  } else {
+    refs.playlistEditorCoverPreview.removeAttribute('src')
+    refs.playlistEditorCoverPreview.alt = ''
+  }
+
+  refs.playlistEditorCoverResetBtn.classList.toggle('hidden', !editorState.coverUpload)
+}
+
+function openPlaylistEditor(editorState) {
+  closeContextMenu()
+  hideAlbumHoverPreview()
+  closeSettingsPanel()
+  renderRuntime.playlistEditorState = editorState
+  refs.playlistEditorName.value = editorState.playlist?.name || ''
+  refs.playlistEditorDescription.value = editorState.playlist?.description || ''
+  refs.playlistEditorCoverInput.value = ''
+  syncPlaylistEditorUi()
+  window.requestAnimationFrame(() => {
+    refs.playlistEditorName.focus()
+    refs.playlistEditorName.select()
+  })
+}
+
+function closePlaylistEditor() {
+  const editorState = renderRuntime.playlistEditorState
+  if (editorState?.saving || editorState?.deleting) {
+    return
+  }
+
+  renderRuntime.playlistEditorState = null
+  refs.playlistEditorForm.reset()
+  refs.playlistEditorCoverInput.value = ''
+  refs.playlistEditorCoverPreview.removeAttribute('src')
+  refs.playlistEditorCoverPreview.classList.add('hidden')
+  refs.playlistEditorCoverEmpty.classList.remove('hidden')
+  refs.playlistEditorBackdrop.classList.add('hidden')
+  refs.playlistEditor.classList.add('hidden')
+}
+
+function openPlaylistEditorForCreate() {
+  openPlaylistEditor({
+    mode: 'create',
+    playlist: {
+      id: 0,
+      name: '',
+      description: '',
+      coverUrl: '',
+    },
+    currentCoverUrl: '',
+    coverUpload: null,
+    saving: false,
+    deleting: false,
+  })
+}
+
+async function openPlaylistEditorForOwnedPlaylist(playlistId) {
+  const playlist = getPlaylistById(playlistId)
+  if (!canEditOwnedPlaylist(playlist)) {
+    return
+  }
+
+  let nextPlaylist = playlist
+  if (appBridge && typeof appBridge.getOwnedPlaylistSummary === 'function') {
+    const result = await appBridge.getOwnedPlaylistSummary(playlistId)
+    if (result?.ok && result.playlist) {
+      nextPlaylist = normalizePlaylist({
+        ...playlist,
+        ...result.playlist,
+        _normalized: false,
+      })
+      setPlaylists(upsertPlaylistIntoLibrary(state.playlists, nextPlaylist))
+    } else if (result?.error) {
+      showToast(result.error, 'error')
+    }
+  }
+
+  openPlaylistEditor({
+    mode: 'edit',
+    playlist: nextPlaylist,
+    currentCoverUrl: nextPlaylist.coverUrl || '',
+    coverUpload: null,
+    saving: false,
+    deleting: false,
+  })
+}
+
+function fileToDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result || ''))
+    reader.onerror = () => reject(reader.error || new Error(TEXT.playlistEditorPickCoverFailed))
+    reader.readAsDataURL(file)
+  })
+}
+
+function loadImageElement(src) {
+  return new Promise((resolve, reject) => {
+    const image = new Image()
+    image.onload = () => resolve(image)
+    image.onerror = () => reject(new Error(TEXT.playlistEditorPickCoverFailed))
+    image.src = src
+  })
+}
+
+function dataUrlToUint8Array(dataUrl) {
+  const [, base64] = String(dataUrl || '').split(',', 2)
+  const binary = window.atob(base64 || '')
+  const bytes = new Uint8Array(binary.length)
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index)
+  }
+  return bytes
+}
+
+async function convertImageFileToJpegPayload(file) {
+  const sourceUrl = await fileToDataUrl(file)
+  const image = await loadImageElement(sourceUrl)
+  const maxSide = 1200
+  const scale = Math.min(1, maxSide / Math.max(image.naturalWidth || 1, image.naturalHeight || 1))
+  const width = Math.max(1, Math.round((image.naturalWidth || 1) * scale))
+  const height = Math.max(1, Math.round((image.naturalHeight || 1) * scale))
+  const canvas = document.createElement('canvas')
+  canvas.width = width
+  canvas.height = height
+  const context = canvas.getContext('2d')
+  if (!context) {
+    throw new Error(TEXT.playlistEditorPickCoverFailed)
+  }
+
+  context.drawImage(image, 0, 0, width, height)
+  const jpegDataUrl = canvas.toDataURL('image/jpeg', 0.9)
+  return {
+    name: String(file?.name || 'playlist-cover').replace(/\.[a-z0-9]+$/i, '') + '.jpg',
+    previewUrl: jpegDataUrl,
+    data: dataUrlToUint8Array(jpegDataUrl),
+  }
+}
+
+async function handlePlaylistEditorCoverChange() {
+  const editorState = renderRuntime.playlistEditorState
+  const file = refs.playlistEditorCoverInput.files?.[0]
+  if (!editorState || !file) {
+    return
+  }
+
+  try {
+    editorState.coverUpload = await convertImageFileToJpegPayload(file)
+    syncPlaylistEditorUi()
+  } catch (error) {
+    refs.playlistEditorCoverInput.value = ''
+    editorState.coverUpload = null
+    syncPlaylistEditorUi()
+    showToast(error.message || TEXT.playlistEditorPickCoverFailed, 'error')
+  }
+}
+
+function resetPlaylistEditorCoverSelection() {
+  const editorState = renderRuntime.playlistEditorState
+  if (!editorState || editorState.saving || editorState.deleting) {
+    return
+  }
+
+  editorState.coverUpload = null
+  refs.playlistEditorCoverInput.value = ''
+  syncPlaylistEditorUi()
+}
+
+function refreshUiAfterOwnedPlaylistMutation() {
+  syncQueueWithPlaylists()
+  renderTabs()
+  renderHeader()
+  renderPlayer()
+  applyFilters({ syncAll: true })
+}
+
+function removeOwnedPlaylistLocalState(playlistId) {
+  const normalizedPlaylistId = Number(playlistId || 0)
+  if (normalizedPlaylistId <= 0) {
+    return
+  }
+
+  const nextOrderIds = getPlaylistOrderIdsForTab('owned').filter((id) => id !== normalizedPlaylistId)
+  setPlaylistOrderIdsForTab('owned', nextOrderIds, { persist: true })
+
+  const nextCollapsedIds = getCollapsedPlaylistIdsForTab('owned').filter((id) => id !== normalizedPlaylistId)
+  setCollapsedPlaylistIdsForTab('owned', nextCollapsedIds, { persist: true })
+
+  if (renderRuntime.selectedPlaylistId === normalizedPlaylistId) {
+    clearTrackSelection()
+  }
+
+  const removedCurrentPlaylist = Number(state.queuePlaylistId || 0) === normalizedPlaylistId
+  setPlaylists(state.playlists.filter((playlist) => Number(playlist.id || 0) !== normalizedPlaylistId))
+  if (removedCurrentPlaylist) {
+    clearCurrentPlayback()
+  } else {
+    syncQueueWithPlaylists()
+  }
+}
+
+async function submitPlaylistEditor() {
+  const editorState = renderRuntime.playlistEditorState
+  if (!editorState || editorState.saving || editorState.deleting) {
+    return
+  }
+
+  const name = refs.playlistEditorName.value.trim()
+  if (!name) {
+    showToast(TEXT.playlistEditorNameRequired, 'error')
+    refs.playlistEditorName.focus()
+    return
+  }
+
+  const description = refs.playlistEditorDescription.value.trim()
+  editorState.saving = true
+  syncPlaylistEditorUi()
+
+  const coverFile = editorState.coverUpload
+    ? {
+      name: editorState.coverUpload.name,
+      previewUrl: editorState.coverUpload.previewUrl,
+      data: editorState.coverUpload.data,
+    }
+    : null
+
+  try {
+    if (!appBridge) {
+      throw new Error(editorState.mode === 'create' ? TEXT.createOwnedPlaylistFailed : TEXT.updateOwnedPlaylistFailed)
+    }
+
+    if (editorState.mode === 'create') {
+      const result = await appBridge.createOwnedPlaylist({
+        name,
+        description,
+        coverFile,
+      })
+      if (!result?.ok || !result.playlist) {
+        throw new Error(result?.error || TEXT.createOwnedPlaylistFailed)
+      }
+
+      setPlaylists(upsertPlaylistIntoLibrary(state.playlists, result.playlist))
+      const ownedIds = getOwnedPlaylists()
+        .filter((playlist) => Number(playlist.id || 0) !== Number(result.playlist.id || 0))
+        .map((playlist) => playlist.id)
+      setPlaylistOrderIdsForTab('owned', [Number(result.playlist.id || 0), ...ownedIds], { persist: true })
+      editorState.saving = false
+      closePlaylistEditor()
+      refreshUiAfterOwnedPlaylistMutation()
+      showToast(TEXT.createOwnedPlaylistDone)
+      return
+    }
+
+    const result = await appBridge.updateOwnedPlaylist({
+      playlist: editorState.playlist,
+      name,
+      description,
+      coverFile,
+    })
+    if (!result?.ok || !result.playlist) {
+      throw new Error(result?.error || TEXT.updateOwnedPlaylistFailed)
+    }
+
+    setPlaylists(upsertPlaylistIntoLibrary(state.playlists, result.playlist))
+    editorState.saving = false
+    closePlaylistEditor()
+    refreshUiAfterOwnedPlaylistMutation()
+    showToast(TEXT.updateOwnedPlaylistDone)
+  } catch (error) {
+    editorState.saving = false
+    syncPlaylistEditorUi()
+    showToast(error.message || (editorState.mode === 'create' ? TEXT.createOwnedPlaylistFailed : TEXT.updateOwnedPlaylistFailed), 'error')
+  }
+}
+
+async function deleteOwnedPlaylistFromEditor() {
+  const editorState = renderRuntime.playlistEditorState
+  const playlist = editorState?.playlist
+  if (!editorState || editorState.mode !== 'edit' || editorState.saving || editorState.deleting || !canEditOwnedPlaylist(playlist)) {
+    return
+  }
+
+  if (!window.confirm(TEXT.playlistEditorDeleteConfirm)) {
+    return
+  }
+
+  editorState.deleting = true
+  syncPlaylistEditorUi()
+
+  try {
+    const result = await appBridge.deleteOwnedPlaylist({ playlist })
+    if (!result?.ok) {
+      throw new Error(result?.error || TEXT.deleteOwnedPlaylistFailed)
+    }
+
+    editorState.deleting = false
+    closePlaylistEditor()
+    removeOwnedPlaylistLocalState(playlist.id)
+    refreshUiAfterOwnedPlaylistMutation()
+    showToast(TEXT.deleteOwnedPlaylistDone)
+  } catch (error) {
+    editorState.deleting = false
+    syncPlaylistEditorUi()
+    showToast(error.message || TEXT.deleteOwnedPlaylistFailed, 'error')
+  }
 }
 
 function handleSettingsChange() {
@@ -7248,13 +9327,11 @@ async function locateCurrentTrack() {
     return
   }
 
-  const nextTab = playlist.isExplore
-    ? 'explore'
-    : playlist.isArtist
-      ? 'artists'
-    : isOwnedPlaylist(playlist)
-      ? 'owned'
-      : 'subscribed'
+  const nextTab = getPlaylistTab(playlist)
+  if (!nextTab) {
+    showToast(TEXT.locateFailed, 'error')
+    return
+  }
   if (state.activeTab !== nextTab) {
     activateTab(nextTab, { restoreTargetScroll: false })
   }
@@ -7494,6 +9571,11 @@ function handleKeydown(event) {
 
   if (event.key === 'Escape' && !refs.albumHoverPreview.classList.contains('hidden')) {
     hideAlbumHoverPreview()
+    return
+  }
+
+  if (event.key === 'Escape' && !refs.playlistEditor.classList.contains('hidden')) {
+    closePlaylistEditor()
     return
   }
 
