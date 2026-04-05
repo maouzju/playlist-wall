@@ -132,7 +132,7 @@ test('installUpdate downloads the asset, spawns the updater script and requests 
   assert.equal(result.ok, true)
   assert.equal(result.scheduled, true)
   assert.equal(spawnCalls.length, 1)
-  assert.equal(spawnCalls[0].command, 'powershell')
+  assert.equal(path.basename(spawnCalls[0].command).toLowerCase(), 'powershell.exe')
   assert.match(spawnCalls[0].args.join(' '), /apply-update\.ps1/)
 
   await new Promise((resolve) => setTimeout(resolve, 450))
@@ -229,11 +229,20 @@ test('installUpdate falls back to PowerShell download when the fetch downloader 
       spawnCalls.push({ command, args, options })
 
       const child = new EventEmitter()
+      child.stdout = new EventEmitter()
+      child.stderr = new EventEmitter()
       child.kill = () => {}
       child.unref = () => {}
 
       if (args.includes('-Command')) {
         process.nextTick(() => {
+          const script = args[args.indexOf('-Command') + 1]
+          const destinationMatch = script.match(/\$outFile = '([^']*(?:''[^']*)*)'/)
+          const destinationPath = destinationMatch
+            ? destinationMatch[1].replace(/''/g, "'")
+            : path.join(tempRoot, 'update.zip')
+          fs.mkdirSync(path.dirname(destinationPath), { recursive: true })
+          fs.writeFileSync(destinationPath, Buffer.from([80, 75, 3, 4]))
           child.emit('exit', 0)
         })
       }
@@ -247,6 +256,67 @@ test('installUpdate falls back to PowerShell download when the fetch downloader 
   assert.equal(result.ok, true)
   assert.equal(result.scheduled, true)
   assert.equal(spawnCalls.length, 2)
+  assert.equal(path.basename(spawnCalls[0].command).toLowerCase(), 'powershell.exe')
   assert.equal(spawnCalls[0].args.includes('-Command'), true)
   assert.equal(spawnCalls[1].args.includes('-File'), true)
+  assert.match(spawnCalls[0].args.join(' '), /SecurityProtocol/)
+  assert.match(spawnCalls[0].args.join(' '), /Parameters\.ContainsKey\('UseBasicParsing'\)/)
+  assert.match(spawnCalls[0].args.join(' '), /System\.Net\.Http\.HttpClient/)
+})
+
+test('installUpdate includes PowerShell stderr details when the fallback download fails', async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'playlist-wall-updater-fallback-error-test-'))
+  let fetchCallCount = 0
+
+  const updater = createAppUpdater({
+    app: {
+      isPackaged: true,
+      getVersion: () => '0.21.0',
+      getPath: () => tempRoot,
+      quit: () => {},
+    },
+    fetchImpl: async () => {
+      fetchCallCount += 1
+      if (fetchCallCount === 1) {
+        return {
+          ok: true,
+          json: async () => ({
+            tag_name: 'v0.22.0',
+            html_url: 'https://github.com/maouzju/playlist-wall/releases/tag/v0.22.0',
+            published_at: '2026-04-04T12:00:00.000Z',
+            assets: [
+              {
+                name: 'playlist-wall-0.22.0-windows-x64.zip',
+                browser_download_url: 'https://example.com/playlist-wall.zip',
+              },
+            ],
+          }),
+        }
+      }
+
+      throw new Error('network blocked')
+    },
+    spawnImpl: (_command, args) => {
+      const child = new EventEmitter()
+      child.stdout = new EventEmitter()
+      child.stderr = new EventEmitter()
+      child.kill = () => {}
+      child.unref = () => {}
+
+      if (args.includes('-Command')) {
+        process.nextTick(() => {
+          child.stderr.emit('data', 'All PowerShell download methods failed: TLS handshake failed')
+          child.emit('exit', 1)
+        })
+      }
+
+      return child
+    },
+  })
+
+  const result = await updater.installUpdate()
+
+  assert.equal(result.ok, false)
+  assert.match(result.error, /PowerShell download failed with exit code 1/)
+  assert.match(result.error, /TLS handshake failed/)
 })

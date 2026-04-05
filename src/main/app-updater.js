@@ -7,6 +7,7 @@ const DEFAULT_DOWNLOAD_IDLE_TIMEOUT_MS = 60 * 1000
 const DEFAULT_QUIT_GRACE_MS = 2 * 1000
 const DEFAULT_OWNER = 'maouzju'
 const DEFAULT_REPO = 'playlist-wall'
+const MAX_CAPTURED_PROCESS_OUTPUT = 8 * 1024
 
 function normalizeVersion(input) {
   const raw = String(input || '').trim().replace(/^[vV]/, '')
@@ -378,6 +379,47 @@ function escapePowerShellSingleQuotes(input) {
   return String(input || '').replace(/'/g, "''")
 }
 
+function getPowerShellExecutable() {
+  const systemRoot = process.env.SystemRoot || process.env.WINDIR
+  if (systemRoot) {
+    return path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+  }
+  return 'powershell.exe'
+}
+
+function appendCapturedProcessOutput(current, chunk) {
+  if (!chunk) {
+    return current
+  }
+
+  const text = Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk)
+  if (!text) {
+    return current
+  }
+
+  const next = `${current}${text}`
+  if (next.length <= MAX_CAPTURED_PROCESS_OUTPUT) {
+    return next
+  }
+
+  return next.slice(-MAX_CAPTURED_PROCESS_OUTPUT)
+}
+
+function summarizeCapturedProcessOutput(stdout, stderr) {
+  const lines = [stderr, stdout]
+    .map((value) => String(value || ''))
+    .join('\n')
+    .split(/\r?\n/g)
+    .map((line) => line.trim())
+    .filter(Boolean)
+
+  if (!lines.length) {
+    return ''
+  }
+
+  return lines.slice(-4).join(' | ')
+}
+
 async function downloadFileWithPowerShell(url, destinationPath, timeoutMs, spawnImpl = spawn) {
   if (typeof spawnImpl !== 'function') {
     throw new Error('PowerShell download is unavailable.')
@@ -386,9 +428,18 @@ async function downloadFileWithPowerShell(url, destinationPath, timeoutMs, spawn
   fs.mkdirSync(path.dirname(destinationPath), { recursive: true })
 
   const timeoutSec = Math.max(15, Math.ceil(timeoutMs / 1000))
-  const command = [
+  const powerShellCommand = getPowerShellExecutable()
+  const script = [
     "$ErrorActionPreference = 'Stop'",
     "$ProgressPreference = 'SilentlyContinue'",
+    '$securityProtocol = [Net.SecurityProtocolType]::Tls12',
+    "if ([Enum]::GetNames([Net.SecurityProtocolType]) -contains 'Tls11') {",
+    '  $securityProtocol = $securityProtocol -bor [Net.SecurityProtocolType]::Tls11',
+    '}',
+    "if ([Enum]::GetNames([Net.SecurityProtocolType]) -contains 'Tls13') {",
+    '  $securityProtocol = $securityProtocol -bor [Net.SecurityProtocolType]::Tls13',
+    '}',
+    '[Net.ServicePointManager]::SecurityProtocol = $securityProtocol',
     `$url = '${escapePowerShellSingleQuotes(url)}'`,
     `$outFile = '${escapePowerShellSingleQuotes(destinationPath)}'`,
     `$timeoutSec = ${timeoutSec}`,
@@ -396,46 +447,154 @@ async function downloadFileWithPowerShell(url, destinationPath, timeoutMs, spawn
     'if (-not (Test-Path -LiteralPath $outDir)) {',
     '  New-Item -ItemType Directory -Path $outDir -Force | Out-Null',
     '}',
+    '$downloadErrors = New-Object System.Collections.Generic.List[string]',
+    'function Add-DownloadError {',
+    '  param([string]$MethodName, [System.Exception]$Exception)',
+    '  if ($Exception) {',
+    '    $downloadErrors.Add("${MethodName}: $($Exception.Message)")',
+    '    return',
+    '  }',
+    '  $downloadErrors.Add("${MethodName}: Unknown error")',
+    '}',
+    'function Test-DownloadedFile {',
+    '  return (Test-Path -LiteralPath $outFile) -and ((Get-Item -LiteralPath $outFile).Length -gt 0)',
+    '}',
     'try {',
     '  Start-BitsTransfer -Source $url -Destination $outFile -ErrorAction Stop',
+    '  if (Test-DownloadedFile) { return }',
     '} catch {',
-    '  Invoke-WebRequest -Uri $url -OutFile $outFile -TimeoutSec $timeoutSec -UseBasicParsing',
+    "  Add-DownloadError 'Start-BitsTransfer' $_.Exception",
     '}',
+    'try {',
+    '  $invokeWebRequest = Get-Command Invoke-WebRequest -ErrorAction Stop',
+    "  if ($invokeWebRequest.Parameters.ContainsKey('UseBasicParsing')) {",
+    '    Invoke-WebRequest -Uri $url -OutFile $outFile -TimeoutSec $timeoutSec -UseBasicParsing',
+    '  } else {',
+    '    Invoke-WebRequest -Uri $url -OutFile $outFile -TimeoutSec $timeoutSec',
+    '  }',
+    '  if (Test-DownloadedFile) { return }',
+    '} catch {',
+    "  Add-DownloadError 'Invoke-WebRequest' $_.Exception",
+    '}',
+    'try {',
+    '  $webClient = New-Object System.Net.WebClient',
+    '  $webClient.DownloadFile($url, $outFile)',
+    '  if (Test-DownloadedFile) { return }',
+    '} catch {',
+    "  Add-DownloadError 'WebClient' $_.Exception",
+    '} finally {',
+    '  if ($webClient) {',
+    '    $webClient.Dispose()',
+    '  }',
+    '}',
+    'try {',
+    '  Add-Type -AssemblyName System.Net.Http',
+    '  $handler = New-Object System.Net.Http.HttpClientHandler',
+    '  $handler.AllowAutoRedirect = $true',
+    '  $client = [System.Net.Http.HttpClient]::new($handler)',
+    '  $client.Timeout = [TimeSpan]::FromSeconds($timeoutSec)',
+    '  $response = $client.GetAsync($url, [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead).GetAwaiter().GetResult()',
+    '  $response.EnsureSuccessStatusCode()',
+    '  $responseStream = $response.Content.ReadAsStreamAsync().GetAwaiter().GetResult()',
+    '  $fileStream = [System.IO.File]::Open($outFile, [System.IO.FileMode]::Create, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)',
+    '  try {',
+    '    $responseStream.CopyTo($fileStream)',
+    '  } finally {',
+    '    if ($responseStream) {',
+    '      $responseStream.Dispose()',
+    '    }',
+    '    if ($fileStream) {',
+    '      $fileStream.Dispose()',
+    '    }',
+    '  }',
+    '  if (Test-DownloadedFile) { return }',
+    '} catch {',
+    "  Add-DownloadError 'HttpClient' $_.Exception",
+    '} finally {',
+    '  if ($client) {',
+    '    $client.Dispose()',
+    '  }',
+    '  if ($handler) {',
+    '    $handler.Dispose()',
+    '  }',
+    '}',
+    'if (Test-Path -LiteralPath $outFile) {',
+    '  Remove-Item -LiteralPath $outFile -Force -ErrorAction SilentlyContinue',
+    '}',
+    "$detail = if ($downloadErrors.Count -gt 0) { $downloadErrors -join ' | ' } else { 'Unknown error' }",
+    'throw "All PowerShell download methods failed: $detail"',
   ].join('; ')
 
   await new Promise((resolve, reject) => {
-    const child = spawnImpl('powershell', [
+    const output = {
+      stdout: '',
+      stderr: '',
+    }
+    const child = spawnImpl(powerShellCommand, [
       '-NoProfile',
       '-NonInteractive',
       '-ExecutionPolicy',
       'Bypass',
       '-Command',
-      command,
+      script,
     ], {
-      stdio: 'ignore',
+      stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
     })
 
+    child.stdout?.on('data', (chunk) => {
+      output.stdout = appendCapturedProcessOutput(output.stdout, chunk)
+    })
+    child.stderr?.on('data', (chunk) => {
+      output.stderr = appendCapturedProcessOutput(output.stderr, chunk)
+    })
+
+    let settled = false
+    const finish = (handler) => (value) => {
+      if (settled) {
+        return
+      }
+      settled = true
+      clearTimeout(timer)
+      handler(value)
+    }
+
     const timer = setTimeout(() => {
+      if (settled) {
+        return
+      }
+      settled = true
       if (typeof child.kill === 'function') {
         child.kill()
       }
-      reject(new Error('Download timed out.'))
+      const detail = summarizeCapturedProcessOutput(output.stdout, output.stderr)
+      reject(new Error(detail ? `Download timed out. ${detail}` : 'Download timed out.'))
     }, timeoutMs)
 
-    child.once('error', (error) => {
-      clearTimeout(timer)
-      reject(error)
-    })
-
-    child.once('exit', (code) => {
-      clearTimeout(timer)
-      if (code === 0) {
+    const handleExit = finish((code) => {
+      if (code === 0 && fs.existsSync(destinationPath) && fs.statSync(destinationPath).size > 0) {
         resolve()
         return
       }
-      reject(new Error(`PowerShell download failed with exit code ${code}`))
+
+      const detail = summarizeCapturedProcessOutput(output.stdout, output.stderr)
+      if (code === 0) {
+        reject(new Error(detail
+          ? `PowerShell download finished without a file. ${detail}`
+          : 'PowerShell download finished without a file.'))
+        return
+      }
+
+      reject(new Error(detail
+        ? `PowerShell download failed with exit code ${code}: ${detail}`
+        : `PowerShell download failed with exit code ${code}`))
     })
+
+    child.once('error', finish((error) => {
+      reject(error)
+    }))
+    child.once('close', handleExit)
+    child.once('exit', handleExit)
   })
 
   return destinationPath
@@ -699,7 +858,7 @@ function createAppUpdater(options = {}) {
       fs.mkdirSync(tempRoot, { recursive: true })
       fs.writeFileSync(scriptPath, buildUpdaterScript(), 'utf8')
 
-      const child = spawnImpl('powershell', [
+      const child = spawnImpl(getPowerShellExecutable(), [
         '-NoProfile',
         '-ExecutionPolicy',
         'Bypass',
