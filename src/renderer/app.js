@@ -148,6 +148,8 @@ const TEXT = {
   goToArtistPlaylist: '\u8f6c\u5230\u827a\u4eba\u6b4c\u5355',
   goToArtistPlaylistDone: '\u5df2\u8df3\u8f6c\u5230\u827a\u4eba\u6b4c\u5355',
   goToArtistPlaylistFailed: '\u6ca1\u627e\u5230\u5bf9\u5e94\u7684\u827a\u4eba\u6b4c\u5355',
+  searchArtistCommunityPlaylists: '\u641c\u7d22\u5305\u542b\u672c\u827a\u4eba\u7684\u6b4c\u5355',
+  searchArtistCommunityPlaylistsFailed: '\u672a\u627e\u5230\u53ef\u7528\u4e8e\u641c\u7d22\u7684\u827a\u4eba',
   reorderPlaylistDone: '\u5df2\u540c\u6b65\u6b4c\u5355\u987a\u5e8f',
   reorderPlaylistFailed: '\u8c03\u6574\u6b4c\u5355\u987a\u5e8f\u5931\u8d25',
   noMoveTarget: '\u6682\u65f6\u6ca1\u6709\u66f4\u5408\u9002\u7684\u6b4c\u5355',
@@ -831,6 +833,11 @@ function createMockBridge() {
           playlist.name,
           playlist.creatorName,
           playlist.exploreSourceLabel,
+          ...(playlist.tracks || []).flatMap((track) => [
+            track.name,
+            track.album,
+            ...(Array.isArray(track.artists) ? track.artists : []),
+          ]),
         ].join(' ')).includes(query))
         : defaultExplorePlaylists
 
@@ -6008,6 +6015,9 @@ function createContextMenuButton(item) {
   if (item.artistKey) {
     button.dataset.artistKey = item.artistKey
   }
+  if (item.searchQuery) {
+    button.dataset.searchQuery = item.searchQuery
+  }
   if (item.disabled) {
     button.disabled = true
   }
@@ -6145,6 +6155,32 @@ function buildContextMenuItems(context) {
     label: target.name,
     type: 'button',
   }))
+  const artistExploreTargets = (context.artistExploreTargets || []).map((target) => ({
+    action: 'search-artist-community-playlists',
+    disabled: target.disabled,
+    label: target.name,
+    searchQuery: target.searchQuery,
+    type: 'button',
+  }))
+
+  if (artistExploreTargets.length) {
+    if (items.length) {
+      items.push({ type: 'divider' })
+    }
+    if (artistExploreTargets.length === 1) {
+      items.push({
+        ...artistExploreTargets[0],
+        id: 'context-search-artist-community-playlists-btn',
+        label: TEXT.searchArtistCommunityPlaylists,
+      })
+    } else {
+      items.push({
+        children: artistExploreTargets,
+        label: TEXT.searchArtistCommunityPlaylists,
+        type: 'submenu',
+      })
+    }
+  }
 
   if (artistTargets.length) {
     if (items.length) {
@@ -6208,6 +6244,7 @@ function resolveTrackContextMenuState(target) {
 
     return {
       canRemove: false,
+      artistExploreTargets: getArtistExploreContextTargets(track),
       artistTargets: getArtistContextTargets(track),
       keepSource: true,
       playlistId,
@@ -6239,6 +6276,7 @@ function resolveTrackContextMenuState(target) {
   const importedReadOnly = isImportedReadOnlyPlaylist(playlist)
   return {
     canRemove: isOwnedPlaylist(playlist) && !importedReadOnly,
+    artistExploreTargets: tracks.length > 1 ? [] : getArtistExploreContextTargets(track),
     artistTargets: tracks.length > 1
       ? []
       : getArtistContextTargets(track, {
@@ -6325,6 +6363,22 @@ function getArtistContextTargets(track, options = {}) {
       name: artist.name,
       playlistId,
       disabled: !playlistId || artist.key === excludeArtistKey,
+    }]
+  })
+}
+
+function getArtistExploreContextTargets(track) {
+  return getTrackArtistEntries(track).flatMap((artist) => {
+    const searchQuery = String(artist.name || '').trim()
+    if (!searchQuery) {
+      return []
+    }
+
+    return [{
+      key: artist.key,
+      name: artist.name,
+      searchQuery,
+      disabled: false,
     }]
   })
 }
@@ -6519,6 +6573,30 @@ async function jumpToArtistPlaylistFromContextMenu(artistPlaylistId, artistKey =
   showToast(TEXT.goToArtistPlaylistDone)
 }
 
+async function searchArtistCommunityPlaylistsFromContextMenu(searchQuery = '') {
+  closeContextMenu()
+
+  const normalizedQuery = String(searchQuery || '').trim()
+  if (!normalizedQuery) {
+    showToast(TEXT.searchArtistCommunityPlaylistsFailed, 'error')
+    return
+  }
+
+  if (!canUseNeteaseFeatures()) {
+    showToast(TEXT.exploreRequiresNetease, 'error')
+    return
+  }
+
+  state.search = normalizedQuery
+  refs.searchInput.value = normalizedQuery
+
+  if (state.activeTab !== 'explore') {
+    activateTab('explore', { restoreTargetScroll: false })
+  }
+
+  await loadExplorePlaylists(normalizedQuery)
+}
+
 async function openExternalUrl(url, failureText = TEXT.spotifyOpenFailed) {
   const normalizedUrl = String(url || '').trim()
   if (!normalizedUrl) {
@@ -6617,6 +6695,11 @@ function handleContextMenuClick(event) {
       Number(target.dataset.targetArtistPlaylistId),
       target.dataset.artistKey || ''
     )
+    return
+  }
+
+  if (action === 'search-artist-community-playlists') {
+    void searchArtistCommunityPlaylistsFromContextMenu(target.dataset.searchQuery || '')
   }
 }
 

@@ -747,6 +747,29 @@ test('artist tab groups artists by importance and context menu can jump to the m
   expect(position.bottom).toBeLessThan(position.containerBottom + 1)
 })
 
+test('track context menu can search community playlists containing the selected artist in explore tab', async ({ page }) => {
+  await waitForWall(page)
+
+  const exploreRequestsBefore = await page.evaluate(() => window.__mockStats?.exploreRequestCount || 0)
+
+  await page.click('#tab-owned')
+  await page.fill('#search-input', '艺术家 5')
+  const sourceRow = page.locator('.playlist-card[data-playlist-id="102"] .track-row[data-track-id="102005"]')
+  await expect(sourceRow).toBeVisible()
+  await sourceRow.click({ button: 'right' })
+
+  const searchButton = page.locator('#context-menu [data-context-action="search-artist-community-playlists"]')
+  await expect(searchButton).toBeVisible()
+  await searchButton.evaluate((node) => node.click())
+
+  await expect(page.locator('#tab-explore')).toHaveClass(/is-active/)
+  await expect(page.locator('#search-input')).toHaveValue('艺术家 5')
+  await expect.poll(async () => {
+    return page.evaluate(() => window.__mockStats?.exploreRequestCount || 0)
+  }).toBeGreaterThan(exploreRequestsBefore)
+  await expect(page.locator('.playlist-card')).toHaveCount(6)
+})
+
 test('artist playlists show a computed summary and can expand to all tracks', async ({ page }) => {
   await waitForWall(page)
 

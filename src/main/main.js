@@ -25,6 +25,7 @@ const HYDRATE_CONCURRENCY = 5
 const PLAYLIST_UNDO_NOTICE_MS = 20000
 const WINDOW_STATE_SAVE_DELAY_MS = 250
 const PLAYLIST_TRACK_BATCH_SIZE = 100
+const WINDOWS_APP_ID = 'com.maouzju.playlistwall'
 
 const TEXT = {
   windowTitle: '\u6b4c\u5355\u5899',
@@ -61,6 +62,10 @@ const appUpdater = createAppUpdater({
   owner: 'maouzju',
   repo: 'playlist-wall',
 })
+
+if (process.platform === 'win32') {
+  app.setAppUserModelId(WINDOWS_APP_ID)
+}
 
 function logRuntimeDiagnostic(label, payload) {
   if (payload === undefined) {
