@@ -1970,6 +1970,10 @@ function applyAppUpdateResult(result, errorStage = '') {
 }
 
 function getAppUpdateStatusText() {
+  if (state.appUpdate.busy && state.appUpdate.action === 'restart') {
+    return TEXT.appUpdateRestarting
+  }
+
   if (state.appUpdate.busy && state.appUpdate.action === 'install') {
     const targetVersion = state.appUpdate.latestVersion
       ? ` ${formatAppVersion(state.appUpdate.latestVersion)}`
@@ -2003,6 +2007,10 @@ function getAppUpdateStatusText() {
 }
 
 function getAppUpdateHintText() {
+  if (state.appUpdate.busy && state.appUpdate.action === 'restart') {
+    return '更新包已经准备好，正在关闭当前应用并启动新版。'
+  }
+
   if (state.appUpdate.busy && state.appUpdate.action === 'install') {
     return '更新包下载完成后，会自动关闭应用、替换当前目录并重新打开。'
   }
@@ -2129,6 +2137,9 @@ async function installLatestAppUpdate() {
     return false
   }
 
+  state.appUpdate.busy = true
+  state.appUpdate.action = 'restart'
+  renderSettings()
   showToast(TEXT.appUpdateRestarting)
   return true
 }

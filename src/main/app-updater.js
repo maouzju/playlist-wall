@@ -1,11 +1,10 @@
 const fs = require('fs')
 const path = require('path')
 const { spawn } = require('child_process')
-const { Readable } = require('stream')
-const { pipeline } = require('stream/promises')
-
 const DEFAULT_CACHE_TTL_MS = 30 * 60 * 1000
 const DEFAULT_REQUEST_TIMEOUT_MS = 20 * 1000
+const DEFAULT_DOWNLOAD_IDLE_TIMEOUT_MS = 60 * 1000
+const DEFAULT_QUIT_GRACE_MS = 2 * 1000
 const DEFAULT_OWNER = 'maouzju'
 const DEFAULT_REPO = 'playlist-wall'
 
@@ -204,7 +203,22 @@ async function fetchJson(url, fetchImpl, timeoutMs) {
   }
 
   const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  let timer = null
+  const resetTimer = () => {
+    if (timer) {
+      clearTimeout(timer)
+    }
+    timer = setTimeout(() => controller.abort(), timeoutMs)
+  }
+  const clearTimer = () => {
+    if (!timer) {
+      return
+    }
+    clearTimeout(timer)
+    timer = null
+  }
+
+  resetTimer()
 
   try {
     const response = await fetchImpl(url, {
@@ -228,7 +242,7 @@ async function fetchJson(url, fetchImpl, timeoutMs) {
     }
     throw error
   } finally {
-    clearTimeout(timer)
+    clearTimer()
   }
 }
 
@@ -238,7 +252,22 @@ async function downloadFile(url, destinationPath, fetchImpl, timeoutMs) {
   }
 
   const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  let timer = null
+  const resetTimer = () => {
+    if (timer) {
+      clearTimeout(timer)
+    }
+    timer = setTimeout(() => controller.abort(), timeoutMs)
+  }
+  const clearTimer = () => {
+    if (!timer) {
+      return
+    }
+    clearTimeout(timer)
+    timer = null
+  }
+
+  resetTimer()
 
   try {
     const response = await fetchImpl(url, {
@@ -257,15 +286,79 @@ async function downloadFile(url, destinationPath, fetchImpl, timeoutMs) {
     fs.mkdirSync(path.dirname(destinationPath), { recursive: true })
 
     if (!response.body) {
+      resetTimer()
       const buffer = Buffer.from(await response.arrayBuffer())
       fs.writeFileSync(destinationPath, buffer)
       return destinationPath
     }
 
-    const targetStream = fs.createWriteStream(destinationPath)
-    if (typeof Readable.fromWeb === 'function') {
-      await pipeline(Readable.fromWeb(response.body), targetStream)
+    if (typeof response.body.getReader === 'function') {
+      const reader = response.body.getReader()
+      const targetStream = fs.createWriteStream(destinationPath)
+
+      await new Promise((resolve, reject) => {
+        let settled = false
+
+        const finishResolve = () => {
+          if (settled) {
+            return
+          }
+          settled = true
+          resolve()
+        }
+
+        const finishReject = (error) => {
+          if (settled) {
+            return
+          }
+          settled = true
+          targetStream.destroy()
+          reject(error)
+        }
+
+        targetStream.on('error', finishReject)
+
+        const pump = async () => {
+          try {
+            while (true) {
+              resetTimer()
+              const { done, value } = await reader.read()
+              if (done) {
+                clearTimer()
+                targetStream.end(finishResolve)
+                return
+              }
+
+              if (!value || value.length === 0) {
+                continue
+              }
+
+              resetTimer()
+              if (!targetStream.write(Buffer.from(value))) {
+                await new Promise((drainResolve, drainReject) => {
+                  const handleDrain = () => {
+                    targetStream.off('error', handleError)
+                    drainResolve()
+                  }
+                  const handleError = (error) => {
+                    targetStream.off('drain', handleDrain)
+                    drainReject(error)
+                  }
+
+                  targetStream.once('drain', handleDrain)
+                  targetStream.once('error', handleError)
+                })
+              }
+            }
+          } catch (error) {
+            finishReject(error)
+          }
+        }
+
+        void pump()
+      })
     } else {
+      resetTimer()
       const buffer = Buffer.from(await response.arrayBuffer())
       fs.writeFileSync(destinationPath, buffer)
     }
@@ -279,6 +372,73 @@ async function downloadFile(url, destinationPath, fetchImpl, timeoutMs) {
   } finally {
     clearTimeout(timer)
   }
+}
+
+function escapePowerShellSingleQuotes(input) {
+  return String(input || '').replace(/'/g, "''")
+}
+
+async function downloadFileWithPowerShell(url, destinationPath, timeoutMs, spawnImpl = spawn) {
+  if (typeof spawnImpl !== 'function') {
+    throw new Error('PowerShell download is unavailable.')
+  }
+
+  fs.mkdirSync(path.dirname(destinationPath), { recursive: true })
+
+  const timeoutSec = Math.max(15, Math.ceil(timeoutMs / 1000))
+  const command = [
+    "$ErrorActionPreference = 'Stop'",
+    "$ProgressPreference = 'SilentlyContinue'",
+    `$url = '${escapePowerShellSingleQuotes(url)}'`,
+    `$outFile = '${escapePowerShellSingleQuotes(destinationPath)}'`,
+    `$timeoutSec = ${timeoutSec}`,
+    '$outDir = Split-Path -LiteralPath $outFile -Parent',
+    'if (-not (Test-Path -LiteralPath $outDir)) {',
+    '  New-Item -ItemType Directory -Path $outDir -Force | Out-Null',
+    '}',
+    'try {',
+    '  Start-BitsTransfer -Source $url -Destination $outFile -ErrorAction Stop',
+    '} catch {',
+    '  Invoke-WebRequest -Uri $url -OutFile $outFile -TimeoutSec $timeoutSec -UseBasicParsing',
+    '}',
+  ].join('; ')
+
+  await new Promise((resolve, reject) => {
+    const child = spawnImpl('powershell', [
+      '-NoProfile',
+      '-NonInteractive',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-Command',
+      command,
+    ], {
+      stdio: 'ignore',
+      windowsHide: true,
+    })
+
+    const timer = setTimeout(() => {
+      if (typeof child.kill === 'function') {
+        child.kill()
+      }
+      reject(new Error('Download timed out.'))
+    }, timeoutMs)
+
+    child.once('error', (error) => {
+      clearTimeout(timer)
+      reject(error)
+    })
+
+    child.once('exit', (code) => {
+      clearTimeout(timer)
+      if (code === 0) {
+        resolve()
+        return
+      }
+      reject(new Error(`PowerShell download failed with exit code ${code}`))
+    })
+  })
+
+  return destinationPath
 }
 
 function buildUpdaterScript() {
@@ -406,6 +566,14 @@ function createAppUpdater(options = {}) {
     1_000,
     Number(options.requestTimeoutMs || DEFAULT_REQUEST_TIMEOUT_MS) || DEFAULT_REQUEST_TIMEOUT_MS
   )
+  const downloadIdleTimeoutMs = Math.max(
+    5_000,
+    Number(options.downloadIdleTimeoutMs || DEFAULT_DOWNLOAD_IDLE_TIMEOUT_MS) || DEFAULT_DOWNLOAD_IDLE_TIMEOUT_MS
+  )
+  const quitGraceMs = Math.max(
+    100,
+    Number(options.quitGraceMs || DEFAULT_QUIT_GRACE_MS) || DEFAULT_QUIT_GRACE_MS
+  )
   const releaseApiUrl = options.releaseApiUrl || `https://api.github.com/repos/${owner}/${repo}/releases/latest`
   const releasePageUrl = options.releasePageUrl || `https://github.com/${owner}/${repo}/releases/latest`
 
@@ -514,7 +682,19 @@ function createAppUpdater(options = {}) {
       const extractRoot = path.join(tempRoot, 'extracted')
       const scriptPath = path.join(tempRoot, 'apply-update.ps1')
 
-      await downloadFile(status.downloadUrl, zipPath, fetchImpl, Math.max(requestTimeoutMs, 5 * 60 * 1000))
+      try {
+        await downloadFile(status.downloadUrl, zipPath, fetchImpl, downloadIdleTimeoutMs)
+      } catch (downloadError) {
+        if (process.platform !== 'win32') {
+          throw downloadError
+        }
+
+        try {
+          fs.rmSync(zipPath, { force: true })
+        } catch {}
+
+        await downloadFileWithPowerShell(status.downloadUrl, zipPath, Math.max(downloadIdleTimeoutMs, 2 * 60 * 1000), spawnImpl)
+      }
 
       fs.mkdirSync(tempRoot, { recursive: true })
       fs.writeFileSync(scriptPath, buildUpdaterScript(), 'utf8')
@@ -548,6 +728,11 @@ function createAppUpdater(options = {}) {
       setTimeout(() => {
         if (typeof app?.quit === 'function') {
           app.quit()
+        }
+        if (typeof app?.exit === 'function') {
+          setTimeout(() => {
+            app.exit(0)
+          }, quitGraceMs)
         }
       }, 350)
 

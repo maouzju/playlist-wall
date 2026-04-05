@@ -1,5 +1,6 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
+const { EventEmitter } = require('node:events')
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
@@ -136,4 +137,116 @@ test('installUpdate downloads the asset, spawns the updater script and requests 
 
   await new Promise((resolve) => setTimeout(resolve, 450))
   assert.equal(quitCalled, true)
+})
+
+test('installUpdate keeps downloading while data continues to arrive before the idle timeout', async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'playlist-wall-updater-stream-test-'))
+  let fetchCallCount = 0
+
+  const updater = createAppUpdater({
+    app: {
+      isPackaged: true,
+      getVersion: () => '0.21.0',
+      getPath: () => tempRoot,
+      quit: () => {},
+    },
+    downloadIdleTimeoutMs: 25,
+    fetchImpl: async () => {
+      fetchCallCount += 1
+      if (fetchCallCount === 1) {
+        return {
+          ok: true,
+          json: async () => ({
+            tag_name: 'v0.22.0',
+            html_url: 'https://github.com/maouzju/playlist-wall/releases/tag/v0.22.0',
+            published_at: '2026-04-04T12:00:00.000Z',
+            assets: [
+              {
+                name: 'playlist-wall-0.22.0-windows-x64.zip',
+                browser_download_url: 'https://example.com/playlist-wall.zip',
+              },
+            ],
+          }),
+        }
+      }
+
+      return {
+        ok: true,
+        body: new ReadableStream({
+          start(controller) {
+            setTimeout(() => controller.enqueue(new Uint8Array([80, 75])), 5)
+            setTimeout(() => controller.enqueue(new Uint8Array([3, 4])), 20)
+            setTimeout(() => controller.close(), 40)
+          },
+        }),
+      }
+    },
+    spawnImpl: () => ({
+      unref() {},
+    }),
+  })
+
+  const result = await updater.installUpdate()
+
+  assert.equal(result.ok, true)
+  assert.equal(result.scheduled, true)
+})
+
+test('installUpdate falls back to PowerShell download when the fetch downloader fails', async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'playlist-wall-updater-fallback-test-'))
+  const spawnCalls = []
+  let fetchCallCount = 0
+
+  const updater = createAppUpdater({
+    app: {
+      isPackaged: true,
+      getVersion: () => '0.21.0',
+      getPath: () => tempRoot,
+      quit: () => {},
+    },
+    fetchImpl: async () => {
+      fetchCallCount += 1
+      if (fetchCallCount === 1) {
+        return {
+          ok: true,
+          json: async () => ({
+            tag_name: 'v0.22.0',
+            html_url: 'https://github.com/maouzju/playlist-wall/releases/tag/v0.22.0',
+            published_at: '2026-04-04T12:00:00.000Z',
+            assets: [
+              {
+                name: 'playlist-wall-0.22.0-windows-x64.zip',
+                browser_download_url: 'https://example.com/playlist-wall.zip',
+              },
+            ],
+          }),
+        }
+      }
+
+      throw new Error('network blocked')
+    },
+    spawnImpl: (command, args, options) => {
+      spawnCalls.push({ command, args, options })
+
+      const child = new EventEmitter()
+      child.kill = () => {}
+      child.unref = () => {}
+
+      if (args.includes('-Command')) {
+        process.nextTick(() => {
+          child.emit('exit', 0)
+        })
+      }
+
+      return child
+    },
+  })
+
+  const result = await updater.installUpdate()
+
+  assert.equal(result.ok, true)
+  assert.equal(result.scheduled, true)
+  assert.equal(spawnCalls.length, 2)
+  assert.equal(spawnCalls[0].args.includes('-Command'), true)
+  assert.equal(spawnCalls[1].args.includes('-File'), true)
 })
