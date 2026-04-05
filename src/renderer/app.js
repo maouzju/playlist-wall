@@ -141,6 +141,7 @@ const TEXT = {
   playlistUndoPrompt: '\u662f\u5426\u64a4\u9500\uff1f',
   playlistUndoPending: '\u8bf7\u5148\u5904\u7406\u5f53\u524d\u7684\u64a4\u9500\u63d0\u793a',
   close: '\u5173\u95ed',
+  clearSearch: '\u6e05\u7a7a\u641c\u7d22',
   moveToPlaylistDone: '\u5df2\u79fb\u52a8\u5230\u6b4c\u5355',
   copyToPlaylistDone: '\u5df2\u52a0\u5165\u5230\u6b4c\u5355',
   moveToPlaylistFailed: '\u79fb\u52a8\u5230\u6b4c\u5355\u5931\u8d25',
@@ -1612,6 +1613,7 @@ function cacheRefs() {
   refs.tabExploreCount = document.getElementById('tab-explore-count')
   refs.tabArtistsCount = document.getElementById('tab-artists-count')
   refs.searchInput = document.getElementById('search-input')
+  refs.searchClearBtn = document.getElementById('search-clear-btn')
   refs.createOwnedPlaylistBtn = document.getElementById('create-owned-playlist-btn')
   refs.themeToggleBtn = document.getElementById('theme-toggle-btn')
   refs.locateCurrentBtn = document.getElementById('locate-current-btn')
@@ -1764,16 +1766,15 @@ function bindEvents() {
   refs.settingsSpotifySyncToSpotifyBtn.addEventListener('click', () => {
     void handleNeteaseSyncToSpotify()
   })
+  refs.searchClearBtn.addEventListener('mousedown', (event) => {
+    event.preventDefault()
+  })
+  refs.searchClearBtn.addEventListener('click', () => {
+    void clearSearch({ focus: true })
+  })
   refs.searchInput.addEventListener('input', (event) => {
-    state.search = event.target.value
-    window.clearTimeout(renderRuntime.searchTimer)
-    renderRuntime.searchTimer = window.setTimeout(() => {
-      if (state.activeTab === 'explore') {
-        void loadExplorePlaylists(state.search)
-        return
-      }
-      applyFilters()
-    }, SEARCH_DEBOUNCE_MS)
+    setSearchState(event.target.value)
+    scheduleSearchRefresh()
   })
   refs.wallScroll.addEventListener('scroll', () => {
     if (!shouldKeepContextMenuOpenOnScroll()) {
@@ -2697,7 +2698,7 @@ function resetAppState() {
   state.recommendations = new Map()
   state.activeTab = 'owned'
   state.visiblePlaylists = []
-  state.search = ''
+  setSearchState('')
   state.exploreLoaded = false
   state.exploreLoading = false
   state.exploreQuery = ''
@@ -2745,7 +2746,6 @@ function resetAppState() {
   renderRuntime.playlistDragSourceCard = null
   renderRuntime.playlistDragIndicator = null
   renderRuntime.playlistEditorState = null
-  refs.searchInput.value = ''
   refs.playlistEditorForm.reset()
   refs.playlistEditorBackdrop.classList.add('hidden')
   refs.playlistEditor.classList.add('hidden')
@@ -3991,19 +3991,64 @@ function renderTabs() {
   refs.tabExplore.disabled = !canUseNeteaseFeatures()
 }
 
+function renderSearchInput() {
+  refs.searchInput.placeholder = state.activeTab === 'explore'
+    ? TEXT.searchExplorePlaceholder
+    : state.activeTab === 'spotify'
+      ? TEXT.searchSpotifyPlaceholder
+      : state.activeTab === 'artists'
+        ? TEXT.searchArtistsPlaceholder
+        : TEXT.searchLibraryPlaceholder
+
+  const hasSearchValue = Boolean(refs.searchInput.value || state.search)
+  refs.searchClearBtn.classList.toggle('hidden', !hasSearchValue)
+  refs.searchClearBtn.disabled = !hasSearchValue
+  refs.searchClearBtn.setAttribute('aria-label', TEXT.clearSearch)
+  refs.searchClearBtn.title = TEXT.clearSearch
+}
+
+function setSearchState(value = '') {
+  const nextValue = String(value || '')
+  state.search = nextValue
+  if (refs.searchInput.value !== nextValue) {
+    refs.searchInput.value = nextValue
+  }
+  renderSearchInput()
+}
+
+function scheduleSearchRefresh() {
+  window.clearTimeout(renderRuntime.searchTimer)
+  renderRuntime.searchTimer = window.setTimeout(() => {
+    if (state.activeTab === 'explore') {
+      void loadExplorePlaylists(state.search)
+      return
+    }
+    applyFilters()
+  }, SEARCH_DEBOUNCE_MS)
+}
+
+async function clearSearch({ focus = false, syncAll = true } = {}) {
+  window.clearTimeout(renderRuntime.searchTimer)
+  setSearchState('')
+
+  if (state.activeTab === 'explore') {
+    await loadExplorePlaylists('')
+  } else {
+    applyFilters({ syncAll })
+  }
+
+  if (focus) {
+    refs.searchInput.focus()
+  }
+}
+
 function renderHeader() {
   const nickname = state.account?.nickname || '\u5f53\u524d\u8d26\u53f7'
   if (refs.accountLine) {
     refs.accountLine.textContent = nickname
   }
   refs.createOwnedPlaylistBtn.classList.toggle('hidden', state.activeTab !== 'owned' || !canUseNeteaseFeatures())
-  refs.searchInput.placeholder = state.activeTab === 'explore'
-    ? TEXT.searchExplorePlaceholder
-    : state.activeTab === 'spotify'
-      ? TEXT.searchSpotifyPlaceholder
-    : state.activeTab === 'artists'
-      ? TEXT.searchArtistsPlaceholder
-      : TEXT.searchLibraryPlaceholder
+  renderSearchInput()
 }
 
 function applyFilters({ syncAll = false } = {}) {
@@ -5949,7 +5994,6 @@ function openContextMenu(clientX, clientY) {
   refs.contextMenu.classList.remove('hidden', 'context-menu--submenu-left')
   refs.contextMenu.style.left = '0px'
   refs.contextMenu.style.top = '0px'
-  refs.contextMenu.style.removeProperty('--context-menu-submenu-top')
 
   const viewportPadding = 8
   const menuWidth = refs.contextMenu.offsetWidth || 224
@@ -5967,26 +6011,35 @@ function openContextMenu(clientX, clientY) {
   refs.contextMenu.style.left = `${left}px`
   refs.contextMenu.style.top = `${top}px`
 
-  const submenu = refs.contextMenu.querySelector('.context-menu-submenu')
-  const submenuGroup = submenu ? submenu.parentElement : null
-  if (!(submenu instanceof HTMLElement) || !(submenuGroup instanceof HTMLElement)) {
+  const submenuEntries = [...refs.contextMenu.querySelectorAll('.context-menu-group')]
+    .map((group) => ({
+      group,
+      submenu: group.querySelector('.context-menu-submenu'),
+    }))
+    .filter(({ group, submenu }) => group instanceof HTMLElement && submenu instanceof HTMLElement)
+  if (!submenuEntries.length) {
     return
   }
 
-  const submenuWidth = submenu.offsetWidth || 180
-  const submenuHeight = submenu.offsetHeight || Math.min(480, submenu.scrollHeight + 8)
+  const submenuWidth = submenuEntries.reduce(
+    (maxWidth, entry) => Math.max(maxWidth, entry.submenu.offsetWidth || 180),
+    180
+  )
   const spaceRight = window.innerWidth - (left + menuWidth) - viewportPadding
   const spaceLeft = left - viewportPadding
   if (spaceRight < submenuWidth && spaceLeft > spaceRight) {
     refs.contextMenu.classList.add('context-menu--submenu-left')
   }
 
-  const submenuTop = clamp(
-    top + submenuGroup.offsetTop,
-    viewportPadding,
-    Math.max(viewportPadding, window.innerHeight - submenuHeight - viewportPadding)
-  ) - top - submenuGroup.offsetTop
-  refs.contextMenu.style.setProperty('--context-menu-submenu-top', `${submenuTop}px`)
+  for (const entry of submenuEntries) {
+    const submenuHeight = entry.submenu.offsetHeight || Math.min(480, entry.submenu.scrollHeight + 8)
+    const submenuTop = clamp(
+      top + entry.group.offsetTop,
+      viewportPadding,
+      Math.max(viewportPadding, window.innerHeight - submenuHeight - viewportPadding)
+    ) - top - entry.group.offsetTop
+    entry.submenu.style.setProperty('--context-menu-submenu-top', `${submenuTop}px`)
+  }
 }
 
 function closeContextMenu() {
@@ -5994,7 +6047,6 @@ function closeContextMenu() {
   renderRuntime.contextMenuOpenedAt = 0
   refs.contextMenu.classList.add('hidden')
   refs.contextMenu.classList.remove('context-menu--submenu-left')
-  refs.contextMenu.style.removeProperty('--context-menu-submenu-top')
   refs.contextMenu.replaceChildren()
 }
 
@@ -6525,11 +6577,10 @@ async function focusPlaylistCardInTab(tab, playlistId, options = {}) {
   }
 
   if (state.search) {
-    state.search = ''
-    refs.searchInput.value = ''
+    await clearSearch({ syncAll: true })
+  } else {
+    applyFilters({ syncAll: true })
   }
-
-  applyFilters({ syncAll: true })
 
   for (let attempt = 0; attempt < 4; attempt += 1) {
     const placement = getWallPlacementByPlaylistId(normalizedPlaylistId)
@@ -6598,8 +6649,7 @@ async function searchArtistCommunityPlaylistsFromContextMenu(searchQuery = '') {
     return
   }
 
-  state.search = normalizedQuery
-  refs.searchInput.value = normalizedQuery
+  setSearchState(normalizedQuery)
 
   if (state.activeTab !== 'explore') {
     activateTab('explore', { restoreTargetScroll: false })
@@ -9432,13 +9482,13 @@ async function locateCurrentTrack() {
     activateTab(nextTab, { restoreTargetScroll: false })
   }
 
-  if (state.search) {
-    state.search = ''
-    refs.searchInput.value = ''
-  }
-
   setPlaylistCollapsed(state.queuePlaylistId, false, { persist: true, rerender: false })
-  applyFilters({ syncAll: true })
+
+  if (state.search) {
+    await clearSearch({ syncAll: true })
+  } else {
+    applyFilters({ syncAll: true })
+  }
 
   if (state.queueMode === 'recommendation') {
     const placement = getWallPlacementByPlaylistId(state.queuePlaylistId)

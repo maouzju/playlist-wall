@@ -333,19 +333,57 @@ button:focus-visible,
 .search-shell {
   display: flex;
   align-items: center;
+  gap: calc(4px * var(--ui-scale));
   min-width: 0;
   border: 1px solid var(--line);
   border-radius: 999px;
   padding: calc(6px * var(--ui-scale)) calc(10px * var(--ui-scale));
 }
 
+.search-shell__field {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  align-items: center;
+}
+
 .search-shell input {
   width: 100%;
+  min-width: 0;
   border: none;
   outline: none;
   background: transparent;
   color: var(--text);
   font-size: calc(13px * var(--ui-scale));
+}
+
+.search-clear-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: calc(28px * var(--ui-scale));
+  height: calc(28px * var(--ui-scale));
+  flex: none;
+  border: none;
+  border-radius: 999px;
+  padding: 0;
+  background: transparent;
+  color: var(--muted);
+}
+
+.search-clear-btn:hover:not(:disabled) {
+  transform: none;
+  background: var(--surface-soft);
+  color: var(--text);
+}
+
+.search-clear-btn:focus-visible {
+  outline: none;
+}
+
+.search-clear-btn:disabled {
+  cursor: default;
+  opacity: 0.42;
 }
 
 .top-actions {
@@ -1147,7 +1185,7 @@ button:focus-visible,
   display: grid;
   place-items: center;
   padding: 0;
-  border: 1px solid rgba(255, 255, 255, 0.22);
+  border: none;
   border-radius: calc(999px * var(--ui-scale));
   background: rgba(0, 0, 0, 0.78);
   color: #ffffff;
@@ -1164,12 +1202,7 @@ button:focus-visible,
 
 .playlist-header-action--artist-toggle.is-expanded {
   background: rgba(16, 128, 64, 0.88);
-  border-color: rgba(255, 255, 255, 0.16);
   color: #ffffff;
-}
-
-.playlist-header:not(.has-cover) .playlist-header-action--artist-toggle.is-expanded {
-  border-color: rgba(16, 128, 64, 0.4);
 }
 
 .playlist-header-action-icon {
@@ -1184,7 +1217,6 @@ button:focus-visible,
 }
 
 .playlist-header:not(.has-cover) .playlist-header-action {
-  border-color: var(--line-soft);
   background: var(--surface);
   color: var(--text);
 }
@@ -1201,12 +1233,7 @@ button:focus-visible,
 
 .playlist-header-action.is-active {
   background: rgba(16, 128, 64, 0.88);
-  border-color: rgba(255, 255, 255, 0.16);
   color: #ffffff;
-}
-
-.playlist-header:not(.has-cover) .playlist-header-action.is-active {
-  border-color: rgba(16, 128, 64, 0.4);
 }
 
 .playlist-header-action.is-danger {

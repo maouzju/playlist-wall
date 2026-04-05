@@ -365,10 +365,17 @@ test('explore tab loads discovery playlists and supports remote playlist search'
   await expect(page.locator('#tab-explore')).toHaveClass(/is-active/)
   await expect(page.locator('.playlist-card').first()).toBeVisible()
   await expect(page.locator('.playlist-card').first().locator('.playlist-meta')).toContainText(/\u63a8\u9001|\u63a8\u8350|\u7cbe\u9009/)
+  await expect(page.locator('#search-clear-btn')).toBeHidden()
 
   await page.fill('#search-input', 'Jazz')
   await expect(page.locator('.playlist-card')).toHaveCount(1)
   await expect(page.locator('.playlist-card').first().locator('.playlist-title')).toContainText('Jazz')
+  await expect(page.locator('#search-clear-btn')).toBeVisible()
+
+  await page.click('#search-clear-btn')
+  await expect(page.locator('#search-input')).toHaveValue('')
+  await expect(page.locator('#search-clear-btn')).toBeHidden()
+  await expect.poll(async () => page.locator('.playlist-card').count()).toBeGreaterThan(1)
 })
 
 test('switching tabs restores each tab scroll position', async ({ page }) => {
@@ -1519,6 +1526,87 @@ test('context menu stays near the clicked track while submenu reflows inside a n
   expect(submenuBox.y).toBeGreaterThanOrEqual(8)
   expect(submenuBox.x + submenuBox.width).toBeLessThanOrEqual(viewport.width)
   expect(submenuBox.y + submenuBox.height).toBeLessThanOrEqual(viewport.height)
+})
+
+test('later context submenus keep their own alignment when a tall first submenu reflows', async ({ page }) => {
+  const viewport = { width: 520, height: 540 }
+  await page.setViewportSize(viewport)
+  await waitForWall(page)
+
+  await page.evaluate(() => {
+    const sourcePlaylist = state.playlists.find((playlist) => Number(playlist?.id || 0) === 102)
+    const sourceTrack = sourcePlaylist?.tracks?.find((track) => Number(track?.id || 0) === 102005)
+    if (!sourcePlaylist || !sourceTrack) {
+      throw new Error('expected the source track to exist')
+    }
+
+    sourceTrack.artistEntries = [
+      { id: 501, name: 'Enkei' },
+      { id: 502, name: 'Kornel' },
+      { id: 503, name: '68+1' },
+    ]
+    sourceTrack.artists = sourceTrack.artistEntries.map((artist) => artist.name)
+
+    const extraPlaylists = Array.from({ length: 16 }, (_, index) =>
+      buildMockPlaylist(400 + index, `额外歌单 ${index + 1}`, 8, 1, false)
+    )
+    setPlaylists([...state.playlists, ...extraPlaylists])
+    applyFilters({ syncAll: true })
+
+    const row = document.querySelector('.playlist-card[data-playlist-id="102"] .track-row[data-track-id="102005"]')
+    if (!(row instanceof HTMLElement)) {
+      throw new Error('expected the row to stay rendered')
+    }
+
+    const context = resolveTrackContextMenuState(row)
+    if (!context) {
+      throw new Error('expected a context menu state for the row')
+    }
+
+    renderRuntime.contextMenuTrack = context
+    openContextMenu(140, 360)
+  })
+
+  const menu = page.locator('#context-menu')
+  await expect(menu).toBeVisible()
+
+  const triggers = menu.locator('.context-menu-item--submenu-trigger')
+  await expect(triggers).toHaveCount(3)
+
+  const artistTrigger = triggers.nth(2)
+  const artistTriggerBox = await artistTrigger.boundingBox()
+  if (!artistTriggerBox) {
+    throw new Error('expected the artist trigger to be visible')
+  }
+
+  const triggerCenterY = Math.round(artistTriggerBox.y + (artistTriggerBox.height / 2))
+  await page.mouse.move(
+    Math.round(artistTriggerBox.x + artistTriggerBox.width - 12),
+    triggerCenterY,
+    { steps: 6 }
+  )
+
+  const artistSubmenu = menu.locator('.context-menu-submenu').nth(2)
+  await expect(artistSubmenu).toBeVisible()
+  await expect(artistSubmenu.locator('[data-context-action="go-to-artist-playlist"]')).toHaveCount(3)
+
+  const artistSubmenuBox = await artistSubmenu.boundingBox()
+  if (!artistSubmenuBox) {
+    throw new Error('expected the artist submenu to be visible')
+  }
+
+  expect(artistSubmenuBox.y).toBeLessThanOrEqual(triggerCenterY)
+  expect(artistSubmenuBox.y + artistSubmenuBox.height).toBeGreaterThanOrEqual(triggerCenterY)
+  expect(artistSubmenuBox.y).toBeGreaterThanOrEqual(8)
+  expect(artistSubmenuBox.y + artistSubmenuBox.height).toBeLessThanOrEqual(viewport.height)
+
+  await page.mouse.move(
+    Math.round(artistSubmenuBox.x + 20),
+    triggerCenterY,
+    { steps: 12 }
+  )
+  await expect(artistSubmenu).toBeVisible()
+  await expect(artistSubmenu.locator('[data-context-action="go-to-artist-playlist"]')).toHaveCount(3)
 })
 
 test('subscribed tracks can be added to an owned playlist via context menu', async ({ page }) => {
