@@ -30,6 +30,7 @@ contextBridge.exposeInMainWorld('bridge', {
   removeSubscribedPlaylist: (playlist) => ipcRenderer.invoke('removeSubscribedPlaylist', playlist),
   restoreSubscribedPlaylist: (playlist) => ipcRenderer.invoke('restoreSubscribedPlaylist', playlist),
   commitPlaylistTrackMove: (payload) => ipcRenderer.invoke('commitPlaylistTrackMove', payload),
+  commitPlaylistOrder: (playlistIds) => ipcRenderer.invoke('commitPlaylistOrder', playlistIds),
   onProgress: (callback) => bind('progress', callback),
   onPlaylistPatch: (callback) => bind('playlist-patch', callback),
   onSubscribedPlaylistRemovalFailed: (callback) => bind('subscribed-playlist-removal-failed', callback),

@@ -149,7 +149,7 @@ const TEXT = {
   goToArtistPlaylist: '\u8f6c\u5230\u827a\u4eba\u6b4c\u5355',
   goToArtistPlaylistDone: '\u5df2\u8df3\u8f6c\u5230\u827a\u4eba\u6b4c\u5355',
   goToArtistPlaylistFailed: '\u6ca1\u627e\u5230\u5bf9\u5e94\u7684\u827a\u4eba\u6b4c\u5355',
-  searchArtistCommunityPlaylists: '\u641c\u7d22\u5305\u542b\u672c\u827a\u4eba\u7684\u6b4c\u5355',
+  searchArtistCommunityPlaylists: '\u641c\u7d22\u5305\u542b\u672c\u827a\u4eba\u6b4c\u66f2\u7684\u6b4c\u5355',
   searchArtistCommunityPlaylistsFailed: '\u672a\u627e\u5230\u53ef\u7528\u4e8e\u641c\u7d22\u7684\u827a\u4eba',
   reorderPlaylistDone: '\u5df2\u540c\u6b65\u6b4c\u5355\u987a\u5e8f',
   reorderPlaylistFailed: '\u8c03\u6574\u6b4c\u5355\u987a\u5e8f\u5931\u8d25',
@@ -222,6 +222,8 @@ const state = {
   exploreLoaded: false,
   exploreLoading: false,
   exploreQuery: '',
+  exploreArtistSearchRef: '',
+  exploreArtistFilterKey: '',
   exploreError: '',
   queue: [],
   queueMode: '',
@@ -829,18 +831,32 @@ function createMockBridge() {
       exploreRequestCount += 1
       updateMockStats()
       const query = normalizeQuery(options?.query || '')
-      const source = query
-        ? defaultExplorePlaylists.filter((playlist) => normalizeQuery([
-          playlist.name,
-          playlist.creatorName,
-          playlist.exploreSourceLabel,
-          ...(playlist.tracks || []).flatMap((track) => [
-            track.name,
-            track.album,
-            ...(Array.isArray(track.artists) ? track.artists : []),
-          ]),
-        ].join(' ')).includes(query))
-        : defaultExplorePlaylists
+      const resolvedArtistId = Number(options?.artistRef || 0) > 0
+        ? Number(options.artistRef || 0)
+        : Number(artistTrackStore.byName.get(normalizeQuery(options?.artistName || options?.artistRef || '')) || 0)
+      const seedTrackIds = new Set()
+      if (Number(options?.seedTrackId || 0) > 0) {
+        seedTrackIds.add(Number(options.seedTrackId || 0))
+      }
+      if (resolvedArtistId > 0) {
+        for (const track of (artistTrackStore.byId.get(resolvedArtistId) || []).slice(0, 10)) {
+          if (Number(track?.id || 0) > 0) {
+            seedTrackIds.add(Number(track.id || 0))
+          }
+        }
+      }
+      const source = seedTrackIds.size
+        ? defaultExplorePlaylists.filter((playlist) =>
+          (playlist.tracks || []).some((track) => seedTrackIds.has(Number(track?.id || 0)))
+        )
+        : (query
+          ? defaultExplorePlaylists.filter((playlist) => normalizeQuery([
+            playlist.name,
+            playlist.creatorName,
+            playlist.exploreSourceLabel,
+            playlist.description,
+          ].join(' ')).includes(query))
+          : defaultExplorePlaylists)
 
       if (exploreDelay > 0) {
         await new Promise((resolve) => window.setTimeout(resolve, exploreDelay))
@@ -1047,6 +1063,17 @@ function buildHugeMockPlaylists() {
 }
 
 function buildMockExplorePlaylists() {
+  const buildExplicitMockTrack = (id, name, artistId, artistName, albumId = 1) => ({
+    artistEntries: [{ id: artistId, name: artistName }],
+    albumId,
+    albumCoverUrl: buildMockCover(albumId),
+    id,
+    name,
+    artists: [artistName],
+    album: `\u4e13\u8f91 ${albumId}`,
+    durationMs: 180000,
+  })
+
   return [
     buildMockPlaylist(901, '\u6bcf\u65e5\u63a8\u9001 \u665a\u95f4\u653e\u677e', 32, 3001, true, '', {
       creatorName: '\u4e91\u97f3\u4e50\u65e5\u63a8',
@@ -1060,17 +1087,29 @@ function buildMockExplorePlaylists() {
       isExplore: true,
       playCount: 285000,
     }),
-    buildMockPlaylist(903, '\u793e\u533a\u7cbe\u9009 \u72ec\u7acb\u6c11\u8c23', 41, 4001, true, '', {
+    buildMockPlaylist(903, '\u793e\u533a\u7cbe\u9009 \u827a\u672f\u5bb6 5 \u591c\u822a\u7cbe\u9009', 12, 4001, true, '', {
       creatorName: '\u6a59\u5b50\u7535\u53f0',
       exploreSourceLabel: '\u793e\u533a\u7cbe\u9009',
       isExplore: true,
       playCount: 810000,
+      tracks: [
+        buildExplicitMockTrack(101005, '\u6211\u559c\u6b22\u7684\u97f3\u4e50 5', 5, '\u827a\u672f\u5bb6 5', 5),
+        buildExplicitMockTrack(903002, '\u591c\u822a\u7cbe\u9009 2', 2, '\u827a\u672f\u5bb6 2', 2),
+        buildExplicitMockTrack(903003, '\u591c\u822a\u7cbe\u9009 3', 5, '\u827a\u672f\u5bb6 5', 6),
+        buildExplicitMockTrack(903004, '\u591c\u822a\u7cbe\u9009 4', 1, '\u827a\u672f\u5bb6 1', 3),
+      ],
     }),
-    buildMockPlaylist(904, '\u793e\u533a\u7cbe\u9009 \u96f6\u70b9 R&B', 37, 4002, true, '', {
+    buildMockPlaylist(904, '\u793e\u533a\u7cbe\u9009 \u827a\u672f\u5bb6 5 \u6807\u9898\u515a', 4, 4002, true, '', {
       creatorName: '\u591c\u884c\u7535\u53f0',
       exploreSourceLabel: '\u793e\u533a\u7cbe\u9009',
       isExplore: true,
       playCount: 670000,
+      tracks: [
+        buildExplicitMockTrack(904001, '\u5047\u547d\u4e2d 1', 1, '\u827a\u672f\u5bb6 1', 1),
+        buildExplicitMockTrack(904002, '\u5047\u547d\u4e2d 2', 2, '\u827a\u672f\u5bb6 2', 2),
+        buildExplicitMockTrack(904003, '\u5047\u547d\u4e2d 3', 1, '\u827a\u672f\u5bb6 1', 3),
+        buildExplicitMockTrack(904004, '\u5047\u547d\u4e2d 4', 2, '\u827a\u672f\u5bb6 2', 4),
+      ],
     }),
     buildMockPlaylist(905, '\u793e\u533a\u7cbe\u9009 \u706f\u4e0b Jazz', 25, 4003, true, '', {
       creatorName: '\u9ed1\u80f6\u4ff1\u4e50\u90e8',
@@ -1078,11 +1117,17 @@ function buildMockExplorePlaylists() {
       isExplore: true,
       playCount: 510000,
     }),
-    buildMockPlaylist(906, '\u641c\u7d22\u70ed\u95e8 \u901a\u52e4 City Pop', 30, 4004, true, '', {
+    buildMockPlaylist(906, '\u641c\u7d22\u70ed\u95e8 \u827a\u672f\u5bb6 5 \u57ce\u5e02\u56de\u58f0', 4, 4004, true, '', {
       creatorName: '\u7535\u53f0 FM',
       exploreSourceLabel: '\u793e\u533a\u7cbe\u9009',
       isExplore: true,
       playCount: 430000,
+      tracks: [
+        buildExplicitMockTrack(102005, '\u81ea\u5efa\u7535\u5b50 5', 5, '\u827a\u672f\u5bb6 5', 5),
+        buildExplicitMockTrack(906002, '\u57ce\u5e02\u56de\u58f0 2', 3, '\u827a\u672f\u5bb6 3', 6),
+        buildExplicitMockTrack(906003, '\u57ce\u5e02\u56de\u58f0 3', 5, '\u827a\u672f\u5bb6 5', 7),
+        buildExplicitMockTrack(906004, '\u57ce\u5e02\u56de\u58f0 4', 4, '\u827a\u672f\u5bb6 4', 8),
+      ],
     }),
   ]
 }
@@ -1773,6 +1818,9 @@ function bindEvents() {
     void clearSearch({ focus: true })
   })
   refs.searchInput.addEventListener('input', (event) => {
+    if (state.exploreArtistFilterKey) {
+      state.exploreArtistFilterKey = ''
+    }
     setSearchState(event.target.value)
     scheduleSearchRefresh()
   })
@@ -2481,15 +2529,21 @@ function silentlyPreloadExplorePlaylists() {
   }
 
   const normalizedQuery = normalizeQuery(state.search)
+  const requestKey = buildExploreRequestKey(normalizedQuery)
   if (normalizedQuery) {
     return
   }
 
-  if (state.exploreLoaded && state.exploreQuery === normalizedQuery && !state.exploreError) {
+  if (
+    state.exploreLoaded
+    && state.exploreQuery === normalizedQuery
+    && !state.exploreArtistSearchRef
+    && !state.exploreError
+  ) {
     return
   }
 
-  if (state.exploreLoading && renderRuntime.exploreRequestKey === normalizedQuery) {
+  if (state.exploreLoading && renderRuntime.exploreRequestKey === requestKey) {
     return
   }
 
@@ -2510,9 +2564,46 @@ function silentlyPreloadArtistPlaylists() {
   }
 }
 
-async function loadExplorePlaylists(query = '', { force = false } = {}) {
+function buildExploreArtistSearchRef(artistRef = '', artistName = '', seedTrackId = 0) {
+  const normalizedArtistId = Number(artistRef || 0)
+  const normalizedSeedTrackId = Number(seedTrackId || 0)
+  const refParts = []
+  if (normalizedSeedTrackId > 0) {
+    refParts.push(`track:${normalizedSeedTrackId}`)
+  }
+  if (normalizedArtistId > 0) {
+    refParts.push(`id:${normalizedArtistId}`)
+  }
+
+  const normalizedArtistName = normalizeQuery(artistName || artistRef || '')
+  if (normalizedArtistName) {
+    refParts.push(`name:${normalizedArtistName}`)
+  }
+
+  return refParts.join('|')
+}
+
+function buildExploreRequestKey(query = '', artistRef = '', artistName = '', seedTrackId = 0) {
+  return `${normalizeQuery(query)}::${buildExploreArtistSearchRef(artistRef, artistName, seedTrackId)}`
+}
+
+async function loadExplorePlaylists(query = '', {
+  force = false,
+  limit = 0,
+  artistRef = '',
+  artistName = '',
+  seedTrackId = 0,
+} = {}) {
   const normalizedQuery = normalizeQuery(query)
-  if (!force && state.exploreLoaded && state.exploreQuery === normalizedQuery && !state.exploreError) {
+  const artistSearchRef = buildExploreArtistSearchRef(artistRef, artistName, seedTrackId)
+  const requestKey = buildExploreRequestKey(query, artistRef, artistName, seedTrackId)
+  if (
+    !force
+    && state.exploreLoaded
+    && state.exploreQuery === normalizedQuery
+    && state.exploreArtistSearchRef === artistSearchRef
+    && !state.exploreError
+  ) {
     if (state.activeTab === 'explore') {
       applyFilters()
     }
@@ -2522,7 +2613,7 @@ async function loadExplorePlaylists(query = '', { force = false } = {}) {
   if (
     !force
     && state.exploreLoading
-    && renderRuntime.exploreRequestKey === normalizedQuery
+    && renderRuntime.exploreRequestKey === requestKey
     && renderRuntime.exploreRequestPromise
   ) {
     renderExploreLoadingState()
@@ -2533,14 +2624,29 @@ async function loadExplorePlaylists(query = '', { force = false } = {}) {
   const requestToken = ++renderRuntime.exploreRequestToken
   state.exploreLoading = true
   state.exploreError = ''
-  renderRuntime.exploreRequestKey = normalizedQuery
+  renderRuntime.exploreRequestKey = requestKey
 
   renderExploreLoadingState()
 
   const requestPromise = (async () => {
     let result
     try {
-      result = await appBridge.getExplorePlaylists({ query })
+      const requestOptions = { query }
+      const requestArtistRef = Number(artistRef || 0) > 0
+        ? Number(artistRef || 0)
+        : String(artistRef || artistName || query || '').trim()
+      const numericLimit = Number(limit)
+      if (Number.isFinite(numericLimit) && numericLimit > 0) {
+        requestOptions.limit = Math.max(1, Math.round(numericLimit))
+      }
+      if (artistSearchRef && requestArtistRef) {
+        requestOptions.artistRef = requestArtistRef
+        requestOptions.artistName = String(artistName || query || '').trim()
+      }
+      if (Number(seedTrackId || 0) > 0) {
+        requestOptions.seedTrackId = Number(seedTrackId || 0)
+      }
+      result = await appBridge.getExplorePlaylists(requestOptions)
     } catch (error) {
       result = {
         ok: false,
@@ -2556,7 +2662,7 @@ async function loadExplorePlaylists(query = '', { force = false } = {}) {
     state.exploreLoading = false
     if (!result?.ok) {
       state.exploreError = result?.error || TEXT.exploreFailed
-      setExplorePlaylists([], query)
+      setExplorePlaylists([], query, { artistSearchRef })
       renderTabs()
       if (state.activeTab === 'explore') {
         showToast(state.exploreError, 'error')
@@ -2566,7 +2672,7 @@ async function loadExplorePlaylists(query = '', { force = false } = {}) {
     }
 
     state.exploreError = ''
-    setExplorePlaylists((result.playlists || []).map(normalizePlaylist), query)
+    setExplorePlaylists((result.playlists || []).map(normalizePlaylist), query, { artistSearchRef })
     renderTabs()
 
     if (state.activeTab === 'explore') {
@@ -2702,6 +2808,8 @@ function resetAppState() {
   state.exploreLoaded = false
   state.exploreLoading = false
   state.exploreQuery = ''
+  state.exploreArtistSearchRef = ''
+  state.exploreArtistFilterKey = ''
   state.exploreError = ''
   state.queue = []
   state.queueMode = ''
@@ -2837,6 +2945,15 @@ function getTrackArtistEntries(track) {
 
 function getTrackArtistKeys(track) {
   return getTrackArtistEntries(track).map((artist) => artist.key)
+}
+
+function playlistContainsArtistKey(playlist, artistKey = '') {
+  const normalizedArtistKey = String(artistKey || '').trim()
+  if (!normalizedArtistKey) {
+    return true
+  }
+
+  return (playlist?.tracks || []).some((track) => getTrackArtistKeys(track).includes(normalizedArtistKey))
 }
 
 function getAlbumKey(track) {
@@ -3416,10 +3533,11 @@ function setSpotifyPlaylists(playlists) {
   refreshAllRecommendationTracks()
 }
 
-function setExplorePlaylists(playlists, query = '') {
+function setExplorePlaylists(playlists, query = '', options = {}) {
   state.explorePlaylists = playlists
   state.exploreLoaded = true
   state.exploreQuery = normalizeQuery(query)
+  state.exploreArtistSearchRef = String(options.artistSearchRef || '').trim()
   refreshPlaylistMap()
 }
 
@@ -4030,6 +4148,7 @@ function scheduleSearchRefresh() {
 async function clearSearch({ focus = false, syncAll = true } = {}) {
   window.clearTimeout(renderRuntime.searchTimer)
   setSearchState('')
+  state.exploreArtistFilterKey = ''
 
   if (state.activeTab === 'explore') {
     await loadExplorePlaylists('')
@@ -4057,7 +4176,10 @@ function applyFilters({ syncAll = false } = {}) {
   const source = getSourcePlaylists()
   const query = normalizeQuery(state.search)
   if (state.activeTab === 'explore') {
-    state.visiblePlaylists = source.map((playlist) => ({
+    const visibleSource = state.exploreArtistFilterKey
+      ? source.filter((playlist) => playlistContainsArtistKey(playlist, state.exploreArtistFilterKey))
+      : source
+    state.visiblePlaylists = visibleSource.map((playlist) => ({
       ...playlist,
       wallTracks: playlist.tracks,
       matchedCount: playlist.tracks.length,
@@ -6078,6 +6200,12 @@ function createContextMenuButton(item) {
   if (item.artistKey) {
     button.dataset.artistKey = item.artistKey
   }
+  if (item.artistId) {
+    button.dataset.artistId = String(item.artistId)
+  }
+  if (item.seedTrackId) {
+    button.dataset.seedTrackId = String(item.seedTrackId)
+  }
   if (item.searchQuery) {
     button.dataset.searchQuery = item.searchQuery
   }
@@ -6220,6 +6348,9 @@ function buildContextMenuItems(context) {
   }))
   const artistExploreTargets = (context.artistExploreTargets || []).map((target) => ({
     action: 'search-artist-community-playlists',
+    artistId: target.artistId,
+    artistKey: target.key,
+    seedTrackId: target.seedTrackId,
     disabled: target.disabled,
     label: target.name,
     searchQuery: target.searchQuery,
@@ -6438,8 +6569,10 @@ function getArtistExploreContextTargets(track) {
     }
 
     return [{
+      artistId: Number(artist.id || 0),
       key: artist.key,
       name: artist.name,
+      seedTrackId: Number(track?.id || 0),
       searchQuery,
       disabled: false,
     }]
@@ -6635,7 +6768,7 @@ async function jumpToArtistPlaylistFromContextMenu(artistPlaylistId, artistKey =
   showToast(TEXT.goToArtistPlaylistDone)
 }
 
-async function searchArtistCommunityPlaylistsFromContextMenu(searchQuery = '') {
+async function searchArtistCommunityPlaylistsFromContextMenu(searchQuery = '', artistKey = '', artistId = 0, seedTrackId = 0) {
   closeContextMenu()
 
   const normalizedQuery = String(searchQuery || '').trim()
@@ -6655,7 +6788,13 @@ async function searchArtistCommunityPlaylistsFromContextMenu(searchQuery = '') {
     activateTab('explore', { restoreTargetScroll: false })
   }
 
-  await loadExplorePlaylists(normalizedQuery)
+  await loadExplorePlaylists(normalizedQuery, {
+    force: true,
+    limit: 36,
+    artistRef: Number(artistId || 0) > 0 ? Number(artistId || 0) : normalizedQuery,
+    artistName: normalizedQuery,
+    seedTrackId: Number(seedTrackId || 0),
+  })
 }
 
 async function openExternalUrl(url, failureText = TEXT.spotifyOpenFailed) {
@@ -6760,7 +6899,12 @@ function handleContextMenuClick(event) {
   }
 
   if (action === 'search-artist-community-playlists') {
-    void searchArtistCommunityPlaylistsFromContextMenu(target.dataset.searchQuery || '')
+    void searchArtistCommunityPlaylistsFromContextMenu(
+      target.dataset.searchQuery || '',
+      target.dataset.artistKey || '',
+      Number(target.dataset.artistId || 0),
+      Number(target.dataset.seedTrackId || 0)
+    )
   }
 }
 
@@ -7577,7 +7721,25 @@ function applyPlaylistMovePlan(plan) {
     return
   }
 
+  if (orderChanged && shouldPersistPlaylistOrderForTab(plan.tab)) {
+    void syncPlaylistOrderToServer(plan.orderIds)
+  }
+
   applyFilters({ syncAll: true })
+}
+
+async function syncPlaylistOrderToServer(orderIds) {
+  if (!appBridge || typeof appBridge.commitPlaylistOrder !== 'function') {
+    return
+  }
+  try {
+    const result = await appBridge.commitPlaylistOrder(orderIds)
+    if (result && result.ok === false && result.error) {
+      console.warn('[playlist] sync order failed:', result.error)
+    }
+  } catch (error) {
+    console.warn('[playlist] sync order error:', error)
+  }
 }
 
 function clearPlaylistDragIndicator() {

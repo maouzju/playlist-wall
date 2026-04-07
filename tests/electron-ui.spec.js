@@ -754,7 +754,7 @@ test('artist tab groups artists by importance and context menu can jump to the m
   expect(position.bottom).toBeLessThan(position.containerBottom + 1)
 })
 
-test('track context menu can search community playlists containing the selected artist in explore tab', async ({ page }) => {
+test('track context menu can search community playlists containing songs by the selected artist in explore tab', async ({ page }) => {
   await waitForWall(page)
 
   const exploreRequestsBefore = await page.evaluate(() => window.__mockStats?.exploreRequestCount || 0)
@@ -774,7 +774,12 @@ test('track context menu can search community playlists containing the selected 
   await expect.poll(async () => {
     return page.evaluate(() => window.__mockStats?.exploreRequestCount || 0)
   }).toBeGreaterThan(exploreRequestsBefore)
-  await expect(page.locator('.playlist-card')).toHaveCount(6)
+  await expect(page.locator('.playlist-card')).toHaveCount(2)
+  await expect(page.locator('.playlist-card .playlist-title')).toContainText([
+    '社区精选 艺术家 5 夜航精选',
+    '搜索热门 艺术家 5 城市回声',
+  ])
+  await expect(page.locator('.playlist-card .playlist-title[title=\"社区精选 艺术家 5 标题党\"]')).toHaveCount(0)
 })
 
 test('artist playlists show a computed summary and can expand to all tracks', async ({ page }) => {

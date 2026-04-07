@@ -485,6 +485,131 @@ test('playlist management methods create refresh and mutate owned playlists', as
   }
 })
 
+test('getExplorePlaylists aggregates selected track and artist hot songs through simi playlists', async () => {
+  const originals = {
+    artist_songs: api.artist_songs,
+    simi_playlist: api.simi_playlist,
+    playlist_detail: api.playlist_detail,
+    playlist_track_all: api.playlist_track_all,
+  }
+  const artistSongCalls = []
+  const simiPlaylistCalls = []
+  const detailCalls = []
+  const trackAllCalls = []
+  const buildSong = (id, artistId, artistName = `Artist ${artistId}`) => ({
+    id,
+    name: `Song ${id}`,
+    ar: [{ id: artistId, name: artistName }],
+    al: { id: 1000 + id, name: `Album ${id}`, picUrl: `cover-${id}` },
+    dt: 180000,
+  })
+  const playlistSummaries = {
+    11: { id: 11, name: '午夜流动', trackCount: 12, playCount: 320000, creator: { userId: 1, nickname: 'Night Shift' } },
+    12: { id: 12, name: '城市回声', trackCount: 16, playCount: 880000, creator: { userId: 2, nickname: 'Echo FM' } },
+    13: { id: 13, name: '长夜车窗', trackCount: 10, playCount: 510000, creator: { userId: 3, nickname: 'Late FM' } },
+  }
+  const previewTracks = {
+    11: [buildSong(1101, 1)],
+    12: [buildSong(1201, 2)],
+    13: [buildSong(1301, 3)],
+  }
+  const fullTracks = {
+    11: [buildSong(5003, 5, 'Artist 5'), buildSong(1112, 2)],
+    12: [buildSong(5001, 5, 'Artist 5'), buildSong(5002, 5, 'Artist 5'), buildSong(1213, 4)],
+    13: [buildSong(5002, 5, 'Artist 5'), buildSong(1312, 1)],
+  }
+
+  api.artist_songs = (params) => {
+    artistSongCalls.push({ ...params })
+    return Promise.resolve({
+      body: {
+        code: 200,
+        songs: [
+          buildSong(5002, 5, 'Artist 5'),
+          buildSong(5003, 5, 'Artist 5'),
+        ],
+      },
+    })
+  }
+
+  api.simi_playlist = (params) => {
+    simiPlaylistCalls.push({ ...params })
+    const seedTrackId = Number(params.id || 0)
+    const playlists = seedTrackId === 5001
+      ? [playlistSummaries[11], playlistSummaries[12]]
+      : seedTrackId === 5002
+        ? [playlistSummaries[12], playlistSummaries[13]]
+        : seedTrackId === 5003
+          ? [playlistSummaries[11]]
+          : []
+
+    return Promise.resolve({
+      body: {
+        code: 200,
+        playlists,
+      },
+    })
+  }
+
+  api.playlist_detail = (params) => {
+    detailCalls.push({ ...params })
+    const playlistId = Number(params.id || 0)
+    const summary = playlistSummaries[playlistId]
+    return Promise.resolve({
+      body: {
+        code: 200,
+        playlist: {
+          ...summary,
+          coverImgUrl: `cover-${playlistId}`,
+          tracks: previewTracks[playlistId] || [],
+        },
+      },
+    })
+  }
+
+  api.playlist_track_all = (params) => {
+    trackAllCalls.push({ ...params })
+    const playlistId = Number(params.id || 0)
+    return Promise.resolve({
+      body: {
+        code: 200,
+        songs: fullTracks[playlistId] || [],
+      },
+    })
+  }
+
+  try {
+    const service = new NeteaseService('mock-cookie')
+    const playlists = await service.getExplorePlaylists('Artist 5', {
+      limit: 2,
+      artistRef: 5,
+      artistName: 'Artist 5',
+      seedTrackId: 5001,
+    })
+
+    assert.equal(artistSongCalls.length, 1)
+    assert.equal(Number(artistSongCalls[0].id || 0), 5)
+    assert.deepEqual(simiPlaylistCalls.map((call) => Number(call.id || 0)), [5001, 5002, 5003])
+    assert.deepEqual(simiPlaylistCalls.map((call) => Number(call.limit || 0)), [10, 10, 10])
+    assert.deepEqual(
+      [...new Set(detailCalls.map((call) => Number(call.id || 0)))].sort((left, right) => left - right),
+      [11, 12, 13]
+    )
+    assert.deepEqual(
+      [...new Set(trackAllCalls.map((call) => Number(call.id || 0)))].sort((left, right) => left - right),
+      [11, 12, 13]
+    )
+    assert.deepEqual(playlists.map((playlist) => playlist.id), [12, 13])
+    assert.equal(playlists[0].tracks.length, 1)
+    assert.equal(playlists[1].tracks.length, 1)
+  } finally {
+    api.artist_songs = originals.artist_songs
+    api.simi_playlist = originals.simi_playlist
+    api.playlist_detail = originals.playlist_detail
+    api.playlist_track_all = originals.playlist_track_all
+  }
+})
+
 test('subscribePlaylist retries timed out requests before failing', async () => {
   const original = api.playlist_subscribe
   const calls = []

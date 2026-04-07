@@ -2,6 +2,9 @@ const api = require('NeteaseCloudMusicApi')
 
 const PLAYLIST_PAGE_SIZE = 1000
 const EXPLORE_DETAIL_CONCURRENCY = 4
+const ARTIST_EXPLORE_SEED_TRACK_LIMIT = 10
+const ARTIST_EXPLORE_PLAYLISTS_PER_SEED = 10
+const ARTIST_EXPLORE_VALIDATE_CONCURRENCY = 3
 const API_REQUEST_TIMEOUT_MS = 15000
 const API_MAX_ATTEMPTS = 5
 const API_RETRY_DELAY_MS = 2000
@@ -236,6 +239,29 @@ function normalizeTrackIds(trackIds) {
       .map((id) => Number(id))
       .filter((id) => id > 0)
   )]
+}
+
+function collectMatchedTrackIds(tracks, trackIdSet) {
+  if (!(trackIdSet instanceof Set) || !trackIdSet.size || !Array.isArray(tracks)) {
+    return []
+  }
+
+  return normalizeTrackIds(
+    tracks
+      .map((track) => Number(track?.id || 0))
+      .filter((trackId) => trackIdSet.has(trackId))
+  )
+}
+
+function shouldHydrateExplorePlaylistTracks(playlist) {
+  if (playlist?.tracksError) {
+    return false
+  }
+
+  const playlistId = Number(playlist?.sourcePlaylistId || playlist?.id || 0)
+  const trackCount = Math.max(Number(playlist?.trackCount || 0), 0)
+  const loadedTrackCount = Array.isArray(playlist?.tracks) ? playlist.tracks.length : 0
+  return playlistId > 0 && trackCount > loadedTrackCount
 }
 
 function normalizeTrackRecord(track, index = 0) {
@@ -989,6 +1015,25 @@ class NeteaseService {
     ensureApiSuccess(response.body, '\u66f4\u65b0\u6b4c\u5355\u987a\u5e8f\u5931\u8d25')
   }
 
+  async updatePlaylistOrder(playlistIds) {
+    const normalizedIds = [...new Set((playlistIds || []).map((id) => Number(id)).filter((id) => id > 0))]
+    if (!normalizedIds.length) {
+      throw new Error('\u66f4\u65b0\u6b4c\u5355\u5217\u8868\u987a\u5e8f\u5931\u8d25')
+    }
+
+    const response = await callApi('playlist_order_update', {
+      cookie: this.cookie,
+      ids: JSON.stringify(normalizedIds),
+    }, {
+      fallbackMessage: '\u66f4\u65b0\u6b4c\u5355\u5217\u8868\u987a\u5e8f\u5931\u8d25',
+      codeMessages: {
+        301: '\u9700\u8981\u6709\u6548\u7684\u7f51\u6613\u4e91\u767b\u5f55\u6001\uff0c\u624d\u80fd\u8c03\u6574\u6b4c\u5355\u5217\u8868\u987a\u5e8f\u3002',
+      },
+    })
+
+    ensureApiSuccess(response.body, '\u66f4\u65b0\u6b4c\u5355\u5217\u8868\u987a\u5e8f\u5931\u8d25')
+  }
+
   async getPlaylistRecommendations(seedTrackIds, count = 12) {
     const normalizedSeedTrackIds = [...new Set((seedTrackIds || []).map((id) => Number(id)).filter((id) => id > 0))]
     const seen = new Set()
@@ -1035,8 +1080,14 @@ class NeteaseService {
 
   async getExplorePlaylists(query = '', options = {}) {
     const normalizedQuery = String(query || '').trim()
+    const resolvedArtistRef = Number(options?.artistRef || 0) > 0
+      ? Number(options.artistRef || 0)
+      : String(options?.artistRef || options?.artistName || '').trim()
+    const seedTrackId = Number(options?.seedTrackId || 0)
     return normalizedQuery
-      ? this.searchExplorePlaylists(normalizedQuery, options)
+      ? ((resolvedArtistRef || seedTrackId > 0)
+        ? this.searchExplorePlaylistsByArtist(normalizedQuery, resolvedArtistRef, options)
+        : this.searchExplorePlaylists(normalizedQuery, options))
       : this.getDefaultExplorePlaylists(options)
   }
 
@@ -1094,6 +1145,169 @@ class NeteaseService {
       })),
       { exploreSourceLabel: '搜索结果' }
     )
+  }
+
+  async searchExplorePlaylistsByArtist(keywords, artistRef, options = {}) {
+    const finalLimit = Math.max(1, Math.round(Number(options.limit || 18) || 18))
+    const selectedTrackId = Number(options?.seedTrackId || 0)
+    const resolvedArtistNameFallback = String(options?.artistName || artistRef || keywords || '').trim()
+    let resolvedArtistId = Number(options?.artistRef || 0)
+    let resolvedArtistName = resolvedArtistNameFallback
+    let artistSeedTracks = []
+    let artistSongsError = null
+
+    if (artistRef) {
+      try {
+        const artistResult = await this.getArtistSongs(artistRef, ARTIST_EXPLORE_SEED_TRACK_LIMIT, {
+          includeArtistId: true,
+          resolveContext: options?.resolveContext,
+        })
+        resolvedArtistId = Number(artistResult?.artistId || resolvedArtistId || 0)
+        resolvedArtistName = String(artistResult?.artistName || resolvedArtistNameFallback).trim()
+        artistSeedTracks = Array.isArray(artistResult?.tracks) ? artistResult.tracks : []
+      } catch (error) {
+        artistSongsError = error
+      }
+    }
+
+    const seedTrackIds = normalizeTrackIds([
+      selectedTrackId,
+      ...artistSeedTracks.map((track) => Number(track?.id || 0)),
+    ])
+    if (!seedTrackIds.length) {
+      if (artistSongsError) {
+        throw artistSongsError
+      }
+      return []
+    }
+
+    const candidateEntries = new Map()
+    for (const seedTrackId of seedTrackIds) {
+      const response = await callApi('simi_playlist', {
+        cookie: this.cookie,
+        id: seedTrackId,
+        limit: ARTIST_EXPLORE_PLAYLISTS_PER_SEED,
+        offset: 0,
+      }, {
+        fallbackMessage: '获取相似歌单失败',
+        codeMessages: {
+          301: '获取相似歌单需要有效的网易云登录态，请刷新登录后再试。',
+        },
+      })
+
+      ensureApiSuccess(response.body, '获取相似歌单失败', {
+        301: '获取相似歌单需要有效的网易云登录态，请刷新登录后再试。',
+      })
+
+      for (const rawPlaylist of response.body?.playlists || []) {
+        const normalizedPlaylist = normalizePlaylistSummary(rawPlaylist, {
+          sourcePlaylistId: Number(rawPlaylist?.id || 0),
+          exploreSourceLabel: '相似歌单',
+          isExplore: true,
+        })
+        const playlistId = Number(normalizedPlaylist?.sourcePlaylistId || normalizedPlaylist?.id || 0)
+        if (playlistId <= 0) {
+          continue
+        }
+
+        const existingEntry = candidateEntries.get(playlistId)
+        if (existingEntry) {
+          existingEntry.seedTrackIds.add(seedTrackId)
+          if (selectedTrackId > 0 && seedTrackId === selectedTrackId) {
+            existingEntry.containsSelectedTrack = true
+          }
+          continue
+        }
+
+        candidateEntries.set(playlistId, {
+          containsSelectedTrack: selectedTrackId > 0 && seedTrackId === selectedTrackId,
+          playlist: normalizedPlaylist,
+          seedTrackIds: new Set([seedTrackId]),
+        })
+      }
+    }
+
+    if (!candidateEntries.size) {
+      return []
+    }
+
+    const candidateLimit = Math.min(48, Math.max(finalLimit * 2, 24))
+    const rankedCandidateEntries = [...candidateEntries.values()]
+      .sort((left, right) =>
+        Number(right.containsSelectedTrack) - Number(left.containsSelectedTrack)
+        || right.seedTrackIds.size - left.seedTrackIds.size
+        || Number(right.playlist?.playCount || 0) - Number(left.playlist?.playCount || 0)
+        || Number(right.playlist?.trackCount || 0) - Number(left.playlist?.trackCount || 0)
+        || Number(left.playlist?.sourcePlaylistId || left.playlist?.id || 0) - Number(right.playlist?.sourcePlaylistId || right.playlist?.id || 0))
+      .slice(0, candidateLimit)
+    const rankedCandidateEntryById = new Map(
+      rankedCandidateEntries.map((entry) => [Number(entry.playlist?.sourcePlaylistId || entry.playlist?.id || 0), entry])
+    )
+    const expandedCandidates = await this.expandExplorePlaylistPreviews(
+      rankedCandidateEntries.map((entry) => entry.playlist),
+      { exploreSourceLabel: '相似歌单' }
+    )
+    const validatedCandidates = await mapWithConcurrency(
+      expandedCandidates,
+      ARTIST_EXPLORE_VALIDATE_CONCURRENCY,
+      async (playlist) => {
+        const playlistId = Number(playlist?.sourcePlaylistId || playlist?.id || 0)
+        const rankedEntry = rankedCandidateEntryById.get(playlistId)
+        if (!rankedEntry) {
+          return null
+        }
+
+        const candidateSeedTrackIdSet = rankedEntry.seedTrackIds || new Set()
+        let matchedSeedTrackIds = collectMatchedTrackIds(playlist?.tracks || [], candidateSeedTrackIdSet)
+        if (shouldHydrateExplorePlaylistTracks(playlist)) {
+          try {
+            const fullTracks = await this.getPlaylistTracks(playlistId, playlist.trackCount)
+            const fullyMatchedSeedTrackIds = collectMatchedTrackIds(fullTracks, candidateSeedTrackIdSet)
+            if (fullyMatchedSeedTrackIds.length) {
+              matchedSeedTrackIds = fullyMatchedSeedTrackIds
+            }
+          } catch {}
+        }
+
+        if (!matchedSeedTrackIds.length) {
+          return null
+        }
+
+        return {
+          containsSelectedTrack: selectedTrackId > 0 && matchedSeedTrackIds.includes(selectedTrackId),
+          matchedSeedTrackCount: matchedSeedTrackIds.length,
+          playlist: normalizePlaylistSummary(playlist, {
+            sourcePlaylistId: playlistId,
+            coverUrl: playlist?.coverUrl,
+            creatorId: Number(playlist?.creatorId || 0),
+            creatorName: playlist?.creatorName || '',
+            description: String(playlist?.description || ''),
+            exploreSourceLabel: playlist?.exploreSourceLabel || '相似歌单',
+            id: Number(playlist?.id || 0),
+            isExplore: true,
+            playCount: Number(playlist?.playCount || 0),
+          }),
+          previewTracks: Array.isArray(playlist?.tracks) ? playlist.tracks : [],
+          sourcePlaylist: playlist,
+        }
+      }
+    )
+
+    return validatedCandidates
+      .filter(Boolean)
+      .sort((left, right) =>
+        Number(right.containsSelectedTrack) - Number(left.containsSelectedTrack)
+        || right.matchedSeedTrackCount - left.matchedSeedTrackCount
+        || Number(right.playlist?.playCount || 0) - Number(left.playlist?.playCount || 0)
+        || Number(right.playlist?.trackCount || 0) - Number(left.playlist?.trackCount || 0)
+        || Number(left.playlist?.sourcePlaylistId || left.playlist?.id || 0) - Number(right.playlist?.sourcePlaylistId || right.playlist?.id || 0))
+      .slice(0, finalLimit)
+      .map((entry) => ({
+        ...entry.sourcePlaylist,
+        artistId: resolvedArtistId,
+        artistName: resolvedArtistName || resolvedArtistNameFallback,
+        tracks: entry.previewTracks,
+      }))
   }
 
   async getDailyRecommendedPlaylistPreviews(limit = 6) {

@@ -1698,6 +1698,20 @@ function registerIpc() {
     }
   })
 
+  ipcMain.handle('commitPlaylistOrder', async (_event, playlistIds) => {
+    try {
+      const service = ensureServiceReady()
+      const normalizedIds = (playlistIds || []).map((id) => Number(id)).filter((id) => id > 0)
+      if (!normalizedIds.length) {
+        throw new Error('\u66f4\u65b0\u6b4c\u5355\u5217\u8868\u987a\u5e8f\u5931\u8d25')
+      }
+      await service.updatePlaylistOrder(normalizedIds)
+      return { ok: true }
+    } catch (error) {
+      return { ok: false, error: error.message || String(error) }
+    }
+  })
+
   ipcMain.handle('commitPlaylistTrackMove', async (_event, payload) => {
     let targetTrackAdded = false
 
