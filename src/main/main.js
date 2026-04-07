@@ -4,7 +4,7 @@ installSafeConsole()
 
 const fs = require('fs')
 const path = require('path')
-const { app, BrowserWindow, ipcMain, screen } = require('electron')
+const { app, BrowserWindow, ipcMain, screen, shell } = require('electron')
 
 const { createAppUpdater } = require('./app-updater')
 const { getPlaybackStats, incrementLocalPlayCount, writeCloudPlayCounts } = require('./playback-store')
@@ -1346,6 +1346,20 @@ function registerIpc() {
     }
   })
 
+  ipcMain.handle('openExternalUrl', async (_event, url) => {
+    const normalizedUrl = String(url || '').trim()
+    if (!normalizedUrl) {
+      return { ok: false, error: 'Invalid URL' }
+    }
+
+    try {
+      await shell.openExternal(normalizedUrl)
+      return { ok: true }
+    } catch (error) {
+      return { ok: false, error: error?.message || String(error) }
+    }
+  })
+
   ipcMain.handle('checkAppUpdate', async (_event, options = {}) => {
     try {
       return await appUpdater.checkForUpdates({
@@ -1848,5 +1862,4 @@ app.on('window-all-closed', () => {
     app.quit()
   }
 })
-
 

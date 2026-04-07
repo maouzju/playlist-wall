@@ -961,6 +961,27 @@ test('settings auto-detect a GitHub update and expose the one-click update butto
   }).toBe(1)
 })
 
+test('settings keep a clickable download action when one-click update is unavailable', async ({ page }) => {
+  await waitForWall(page, `${PAGE_URL}&appUpdate=unsupported&appUpdateVersion=0.22.4`)
+
+  await page.click('#settings-btn')
+  await expect(page.locator('#settings-panel')).toHaveClass(/is-open/)
+  await expect(page.locator('#settings-update-status')).toContainText('v0.22.4')
+  await expect(page.locator('#settings-update-install-btn')).toBeVisible()
+  await expect(page.locator('#settings-update-install-btn')).toBeEnabled()
+  await expect(page.locator('#settings-update-install-btn')).toHaveText('前往下载 v0.22.4')
+
+  await page.click('#settings-update-install-btn')
+
+  await expect.poll(async () => {
+    return page.evaluate(() => window.__mockLastOpenedExternalUrl || '')
+  }).toBe('https://example.com/playlist-wall.zip')
+
+  await expect.poll(async () => {
+    return page.evaluate(() => window.__mockAppUpdateInstallCount || 0)
+  }).toBe(0)
+})
+
 test('network auto quality changes do not reload the current track mid-playback', async ({ page }) => {
   await page.addInitScript(() => {
     let lastRequest = null

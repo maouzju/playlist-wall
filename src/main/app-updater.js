@@ -142,7 +142,7 @@ function selectReleaseAsset(release, { arch = 'x64' } = {}) {
     || null
 }
 
-function getInstallSupport(app) {
+function getInstallSupport(app, execPath = process.execPath) {
   if (process.platform !== 'win32') {
     return {
       supported: false,
@@ -150,14 +150,14 @@ function getInstallSupport(app) {
     }
   }
 
-  if (!app?.isPackaged) {
+  if (!app?.isPackaged && !hasPortableReleaseLayout(execPath)) {
     return {
       supported: false,
       message: '当前是开发模式，一键更新仅支持 GitHub Releases 解压版。',
     }
   }
 
-  if (!/\.exe$/i.test(process.execPath || '')) {
+  if (!/\.exe$/i.test(execPath || '')) {
     return {
       supported: false,
       message: '当前运行环境不支持一键更新。',
@@ -168,6 +168,16 @@ function getInstallSupport(app) {
     supported: true,
     message: '',
   }
+}
+
+function hasPortableReleaseLayout(execPath) {
+  const normalizedExecPath = String(execPath || '').trim()
+  if (!normalizedExecPath || !/\.exe$/i.test(normalizedExecPath)) {
+    return false
+  }
+
+  const resourcesAppAsar = path.join(path.dirname(normalizedExecPath), 'resources', 'app.asar')
+  return fs.existsSync(resourcesAppAsar)
 }
 
 function formatReleaseInfo(release, currentVersion, installSupport, releasePageUrl) {
@@ -717,6 +727,7 @@ function createAppUpdater(options = {}) {
   const app = options.app
   const owner = options.owner || DEFAULT_OWNER
   const repo = options.repo || DEFAULT_REPO
+  const execPath = String(options.execPath || process.execPath || '').trim()
   const fetchImpl = options.fetchImpl || globalThis.fetch
   const spawnImpl = options.spawnImpl || spawn
   const now = typeof options.now === 'function' ? options.now : () => Date.now()
@@ -743,7 +754,7 @@ function createAppUpdater(options = {}) {
 
   async function performCheck() {
     const currentVersion = normalizeVersion(app?.getVersion?.() || '0.0.0')
-    const installSupport = getInstallSupport(app)
+    const installSupport = getInstallSupport(app, execPath)
 
     try {
       const release = await fetchJson(releaseApiUrl, fetchImpl, requestTimeoutMs)
@@ -830,8 +841,8 @@ function createAppUpdater(options = {}) {
         }
       }
 
-      const targetDir = path.dirname(process.execPath)
-      const exeName = path.basename(process.execPath)
+      const targetDir = path.dirname(execPath)
+      const exeName = path.basename(execPath)
       const tempRoot = path.join(
         app?.getPath?.('temp') || path.join(process.cwd(), '.tmp'),
         'playlist-wall-updater',

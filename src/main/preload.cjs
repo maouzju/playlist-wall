@@ -7,6 +7,7 @@ function bind(channel, callback) {
 }
 
 contextBridge.exposeInMainWorld('bridge', {
+  openExternalUrl: (url) => ipcRenderer.invoke('openExternalUrl', url),
   getPreferences: () => ipcRenderer.invoke('getPreferences'),
   savePreferences: (preferences) => ipcRenderer.invoke('savePreferences', preferences),
   checkAppUpdate: (options) => ipcRenderer.invoke('checkAppUpdate', options),

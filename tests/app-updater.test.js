@@ -79,6 +79,43 @@ test('checkForUpdates reports available releases while disabling install in dev 
   assert.match(result.installMessage, /开发模式/)
 })
 
+test('checkForUpdates allows install for a portable release layout even when isPackaged is false', async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'playlist-wall-portable-layout-test-'))
+  const exePath = path.join(tempRoot, 'Playlist Wall.exe')
+  const resourcesDir = path.join(tempRoot, 'resources')
+  fs.mkdirSync(resourcesDir, { recursive: true })
+  fs.writeFileSync(path.join(resourcesDir, 'app.asar'), '')
+
+  const updater = createAppUpdater({
+    app: {
+      isPackaged: false,
+      getVersion: () => '0.21.0',
+    },
+    execPath: exePath,
+    fetchImpl: async () => ({
+      ok: true,
+      json: async () => ({
+        tag_name: 'v0.22.0',
+        html_url: 'https://github.com/maouzju/playlist-wall/releases/tag/v0.22.0',
+        published_at: '2026-04-04T12:00:00.000Z',
+        assets: [
+          {
+            name: 'playlist-wall-0.22.0-windows-x64.zip',
+            browser_download_url: 'https://example.com/playlist-wall.zip',
+          },
+        ],
+      }),
+    }),
+  })
+
+  const result = await updater.checkForUpdates({ force: true })
+
+  assert.equal(result.ok, true)
+  assert.equal(result.updateAvailable, true)
+  assert.equal(result.installSupported, true)
+  assert.equal(result.installMessage, '')
+})
+
 test('installUpdate downloads the asset, spawns the updater script and requests app quit', async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'playlist-wall-updater-test-'))
   const spawnCalls = []

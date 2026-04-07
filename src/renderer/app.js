@@ -200,9 +200,11 @@ const TEXT = {
   appUpdateCheckButton: '检查更新',
   appUpdateCheckBusy: '检查中...',
   appUpdateInstallButton: '一键更新',
+  appUpdateDownloadButton: '前往下载',
   appUpdateInstallBusy: '下载并更新中...',
   appUpdateRestarting: '更新包已准备完成，应用即将重启',
   appUpdateInstallFailed: '启动更新失败',
+  appUpdateOpenFailed: '打开更新链接失败',
 }
 
 TEXT.spotifyImportLoginWindowOpened = '已打开 Spotify 登录窗口，请在窗口里完成登录'
@@ -278,6 +280,8 @@ const state = {
     latestVersion: '',
     releaseName: '',
     releaseUrl: '',
+    assetName: '',
+    downloadUrl: '',
     publishedAt: '',
     updateAvailable: false,
     installSupported: false,
@@ -621,6 +625,11 @@ function createMockBridge() {
       if (!normalizedUrl) {
         return { ok: false, error: TEXT.spotifyOpenFailed }
       }
+
+      window.__mockLastOpenedExternalUrl = normalizedUrl
+      window.__mockOpenedExternalUrls = Array.isArray(window.__mockOpenedExternalUrls)
+        ? [...window.__mockOpenedExternalUrls, normalizedUrl]
+        : [normalizedUrl]
 
       try {
         window.open(normalizedUrl, '_blank', 'noopener,noreferrer')
@@ -1791,7 +1800,7 @@ function bindEvents() {
     void refreshAppUpdateStatus({ force: true })
   })
   refs.settingsUpdateInstallBtn.addEventListener('click', () => {
-    void installLatestAppUpdate()
+    void handleAppUpdateAction()
   })
   refs.settingsLogoutBtn.addEventListener('click', () => {
     void handleLogout()
@@ -2007,6 +2016,8 @@ function applyAppUpdateResult(result, errorStage = '') {
   state.appUpdate.latestVersion = String(result?.latestVersion || '').trim()
   state.appUpdate.releaseName = String(result?.releaseName || '').trim()
   state.appUpdate.releaseUrl = String(result?.releaseUrl || '').trim()
+  state.appUpdate.assetName = String(result?.assetName || '').trim()
+  state.appUpdate.downloadUrl = String(result?.downloadUrl || '').trim()
   state.appUpdate.publishedAt = String(result?.publishedAt || '').trim()
   state.appUpdate.updateAvailable = Boolean(result?.updateAvailable)
   state.appUpdate.installSupported = Boolean(result?.installSupported)
@@ -2069,7 +2080,9 @@ function getAppUpdateHintText() {
   }
 
   if (state.appUpdate.updateAvailable && state.appUpdate.installMessage) {
-    return state.appUpdate.installMessage
+    return getAppUpdateActionUrl()
+      ? `${state.appUpdate.installMessage} 点击下方按钮可前往下载更新包。`
+      : state.appUpdate.installMessage
   }
 
   if (state.appUpdate.updateAvailable) {
@@ -2085,6 +2098,32 @@ function getAppUpdateHintText() {
   }
 
   return '启动后会自动检查 GitHub Releases；发现新版本后，可以直接一键下载并重启更新。'
+}
+
+function getAppUpdateActionUrl() {
+  if (!state.appUpdate.updateAvailable) {
+    return ''
+  }
+
+  return String(state.appUpdate.downloadUrl || state.appUpdate.releaseUrl || '').trim()
+}
+
+function getAppUpdateActionLabel() {
+  if (state.appUpdate.busy && state.appUpdate.action === 'install') {
+    return TEXT.appUpdateInstallBusy
+  }
+
+  if (state.appUpdate.latestVersion) {
+    const versionLabel = formatAppVersion(state.appUpdate.latestVersion)
+    if (state.appUpdate.installSupported) {
+      return `一键更新到 ${versionLabel}`
+    }
+    return `${TEXT.appUpdateDownloadButton} ${versionLabel}`
+  }
+
+  return state.appUpdate.installSupported
+    ? TEXT.appUpdateInstallButton
+    : TEXT.appUpdateDownloadButton
 }
 
 async function refreshAppUpdateStatus({ force = false, silent = false } = {}) {
@@ -2191,6 +2230,28 @@ async function installLatestAppUpdate() {
   renderSettings()
   showToast(TEXT.appUpdateRestarting)
   return true
+}
+
+async function handleAppUpdateAction() {
+  if (state.appUpdate.installSupported) {
+    return installLatestAppUpdate()
+  }
+
+  if (!state.appUpdate.updateAvailable) {
+    const checked = await refreshAppUpdateStatus({ force: true, silent: true })
+    if (!checked || !state.appUpdate.updateAvailable) {
+      showToast(TEXT.appUpdateLatest)
+      return false
+    }
+  }
+
+  const targetUrl = getAppUpdateActionUrl()
+  if (!targetUrl) {
+    showToast(state.appUpdate.installMessage || TEXT.appUpdateOpenFailed, 'error')
+    return false
+  }
+
+  return openExternalUrl(targetUrl, TEXT.appUpdateOpenFailed)
 }
 
 function replaceImportedPlatformPlaylists(sourcePlatform, playlists) {
@@ -9089,12 +9150,9 @@ function renderSettings() {
     ? TEXT.appUpdateCheckBusy
     : TEXT.appUpdateCheckButton
   refs.settingsUpdateInstallBtn.classList.toggle('hidden', !state.appUpdate.updateAvailable)
-  refs.settingsUpdateInstallBtn.disabled = Boolean(state.appUpdate.busy) || !state.appUpdate.installSupported
-  refs.settingsUpdateInstallBtn.textContent = state.appUpdate.busy && state.appUpdate.action === 'install'
-    ? TEXT.appUpdateInstallBusy
-    : state.appUpdate.latestVersion
-      ? `一键更新到 ${formatAppVersion(state.appUpdate.latestVersion)}`
-      : TEXT.appUpdateInstallButton
+  refs.settingsUpdateInstallBtn.disabled = Boolean(state.appUpdate.busy)
+    || (!state.appUpdate.installSupported && !getAppUpdateActionUrl())
+  refs.settingsUpdateInstallBtn.textContent = getAppUpdateActionLabel()
 }
 
 function toggleSettingsPanel() {
