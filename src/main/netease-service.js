@@ -2,7 +2,7 @@ const api = require('NeteaseCloudMusicApi')
 
 const PLAYLIST_PAGE_SIZE = 1000
 const EXPLORE_DETAIL_CONCURRENCY = 4
-const ARTIST_EXPLORE_SEED_TRACK_LIMIT = 10
+const ARTIST_EXPLORE_SEED_TRACK_LIMIT = 20
 const ARTIST_EXPLORE_PLAYLISTS_PER_SEED = 10
 const ARTIST_EXPLORE_VALIDATE_CONCURRENCY = 3
 const API_REQUEST_TIMEOUT_MS = 15000
@@ -250,6 +250,41 @@ function collectMatchedTrackIds(tracks, trackIdSet) {
     tracks
       .map((track) => Number(track?.id || 0))
       .filter((trackId) => trackIdSet.has(trackId))
+  )
+}
+
+function getTrackArtistEntries(track) {
+  const entries = Array.isArray(track?.artistEntries) && track.artistEntries.length
+    ? track.artistEntries
+    : normalizeArtistEntries(track)
+
+  return entries
+    .map((artist) => ({
+      id: Number(artist?.id || artist?.artistId || 0),
+      name: String(artist?.name || artist?.artistName || artist || '').trim(),
+    }))
+    .filter((artist) => artist.id > 0 || artist.name)
+}
+
+function collectMatchedArtistTrackIds(tracks, options = {}) {
+  if (!Array.isArray(tracks) || !tracks.length) {
+    return []
+  }
+
+  const targetArtistId = Number(options?.artistId || 0)
+  const targetArtistNames = new Set(dedupeLookupValues(options?.artistNames || [], 12))
+  if (targetArtistId <= 0 && !targetArtistNames.size) {
+    return []
+  }
+
+  return normalizeTrackIds(
+    tracks.flatMap((track) => {
+      const matchesArtist = getTrackArtistEntries(track).some((artist) =>
+        (targetArtistId > 0 && Number(artist?.id || 0) === targetArtistId)
+        || targetArtistNames.has(normalizeArtistLookupText(artist?.name || ''))
+      )
+      return matchesArtist ? [Number(track?.id || 0)] : []
+    })
   )
 }
 
@@ -1149,12 +1184,53 @@ class NeteaseService {
 
   async searchExplorePlaylistsByArtist(keywords, artistRef, options = {}) {
     const finalLimit = Math.max(1, Math.round(Number(options.limit || 18) || 18))
+    const candidateLimit = Math.min(48, Math.max(finalLimit * 2, 24))
     const selectedTrackId = Number(options?.seedTrackId || 0)
     const resolvedArtistNameFallback = String(options?.artistName || artistRef || keywords || '').trim()
     let resolvedArtistId = Number(options?.artistRef || 0)
     let resolvedArtistName = resolvedArtistNameFallback
     let artistSeedTracks = []
     let artistSongsError = null
+    let artistSearchError = null
+    const candidateEntries = new Map()
+
+    const addCandidatePlaylist = (rawPlaylist, overrides = {}, metadata = {}) => {
+      const normalizedPlaylist = normalizePlaylistSummary(rawPlaylist, {
+        ...overrides,
+        sourcePlaylistId: Number(rawPlaylist?.sourcePlaylistId || rawPlaylist?.id || 0),
+        isExplore: true,
+      })
+      const playlistId = Number(normalizedPlaylist?.sourcePlaylistId || normalizedPlaylist?.id || 0)
+      if (playlistId <= 0) {
+        return
+      }
+
+      const seedTrackId = Number(metadata?.seedTrackId || 0)
+      const existingEntry = candidateEntries.get(playlistId)
+      if (existingEntry) {
+        if (seedTrackId > 0) {
+          existingEntry.seedTrackIds.add(seedTrackId)
+          if (selectedTrackId > 0 && seedTrackId === selectedTrackId) {
+            existingEntry.containsSelectedTrack = true
+          }
+        }
+        existingEntry.searchHitCount += metadata?.searchHit ? 1 : 0
+        if (!existingEntry.playlist.exploreSourceLabel && normalizedPlaylist.exploreSourceLabel) {
+          existingEntry.playlist = {
+            ...existingEntry.playlist,
+            exploreSourceLabel: normalizedPlaylist.exploreSourceLabel,
+          }
+        }
+        return
+      }
+
+      candidateEntries.set(playlistId, {
+        containsSelectedTrack: seedTrackId > 0 && selectedTrackId > 0 && seedTrackId === selectedTrackId,
+        playlist: normalizedPlaylist,
+        searchHitCount: metadata?.searchHit ? 1 : 0,
+        seedTrackIds: seedTrackId > 0 ? new Set([seedTrackId]) : new Set(),
+      })
+    }
 
     if (artistRef) {
       try {
@@ -1174,14 +1250,7 @@ class NeteaseService {
       selectedTrackId,
       ...artistSeedTracks.map((track) => Number(track?.id || 0)),
     ])
-    if (!seedTrackIds.length) {
-      if (artistSongsError) {
-        throw artistSongsError
-      }
-      return []
-    }
 
-    const candidateEntries = new Map()
     for (const seedTrackId of seedTrackIds) {
       const response = await callApi('simi_playlist', {
         cookie: this.cookie,
@@ -1200,42 +1269,68 @@ class NeteaseService {
       })
 
       for (const rawPlaylist of response.body?.playlists || []) {
-        const normalizedPlaylist = normalizePlaylistSummary(rawPlaylist, {
-          sourcePlaylistId: Number(rawPlaylist?.id || 0),
+        addCandidatePlaylist(rawPlaylist, {
           exploreSourceLabel: '相似歌单',
           isExplore: true,
-        })
-        const playlistId = Number(normalizedPlaylist?.sourcePlaylistId || normalizedPlaylist?.id || 0)
-        if (playlistId <= 0) {
-          continue
-        }
-
-        const existingEntry = candidateEntries.get(playlistId)
-        if (existingEntry) {
-          existingEntry.seedTrackIds.add(seedTrackId)
-          if (selectedTrackId > 0 && seedTrackId === selectedTrackId) {
-            existingEntry.containsSelectedTrack = true
-          }
-          continue
-        }
-
-        candidateEntries.set(playlistId, {
-          containsSelectedTrack: selectedTrackId > 0 && seedTrackId === selectedTrackId,
-          playlist: normalizedPlaylist,
-          seedTrackIds: new Set([seedTrackId]),
+        }, {
+          seedTrackId,
         })
       }
     }
 
+    const artistSearchKeywords = String(resolvedArtistName || resolvedArtistNameFallback || keywords || '').trim()
+    if (artistSearchKeywords) {
+      try {
+        const response = await callApi('search', {
+          cookie: this.cookie,
+          keywords: artistSearchKeywords,
+          type: 1000,
+          limit: candidateLimit,
+          offset: 0,
+        }, {
+          fallbackMessage: '搜索社区歌单失败',
+          codeMessages: {
+            301: '搜索社区歌单需要有效的网易云登录态，请刷新登录后再试。',
+          },
+        })
+
+        ensureApiSuccess(response.body, '搜索社区歌单失败', {
+          301: '搜索社区歌单需要有效的网易云登录态，请刷新登录后再试。',
+        })
+
+        for (const rawPlaylist of response.body?.result?.playlists || []) {
+          addCandidatePlaylist(rawPlaylist, {
+            exploreSourceLabel: '艺人相关歌单',
+            isExplore: true,
+          }, {
+            searchHit: true,
+          })
+        }
+      } catch (error) {
+        artistSearchError = error
+      }
+    }
+
     if (!candidateEntries.size) {
+      if (artistSearchError) {
+        throw artistSearchError
+      }
+      if (artistSongsError && !artistSearchKeywords) {
+        throw artistSongsError
+      }
       return []
     }
 
-    const candidateLimit = Math.min(48, Math.max(finalLimit * 2, 24))
+    const artistMatchNames = [
+      resolvedArtistName,
+      resolvedArtistNameFallback,
+      keywords,
+    ].filter(Boolean)
     const rankedCandidateEntries = [...candidateEntries.values()]
       .sort((left, right) =>
         Number(right.containsSelectedTrack) - Number(left.containsSelectedTrack)
         || right.seedTrackIds.size - left.seedTrackIds.size
+        || right.searchHitCount - left.searchHitCount
         || Number(right.playlist?.playCount || 0) - Number(left.playlist?.playCount || 0)
         || Number(right.playlist?.trackCount || 0) - Number(left.playlist?.trackCount || 0)
         || Number(left.playlist?.sourcePlaylistId || left.playlist?.id || 0) - Number(right.playlist?.sourcePlaylistId || right.playlist?.id || 0))
@@ -1259,22 +1354,34 @@ class NeteaseService {
 
         const candidateSeedTrackIdSet = rankedEntry.seedTrackIds || new Set()
         let matchedSeedTrackIds = collectMatchedTrackIds(playlist?.tracks || [], candidateSeedTrackIdSet)
+        let matchedArtistTrackIds = collectMatchedArtistTrackIds(playlist?.tracks || [], {
+          artistId: resolvedArtistId,
+          artistNames: artistMatchNames,
+        })
         if (shouldHydrateExplorePlaylistTracks(playlist)) {
           try {
             const fullTracks = await this.getPlaylistTracks(playlistId, playlist.trackCount)
             const fullyMatchedSeedTrackIds = collectMatchedTrackIds(fullTracks, candidateSeedTrackIdSet)
+            const fullyMatchedArtistTrackIds = collectMatchedArtistTrackIds(fullTracks, {
+              artistId: resolvedArtistId,
+              artistNames: artistMatchNames,
+            })
             if (fullyMatchedSeedTrackIds.length) {
               matchedSeedTrackIds = fullyMatchedSeedTrackIds
+            }
+            if (fullyMatchedArtistTrackIds.length || !matchedArtistTrackIds.length) {
+              matchedArtistTrackIds = fullyMatchedArtistTrackIds
             }
           } catch {}
         }
 
-        if (!matchedSeedTrackIds.length) {
+        if (!matchedSeedTrackIds.length && !matchedArtistTrackIds.length) {
           return null
         }
 
         return {
           containsSelectedTrack: selectedTrackId > 0 && matchedSeedTrackIds.includes(selectedTrackId),
+          matchedArtistTrackCount: matchedArtistTrackIds.length,
           matchedSeedTrackCount: matchedSeedTrackIds.length,
           playlist: normalizePlaylistSummary(playlist, {
             sourcePlaylistId: playlistId,
@@ -1297,6 +1404,7 @@ class NeteaseService {
       .filter(Boolean)
       .sort((left, right) =>
         Number(right.containsSelectedTrack) - Number(left.containsSelectedTrack)
+        || right.matchedArtistTrackCount - left.matchedArtistTrackCount
         || right.matchedSeedTrackCount - left.matchedSeedTrackCount
         || Number(right.playlist?.playCount || 0) - Number(left.playlist?.playCount || 0)
         || Number(right.playlist?.trackCount || 0) - Number(left.playlist?.trackCount || 0)

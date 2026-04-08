@@ -488,11 +488,13 @@ test('playlist management methods create refresh and mutate owned playlists', as
 test('getExplorePlaylists aggregates selected track and artist hot songs through simi playlists', async () => {
   const originals = {
     artist_songs: api.artist_songs,
+    search: api.search,
     simi_playlist: api.simi_playlist,
     playlist_detail: api.playlist_detail,
     playlist_track_all: api.playlist_track_all,
   }
   const artistSongCalls = []
+  const searchCalls = []
   const simiPlaylistCalls = []
   const detailCalls = []
   const trackAllCalls = []
@@ -528,6 +530,18 @@ test('getExplorePlaylists aggregates selected track and artist hot songs through
           buildSong(5002, 5, 'Artist 5'),
           buildSong(5003, 5, 'Artist 5'),
         ],
+      },
+    })
+  }
+
+  api.search = (params) => {
+    searchCalls.push({ ...params })
+    return Promise.resolve({
+      body: {
+        code: 200,
+        result: {
+          playlists: [],
+        },
       },
     })
   }
@@ -589,6 +603,8 @@ test('getExplorePlaylists aggregates selected track and artist hot songs through
 
     assert.equal(artistSongCalls.length, 1)
     assert.equal(Number(artistSongCalls[0].id || 0), 5)
+    assert.equal(searchCalls.length, 1)
+    assert.equal(String(searchCalls[0].keywords || ''), 'Artist 5')
     assert.deepEqual(simiPlaylistCalls.map((call) => Number(call.id || 0)), [5001, 5002, 5003])
     assert.deepEqual(simiPlaylistCalls.map((call) => Number(call.limit || 0)), [10, 10, 10])
     assert.deepEqual(
@@ -604,6 +620,130 @@ test('getExplorePlaylists aggregates selected track and artist hot songs through
     assert.equal(playlists[1].tracks.length, 1)
   } finally {
     api.artist_songs = originals.artist_songs
+    api.search = originals.search
+    api.simi_playlist = originals.simi_playlist
+    api.playlist_detail = originals.playlist_detail
+    api.playlist_track_all = originals.playlist_track_all
+  }
+})
+
+test('getExplorePlaylists falls back to artist search results and validates playlists by artist tracks', async () => {
+  const originals = {
+    artist_songs: api.artist_songs,
+    search: api.search,
+    simi_playlist: api.simi_playlist,
+    playlist_detail: api.playlist_detail,
+    playlist_track_all: api.playlist_track_all,
+  }
+  const artistSongCalls = []
+  const searchCalls = []
+  const simiPlaylistCalls = []
+  const detailCalls = []
+  const trackAllCalls = []
+  const buildSong = (id, artistId, artistName = `Artist ${artistId}`) => ({
+    id,
+    name: `Song ${id}`,
+    ar: [{ id: artistId, name: artistName }],
+    al: { id: 2000 + id, name: `Album ${id}`, picUrl: `cover-${id}` },
+    dt: 180000,
+  })
+  const playlistSummaries = {
+    21: { id: 21, name: 'Artist 5 Live Picks', trackCount: 14, playCount: 910000, creator: { userId: 11, nickname: 'Live FM' } },
+    22: { id: 22, name: 'Artist 5 Moodboard', trackCount: 11, playCount: 530000, creator: { userId: 12, nickname: 'Mood FM' } },
+  }
+  const previewTracks = {
+    21: [buildSong(2101, 2, 'Artist 2')],
+    22: [buildSong(2201, 3, 'Artist 3')],
+  }
+  const fullTracks = {
+    21: [buildSong(2101, 2, 'Artist 2'), buildSong(2102, 5, 'Artist 5')],
+    22: [buildSong(2201, 3, 'Artist 3'), buildSong(2202, 4, 'Artist 4')],
+  }
+
+  api.artist_songs = (params) => {
+    artistSongCalls.push({ ...params })
+    return Promise.resolve({
+      body: {
+        code: 200,
+        songs: [],
+      },
+    })
+  }
+
+  api.search = (params) => {
+    searchCalls.push({ ...params })
+    return Promise.resolve({
+      body: {
+        code: 200,
+        result: {
+          playlists: [playlistSummaries[21], playlistSummaries[22]],
+        },
+      },
+    })
+  }
+
+  api.simi_playlist = (params) => {
+    simiPlaylistCalls.push({ ...params })
+    return Promise.resolve({
+      body: {
+        code: 200,
+        playlists: [],
+      },
+    })
+  }
+
+  api.playlist_detail = (params) => {
+    detailCalls.push({ ...params })
+    const playlistId = Number(params.id || 0)
+    const summary = playlistSummaries[playlistId]
+    return Promise.resolve({
+      body: {
+        code: 200,
+        playlist: {
+          ...summary,
+          coverImgUrl: `cover-${playlistId}`,
+          tracks: previewTracks[playlistId] || [],
+        },
+      },
+    })
+  }
+
+  api.playlist_track_all = (params) => {
+    trackAllCalls.push({ ...params })
+    const playlistId = Number(params.id || 0)
+    return Promise.resolve({
+      body: {
+        code: 200,
+        songs: fullTracks[playlistId] || [],
+      },
+    })
+  }
+
+  try {
+    const service = new NeteaseService('mock-cookie')
+    const playlists = await service.getExplorePlaylists('Artist 5', {
+      limit: 3,
+      artistRef: 5,
+      artistName: 'Artist 5',
+    })
+
+    assert.equal(artistSongCalls.length, 1)
+    assert.equal(searchCalls.length, 1)
+    assert.deepEqual(simiPlaylistCalls, [])
+    assert.deepEqual(
+      [...new Set(detailCalls.map((call) => Number(call.id || 0)))].sort((left, right) => left - right),
+      [21, 22]
+    )
+    assert.deepEqual(
+      [...new Set(trackAllCalls.map((call) => Number(call.id || 0)))].sort((left, right) => left - right),
+      [21, 22]
+    )
+    assert.deepEqual(playlists.map((playlist) => playlist.id), [21])
+    assert.equal(playlists[0].artistId, 5)
+    assert.equal(playlists[0].artistName, 'Artist 5')
+  } finally {
+    api.artist_songs = originals.artist_songs
+    api.search = originals.search
     api.simi_playlist = originals.simi_playlist
     api.playlist_detail = originals.playlist_detail
     api.playlist_track_all = originals.playlist_track_all

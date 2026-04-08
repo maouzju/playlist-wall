@@ -6,7 +6,7 @@ const SVG_PATH = path.join(__dirname, '..', 'assets', 'icon.svg')
 const OUT_DIR = path.join(__dirname, '..', 'assets')
 
 const SIZES = [256, 512]
-const ICO_SIZES = [16, 24, 32, 48, 64, 256]
+const ICO_SIZES = [16, 20, 24, 30, 32, 40, 48, 64, 96, 128, 256]
 
 // Build a multi-size ICO from PNG buffers
 function buildIco(pngBuffers, sizes) {

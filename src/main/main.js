@@ -2,7 +2,6 @@ const { installSafeConsole } = require('./safe-console')
 
 installSafeConsole()
 
-const fs = require('fs')
 const path = require('path')
 const { app, BrowserWindow, ipcMain, screen, shell } = require('electron')
 
@@ -20,12 +19,14 @@ const {
   normalizeWindowState,
   resolveWindowState,
 } = require('./window-state')
+const { buildWindowsTaskbarDetails } = require('./windows-taskbar')
 
 const HYDRATE_CONCURRENCY = 5
 const PLAYLIST_UNDO_NOTICE_MS = 20000
 const WINDOW_STATE_SAVE_DELAY_MS = 250
 const PLAYLIST_TRACK_BATCH_SIZE = 100
 const WINDOWS_APP_ID = 'com.maouzju.playlistwall'
+const WINDOWS_ICON_PATH = path.join(__dirname, '../../assets/icon.ico')
 
 const TEXT = {
   windowTitle: '\u6b4c\u5355\u5899',
@@ -1200,6 +1201,16 @@ function createWindow() {
   registerMainProcessDiagnostics()
   registerDisplayTopologyListeners()
   const initialWindowState = resolveWindowStateForCurrentDisplays(readWindowState())
+  const windowsTaskbarDetails = process.platform === 'win32'
+    ? buildWindowsTaskbarDetails({
+      appId: WINDOWS_APP_ID,
+      execPath: process.execPath,
+      appPath: app.getAppPath(),
+      iconPath: WINDOWS_ICON_PATH,
+      isPackaged: app.isPackaged,
+      relaunchDisplayName: TEXT.windowTitle,
+    })
+    : null
 
   win = new BrowserWindow({
     x: initialWindowState.x,
@@ -1212,7 +1223,7 @@ function createWindow() {
     autoHideMenuBar: true,
     show: false,
     title: TEXT.windowTitle,
-    icon: path.join(__dirname, '../../assets/icon.ico'),
+    icon: WINDOWS_ICON_PATH,
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
@@ -1222,6 +1233,9 @@ function createWindow() {
 
   attachWindowDiagnostics(win)
   registerWindowStateTracking(win)
+  if (windowsTaskbarDetails && typeof win.setAppDetails === 'function') {
+    win.setAppDetails(windowsTaskbarDetails)
+  }
   win.loadFile(path.join(__dirname, '../renderer/index.html'))
   win.once('ready-to-show', () => {
     correctWindowPlacementIfNeeded(win, { persist: true })
@@ -1862,4 +1876,3 @@ app.on('window-all-closed', () => {
     app.quit()
   }
 })
-
