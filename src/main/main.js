@@ -2,6 +2,7 @@ const { installSafeConsole } = require('./safe-console')
 
 installSafeConsole()
 
+const fs = require('fs')
 const path = require('path')
 const { app, BrowserWindow, ipcMain, screen, shell } = require('electron')
 
