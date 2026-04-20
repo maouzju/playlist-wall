@@ -35,4 +35,11 @@ contextBridge.exposeInMainWorld('bridge', {
   onProgress: (callback) => bind('progress', callback),
   onPlaylistPatch: (callback) => bind('playlist-patch', callback),
   onSubscribedPlaylistRemovalFailed: (callback) => bind('subscribed-playlist-removal-failed', callback),
+  getLyrics: (songId) => ipcRenderer.invoke('getLyrics', songId),
+  toggleLyricsWindow: (payload) => ipcRenderer.invoke('toggleLyricsWindow', payload),
+  pushLyricsPlaybackTime: (payload) => ipcRenderer.invoke('pushLyricsPlaybackTime', payload),
+  pushLyricsData: (payload) => ipcRenderer.invoke('pushLyricsData', payload),
+  getLyricsPrefs: () => ipcRenderer.invoke('getLyricsPrefs'),
+  saveLyricsPrefs: (partial) => ipcRenderer.invoke('saveLyricsPrefs', partial),
+  onLyricsWindowState: (callback) => bind('lyrics-window-state', callback),
 })

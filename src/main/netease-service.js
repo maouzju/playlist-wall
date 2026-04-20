@@ -1534,6 +1534,31 @@ class NeteaseService {
 
     ensureApiSuccess(response.body, '\u9000\u51fa\u767b\u5f55\u5931\u8d25')
   }
+
+  async getLyrics(songId) {
+    const id = Math.trunc(Number(songId))
+    if (!Number.isSafeInteger(id) || id <= 0) {
+      return { lrc: '', tlrc: '', noLyric: false }
+    }
+
+    try {
+      const response = await callApi('lyric', {
+        cookie: this.cookie,
+        id,
+      }, {
+        fallbackMessage: '\u83b7\u53d6\u6b4c\u8bcd\u5931\u8d25',
+      })
+      const body = response?.body || {}
+      return {
+        lrc: body?.lrc?.lyric || '',
+        tlrc: body?.tlyric?.lyric || '',
+        noLyric: Boolean(body?.nolyric),
+      }
+    } catch (error) {
+      console.warn('failed to fetch lyrics', error?.message || error)
+      return { lrc: '', tlrc: '', noLyric: false, error: error?.message || String(error) }
+    }
+  }
 }
 
 module.exports = {

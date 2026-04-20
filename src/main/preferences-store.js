@@ -19,6 +19,18 @@ const ARTIST_TRACK_DISPLAY_LIMIT_MIN = 20
 const ARTIST_TRACK_DISPLAY_LIMIT_MAX = 1000
 const ARTIST_TRACK_DISPLAY_LIMIT_DEFAULT = 100
 
+const LYRICS_FONT_SIZE_MIN = 16
+const LYRICS_FONT_SIZE_MAX = 80
+const LYRICS_FONT_SIZE_DEFAULT = 36
+const LYRICS_DEFAULT_WIDTH = 820
+const LYRICS_DEFAULT_HEIGHT = 160
+const LYRICS_MIN_WIDTH = 320
+const LYRICS_MIN_HEIGHT = 90
+const LYRICS_COLOR_CURRENT_DEFAULT = '#ffffff'
+const LYRICS_COLOR_TRANSLATE_DEFAULT = '#cfd8e6'
+
+const HEX_COLOR_PATTERN = /^#[0-9a-f]{3,8}$/i
+
 function normalizeUiScale(input) {
   const numeric = Number(input)
   if (!Number.isFinite(numeric)) {
@@ -113,6 +125,57 @@ function normalizePlaylistOrderIds(input) {
   return ids
 }
 
+function normalizeHexColor(input, fallback) {
+  if (typeof input === 'string' && HEX_COLOR_PATTERN.test(input.trim())) {
+    return input.trim().toLowerCase()
+  }
+  return fallback
+}
+
+function getDefaultLyricsBounds() {
+  return { x: null, y: null, width: LYRICS_DEFAULT_WIDTH, height: LYRICS_DEFAULT_HEIGHT }
+}
+
+function normalizeLyricsBounds(input) {
+  const fallback = getDefaultLyricsBounds()
+  const raw = input && typeof input === 'object' ? input : {}
+  const width = Number.isFinite(Number(raw.width))
+    ? Math.max(LYRICS_MIN_WIDTH, Math.min(3840, Math.round(Number(raw.width))))
+    : fallback.width
+  const height = Number.isFinite(Number(raw.height))
+    ? Math.max(LYRICS_MIN_HEIGHT, Math.min(2160, Math.round(Number(raw.height))))
+    : fallback.height
+  const x = Number.isFinite(Number(raw.x)) ? Math.round(Number(raw.x)) : null
+  const y = Number.isFinite(Number(raw.y)) ? Math.round(Number(raw.y)) : null
+  return { x, y, width, height }
+}
+
+function getDefaultLyricsPrefs() {
+  return {
+    enabled: false,
+    fontSize: LYRICS_FONT_SIZE_DEFAULT,
+    colorCurrent: LYRICS_COLOR_CURRENT_DEFAULT,
+    colorTranslate: LYRICS_COLOR_TRANSLATE_DEFAULT,
+    bounds: getDefaultLyricsBounds(),
+  }
+}
+
+function normalizeLyricsPrefs(input) {
+  const defaults = getDefaultLyricsPrefs()
+  const raw = input && typeof input === 'object' ? input : {}
+  const fontSizeNumeric = Number(raw.fontSize)
+  const fontSize = Number.isFinite(fontSizeNumeric)
+    ? Math.max(LYRICS_FONT_SIZE_MIN, Math.min(LYRICS_FONT_SIZE_MAX, Math.round(fontSizeNumeric)))
+    : defaults.fontSize
+  return {
+    enabled: Boolean(raw.enabled),
+    fontSize,
+    colorCurrent: normalizeHexColor(raw.colorCurrent, defaults.colorCurrent),
+    colorTranslate: normalizeHexColor(raw.colorTranslate, defaults.colorTranslate),
+    bounds: normalizeLyricsBounds(raw.bounds),
+  }
+}
+
 function normalizePreferences(input = {}) {
   return {
     theme: input?.theme === 'dark' ? 'dark' : 'light',
@@ -125,6 +188,7 @@ function normalizePreferences(input = {}) {
     ownedPlaylistOrderIds: normalizePlaylistOrderIds(input?.ownedPlaylistOrderIds),
     uiScale: normalizeUiScale(input?.uiScale),
     windowState: normalizeWindowState(input?.windowState, getDefaultWindowState()),
+    lyrics: normalizeLyricsPrefs(input?.lyrics),
   }
 }
 
@@ -146,6 +210,17 @@ function readPreferences() {
 function writePreferences(input = {}) {
   const filePath = getUserDataFilePath(PREFERENCES_FILE_NAME)
   const current = readPreferences()
+  const currentLyrics = current.lyrics || getDefaultLyricsPrefs()
+  const inputLyrics = input?.lyrics && typeof input.lyrics === 'object' ? input.lyrics : null
+  const mergedLyrics = inputLyrics === null
+    ? currentLyrics
+    : {
+      ...currentLyrics,
+      ...inputLyrics,
+      bounds: inputLyrics.bounds === undefined
+        ? currentLyrics.bounds
+        : { ...(currentLyrics.bounds || getDefaultLyricsBounds()), ...(inputLyrics.bounds || {}) },
+    }
   const next = normalizePreferences({
     ...current,
     ...input,
@@ -155,6 +230,7 @@ function writePreferences(input = {}) {
         ...(current.windowState || getDefaultWindowState()),
         ...(input.windowState && typeof input.windowState === 'object' ? input.windowState : {}),
       },
+    lyrics: mergedLyrics,
   })
 
   try {
@@ -174,4 +250,6 @@ module.exports = {
   normalizeAudioQualityPreference,
   normalizeArtistTrackDisplayLimit,
   normalizePlaylistOrderIds,
+  normalizeLyricsPrefs,
+  getDefaultLyricsPrefs,
 }

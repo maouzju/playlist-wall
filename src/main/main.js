@@ -25,6 +25,7 @@ const { buildWindowsTaskbarDetails } = require('./windows-taskbar')
 const HYDRATE_CONCURRENCY = 5
 const PLAYLIST_UNDO_NOTICE_MS = 20000
 const WINDOW_STATE_SAVE_DELAY_MS = 250
+const LYRICS_BOUNDS_SAVE_DELAY_MS = 300
 const PLAYLIST_TRACK_BATCH_SIZE = 100
 const WINDOWS_APP_ID = 'com.maouzju.playlistwall'
 const WINDOWS_ICON_PATH = path.join(__dirname, '../../assets/icon.ico')
@@ -52,6 +53,9 @@ const TEXT = {
 }
 
 let win = null
+let lyricsWindow = null
+let lyricsBoundsSaveTimer = null
+let lyricsClosingForQuit = false
 let svc = null
 let hydrationRunId = 0
 let flushingPendingSubscribedPlaylistRemovals = false
@@ -300,6 +304,146 @@ function registerWindowStateTracking(targetWindow) {
 function send(channel, data) {
   if (win && !win.isDestroyed()) {
     win.webContents.send(channel, data)
+  }
+}
+
+function sendToLyrics(channel, data) {
+  if (lyricsWindow && !lyricsWindow.isDestroyed()) {
+    lyricsWindow.webContents.send(channel, data)
+  }
+}
+
+function notifyMainLyricsState(enabled) {
+  send('lyrics-window-state', { enabled: Boolean(enabled) })
+}
+
+function clearLyricsBoundsSaveTimer() {
+  if (lyricsBoundsSaveTimer) {
+    clearTimeout(lyricsBoundsSaveTimer)
+    lyricsBoundsSaveTimer = null
+  }
+}
+
+function persistLyricsBoundsFromWindow() {
+  if (!lyricsWindow || lyricsWindow.isDestroyed()) return
+  clearLyricsBoundsSaveTimer()
+  lyricsBoundsSaveTimer = setTimeout(() => {
+    lyricsBoundsSaveTimer = null
+    if (!lyricsWindow || lyricsWindow.isDestroyed()) return
+    try {
+      const [x, y] = lyricsWindow.getPosition()
+      const [width, height] = lyricsWindow.getSize()
+      writePreferences({ lyrics: { bounds: { x, y, width, height } } })
+    } catch (error) {
+      console.warn('failed to persist lyrics bounds', error)
+    }
+  }, LYRICS_BOUNDS_SAVE_DELAY_MS)
+}
+
+function resolveLyricsBounds(storedBounds) {
+  const displays = screen.getAllDisplays()
+  const primary = screen.getPrimaryDisplay() || displays[0]
+  const work = primary && primary.workArea ? primary.workArea : { x: 0, y: 0, width: 1280, height: 720 }
+  const width = Math.max(320, Math.min(storedBounds?.width || 820, work.width))
+  const height = Math.max(90, Math.min(storedBounds?.height || 160, Math.floor(work.height / 2)))
+  let x = storedBounds?.x
+  let y = storedBounds?.y
+  const onScreen = Number.isFinite(x) && Number.isFinite(y) && displays.some((d) => {
+    const a = d.workArea
+    return x >= a.x - 100 && x + width <= a.x + a.width + 100 && y >= a.y - 100 && y + height <= a.y + a.height + 100
+  })
+  if (!onScreen) {
+    x = Math.round(work.x + (work.width - width) / 2)
+    y = Math.round(work.y + work.height - height - 80)
+  }
+  return { x, y, width, height }
+}
+
+let lyricsLocked = false
+
+function applyLyricsLockState(targetWindow, locked) {
+  lyricsLocked = Boolean(locked)
+  if (!targetWindow || targetWindow.isDestroyed()) return
+  try {
+    targetWindow.setResizable(!lyricsLocked)
+  } catch (error) {
+    console.warn('failed to apply lyrics lock state', error)
+  }
+  try {
+    targetWindow.webContents.send('lyrics-locked', { locked: lyricsLocked })
+  } catch (error) {
+    console.warn('failed to send lyrics lock state', error)
+  }
+}
+
+function createLyricsWindow() {
+  if (lyricsWindow && !lyricsWindow.isDestroyed()) {
+    lyricsWindow.show()
+    return lyricsWindow
+  }
+
+  const prefs = readPreferences()
+  const lyricsPrefs = prefs.lyrics || {}
+  const bounds = resolveLyricsBounds(lyricsPrefs.bounds || {})
+  lyricsLocked = false
+
+  lyricsWindow = new BrowserWindow({
+    x: bounds.x,
+    y: bounds.y,
+    width: bounds.width,
+    height: bounds.height,
+    minWidth: 320,
+    minHeight: 90,
+    frame: false,
+    transparent: true,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    resizable: true,
+    hasShadow: false,
+    show: false,
+    backgroundColor: '#00000000',
+    title: '桌面歌词',
+    webPreferences: {
+      preload: path.join(__dirname, 'lyrics-preload.cjs'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  })
+
+  try {
+    lyricsWindow.setAlwaysOnTop(true, 'screen-saver')
+  } catch (error) {
+    console.warn('failed to set lyrics window always-on-top level', error)
+  }
+
+  lyricsWindow.loadFile(path.join(__dirname, '../lyrics/lyrics.html'))
+  lyricsWindow.once('ready-to-show', () => {
+    if (!lyricsWindow || lyricsWindow.isDestroyed()) return
+    lyricsWindow.show()
+    applyLyricsLockState(lyricsWindow, false)
+  })
+  lyricsWindow.on('moved', persistLyricsBoundsFromWindow)
+  lyricsWindow.on('resized', persistLyricsBoundsFromWindow)
+  lyricsWindow.on('closed', () => {
+    clearLyricsBoundsSaveTimer()
+    lyricsWindow = null
+    if (!lyricsClosingForQuit) {
+      try {
+        writePreferences({ lyrics: { enabled: false } })
+      } catch (error) {
+        console.warn('failed to update lyrics enabled on close', error)
+      }
+    }
+    notifyMainLyricsState(false)
+  })
+  return lyricsWindow
+}
+
+function destroyLyricsWindow() {
+  if (lyricsWindow && !lyricsWindow.isDestroyed()) {
+    lyricsWindow.close()
+  } else {
+    lyricsWindow = null
   }
 }
 
@@ -1241,11 +1385,22 @@ function createWindow() {
   win.once('ready-to-show', () => {
     correctWindowPlacementIfNeeded(win, { persist: true })
     win.show()
+    try {
+      const prefs = readPreferences()
+      if (prefs.lyrics?.enabled) {
+        createLyricsWindow()
+        notifyMainLyricsState(true)
+      }
+    } catch (error) {
+      console.warn('failed to restore lyrics window state', error)
+    }
   })
   win.on('closed', () => {
     clearPendingWindowStateSave()
     win = null
     hydrationRunId += 1
+    lyricsClosingForQuit = true
+    destroyLyricsWindow()
   })
 }
 
@@ -1852,6 +2007,104 @@ function registerIpc() {
       }
     }
   })
+
+  ipcMain.handle('getLyrics', async (_event, songId) => {
+    try {
+      const service = ensureServiceReady()
+      const result = await service.getLyrics(songId)
+      return { ok: true, ...result }
+    } catch (error) {
+      return { ok: false, error: error.message || String(error), lrc: '', tlrc: '', noLyric: false }
+    }
+  })
+
+  ipcMain.handle('toggleLyricsWindow', async (_event, payload = {}) => {
+    try {
+      const shouldOpen = typeof payload?.enabled === 'boolean'
+        ? payload.enabled
+        : !(lyricsWindow && !lyricsWindow.isDestroyed())
+      if (shouldOpen) {
+        createLyricsWindow()
+        writePreferences({ lyrics: { enabled: true } })
+        notifyMainLyricsState(true)
+      } else {
+        destroyLyricsWindow()
+        writePreferences({ lyrics: { enabled: false } })
+        notifyMainLyricsState(false)
+      }
+      return { ok: true, enabled: shouldOpen }
+    } catch (error) {
+      return { ok: false, error: error.message || String(error) }
+    }
+  })
+
+  ipcMain.handle('pushLyricsPlaybackTime', (_event, payload = {}) => {
+    sendToLyrics('lyrics-playback-time', {
+      currentTime: Number(payload?.currentTime) || 0,
+      trackId: payload?.trackId != null ? Number(payload.trackId) : null,
+      isPlaying: Boolean(payload?.isPlaying),
+    })
+    return { ok: true }
+  })
+
+  ipcMain.handle('pushLyricsData', (_event, payload = {}) => {
+    sendToLyrics('lyrics-data', {
+      trackId: payload?.trackId != null ? Number(payload.trackId) : null,
+      title: typeof payload?.title === 'string' ? payload.title : '',
+      artist: typeof payload?.artist === 'string' ? payload.artist : '',
+      lrc: typeof payload?.lrc === 'string' ? payload.lrc : '',
+      tlrc: typeof payload?.tlrc === 'string' ? payload.tlrc : '',
+      noLyric: Boolean(payload?.noLyric),
+      errorMessage: typeof payload?.errorMessage === 'string' ? payload.errorMessage : '',
+    })
+    return { ok: true }
+  })
+
+  ipcMain.handle('getLyricsPrefs', async () => {
+    try {
+      const prefs = readPreferences()
+      return { ok: true, lyrics: prefs.lyrics, locked: lyricsLocked }
+    } catch (error) {
+      return { ok: false, error: error.message || String(error), locked: lyricsLocked }
+    }
+  })
+
+  ipcMain.handle('saveLyricsPrefs', async (_event, partial = {}) => {
+    try {
+      const input = partial && typeof partial === 'object' ? partial : {}
+      const lockedChangeRequested = typeof input.locked === 'boolean'
+      const persistable = { ...input }
+      delete persistable.locked
+      const next = writePreferences({ lyrics: persistable })
+      const lyricsPrefs = next.lyrics
+      sendToLyrics('lyrics-prefs', lyricsPrefs)
+      if (lockedChangeRequested) {
+        applyLyricsLockState(lyricsWindow, input.locked)
+      }
+      if (input.bounds && lyricsWindow && !lyricsWindow.isDestroyed()) {
+        const resolved = resolveLyricsBounds(lyricsPrefs.bounds || {})
+        try {
+          lyricsWindow.setBounds({
+            x: resolved.x,
+            y: resolved.y,
+            width: resolved.width,
+            height: resolved.height,
+          })
+        } catch (error) {
+          console.warn('failed to apply lyrics bounds', error)
+        }
+      }
+      return { ok: true, lyrics: lyricsPrefs, locked: lyricsLocked }
+    } catch (error) {
+      return { ok: false, error: error.message || String(error) }
+    }
+  })
+
+  ipcMain.handle('closeLyricsWindow', async () => {
+    destroyLyricsWindow()
+    return { ok: true }
+  })
+
 }
 
 app.whenReady().then(() => {
