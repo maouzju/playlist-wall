@@ -23,6 +23,19 @@ async function closeSettingsPanel(page) {
   await expect(page.locator('#settings-panel')).not.toHaveClass(/is-open/)
 }
 
+async function setCheckbox(page, selector, checked) {
+  await page.locator(selector).evaluate((node, nextChecked) => {
+    if (!(node instanceof HTMLInputElement)) {
+      throw new Error(`checkbox not found: ${node}`)
+    }
+    if (node.checked === nextChecked) {
+      return
+    }
+    node.checked = nextChecked
+    node.dispatchEvent(new Event('change', { bubbles: true }))
+  }, checked)
+}
+
 async function dragTrack(page, sourceSelector, targetSelector, placement = 'after') {
   await page.evaluate(({ sourceSelector, targetSelector, placement }) => {
     const source = document.querySelector(sourceSelector)
@@ -341,6 +354,10 @@ test('explore preload starts before app init finishes', async ({ page }) => {
 
   await expect(page.locator('#loading')).toBeVisible()
   await expect(page.locator('#app')).toBeHidden()
+  await page.evaluate(() => {
+    state.neteaseAuthenticated = true
+    silentlyPreloadExplorePlaylists()
+  })
   await expect.poll(async () => {
     return page.evaluate(() => window.__mockStats?.exploreRequestCount || 0)
   }, { timeout: 700 }).toBeGreaterThan(0)
@@ -926,7 +943,7 @@ test('audio quality settings affect playback requests and persist across reload'
   await page.click('#settings-btn')
   await expect(page.locator('#settings-panel')).toHaveClass(/is-open/)
   await page.selectOption('#default-audio-quality-select', 'exhigh')
-  await page.uncheck('#auto-adjust-audio-quality-toggle')
+  await setCheckbox(page, '#auto-adjust-audio-quality-toggle', false)
   await closeSettingsPanel(page)
 
   await page.locator('.track-row').nth(2).click()
@@ -1403,7 +1420,7 @@ test('locate jumps to the current recommendation inside its source playlist', as
 
   await page.click('#settings-btn')
   await expect(page.locator('#settings-panel')).toHaveClass(/is-open/)
-  await page.check('#playlist-recommendations-toggle')
+  await setCheckbox(page, '#playlist-recommendations-toggle', true)
   await closeSettingsPanel(page)
 
   const firstRecommendationSection = page.locator('.playlist-recommendations').first()
@@ -1464,7 +1481,7 @@ test('recommended tracks can be added into a playlist', async ({ page }) => {
 
   await page.click('#settings-btn')
   await expect(page.locator('#settings-panel')).toHaveClass(/is-open/)
-  await page.check('#playlist-recommendations-toggle')
+  await setCheckbox(page, '#playlist-recommendations-toggle', true)
   await closeSettingsPanel(page)
 
   const firstRecommendationSection = page.locator('.playlist-recommendations').first()
@@ -1728,7 +1745,7 @@ test('recommended tracks support the context menu add flow', async ({ page }) =>
 
   await page.click('#settings-btn')
   await expect(page.locator('#settings-panel')).toHaveClass(/is-open/)
-  await page.check('#playlist-recommendations-toggle')
+  await setCheckbox(page, '#playlist-recommendations-toggle', true)
   await closeSettingsPanel(page)
 
   const recommendationSection = page.locator('.playlist-recommendations').first()
@@ -2200,7 +2217,7 @@ test('compact single-line labels keep enough line height for descenders', async 
     node.dispatchEvent(new Event('input', { bubbles: true }))
     node.dispatchEvent(new Event('change', { bubbles: true }))
   })
-  await page.check('#playlist-recommendations-toggle')
+  await setCheckbox(page, '#playlist-recommendations-toggle', true)
   await closeSettingsPanel(page)
 
   await expect(page.locator('.playlist-recommendations').first()).toBeVisible()
@@ -2236,7 +2253,7 @@ test('wall can reach the bottom after recommendations expand', async ({ page }) 
   await waitForWall(page, HUGE_PAGE_URL)
 
   await page.click('#settings-btn')
-  await page.check('#playlist-recommendations-toggle')
+  await setCheckbox(page, '#playlist-recommendations-toggle', true)
   await closeSettingsPanel(page)
 
   await page.locator('#wall-scroll').evaluate((node) => {
