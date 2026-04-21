@@ -941,6 +941,36 @@ test('audio quality settings affect playback requests and persist across reload'
   await expect(page.locator('#auto-adjust-audio-quality-toggle')).not.toBeChecked()
 })
 
+test('timed out song resolution does not leave playback stuck in resolving state', async ({ page }) => {
+  await waitForWall(page)
+
+  await page.evaluate(() => {
+    window.__mockSongUrlDelayMs = 150
+    window.__mockPlaybackResolveTimeoutMs = 60
+  })
+
+  const firstTrack = page.locator('.track-row').first()
+  const secondTrack = page.locator('.track-row').nth(1)
+  const secondTrackId = await secondTrack.getAttribute('data-track-id')
+
+  await firstTrack.click()
+  await expect(page.locator('#player-title')).toContainText('正在解析')
+  await expect.poll(async () => {
+    const title = (await page.locator('#player-title').textContent()) || ''
+    return title.includes('正在解析')
+  }).toBe(false)
+
+  await page.evaluate(() => {
+    window.__mockSongUrlDelayMs = 0
+  })
+
+  await secondTrack.click()
+  await expect.poll(async () => {
+    return String(await page.evaluate(() => window.__mockLastSongUrlRequest?.songId || ''))
+  }).toBe(String(secondTrackId || ''))
+  await expect(page.locator('#player-title')).not.toContainText('正在解析')
+})
+
 test('settings auto-detect a GitHub update and expose the one-click update button', async ({ page }) => {
   await waitForWall(page, `${PAGE_URL}&appUpdate=available&appUpdateVersion=0.22.0`)
 

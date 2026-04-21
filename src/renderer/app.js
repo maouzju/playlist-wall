@@ -45,6 +45,7 @@ const ARTIST_PLAYLIST_ID_OFFSET = 1000000000000
 const ARTIST_SUMMARY_TRACK_COUNT_MIN = 3
 const ARTIST_SUMMARY_TRACK_COUNT_MAX = 20
 const AUDIO_SOURCE_WAIT_TIMEOUT_MS = 4000
+const PLAYBACK_RESOLVE_TIMEOUT_MS = 10000
 const AUDIO_QUALITY_SWITCH_DEBOUNCE_MS = 180
 const AUDIO_QUALITY_REFRESH_REASON_SETTINGS = 'settings'
 const AUDIO_QUALITY_REFRESH_REASON_NETWORK = 'network'
@@ -84,6 +85,7 @@ const TEXT = {
   unavailableTrack: '\u8fd9\u9996\u6b4c\u73b0\u5728\u64ad\u4e0d\u4e86\uff0c\u8bd5\u8bd5\u4e0b\u4e00\u9996\u3002',
   noPlayableUrl: '\u8fd9\u9996\u6b4c\u6ca1\u6709\u53ef\u64ad\u653e\u94fe\u63a5\u3002',
   playbackFailed: '\u64ad\u653e\u5931\u8d25',
+  playbackResolveTimeout: '\u89e3\u6790\u8d85\u65f6\uff0c\u8bf7\u91cd\u8bd5',
   notPlaying: '\u8fd8\u6ca1\u5f00\u59cb\u64ad\u653e',
   pickTrack: '\u70b9\u4efb\u610f\u4e00\u9996\u6b4c\u5f00\u59cb',
   resolving: '\u6b63\u5728\u89e3\u6790\uff1a',
@@ -797,6 +799,10 @@ function createMockBridge() {
         options: {
           preferredQuality: normalizeAudioQualityPreference(options?.preferredQuality),
         },
+      }
+      const mockDelay = Math.max(0, Number(window.__mockSongUrlDelayMs || 0) || 0)
+      if (mockDelay > 0) {
+        await new Promise((resolve) => window.setTimeout(resolve, mockDelay))
       }
       return { ok: false, error: '\u6a21\u62df\u6a21\u5f0f\u4e0d\u63d0\u4f9b\u97f3\u9891\u94fe\u63a5' }
     },
@@ -8989,6 +8995,57 @@ function waitForAudioMetadata(timeoutMs = AUDIO_SOURCE_WAIT_TIMEOUT_MS) {
   })
 }
 
+function getPlaybackResolveTimeoutMs() {
+  const override = Number(window.__mockPlaybackResolveTimeoutMs || 0)
+  if (Number.isFinite(override) && override > 0) {
+    return Math.max(50, Math.round(override))
+  }
+
+  return PLAYBACK_RESOLVE_TIMEOUT_MS
+}
+
+function withPlaybackResolveTimeout(promise, timeoutMs = getPlaybackResolveTimeoutMs()) {
+  return new Promise((resolve, reject) => {
+    let settled = false
+    let timer = window.setTimeout(() => {
+      if (settled) {
+        return
+      }
+
+      settled = true
+      timer = 0
+      reject(new Error(TEXT.playbackResolveTimeout))
+    }, timeoutMs)
+
+    Promise.resolve(promise).then(
+      (value) => {
+        if (settled) {
+          return
+        }
+
+        settled = true
+        if (timer) {
+          window.clearTimeout(timer)
+          timer = 0
+        }
+        resolve(value)
+      },
+      (error) => {
+        if (settled) {
+          return
+        }
+
+        settled = true
+        if (timer) {
+          window.clearTimeout(timer)
+          timer = 0
+        }
+        reject(error)
+      }
+    )
+  })
+}
+
 async function loadResolvedAudioSource(url, { resumeAtSeconds = 0, autoplay = true } = {}) {
   const needsMetadata = resumeAtSeconds > 0 || !autoplay
   refs.audio.src = url
@@ -9028,27 +9085,25 @@ async function resolveQueueTrackSource(track, options = {}) {
   void pushLyricsForCurrentTrack()
 
   const token = ++state.playToken
-  const result = await appBridge.getSongUrl(playbackTrackId, {
-    preferredQuality: requestedQuality,
-  })
-  if (token !== state.playToken) {
-    return { ok: false, cancelled: true }
-  }
-
-  state.isResolving = false
-
-  if (!result.ok || !result.url) {
-    if (!refs.audio.src || state.currentTrackId === track.id) {
-      state.currentPlaybackRequestedQuality = ''
-      state.currentPlaybackResolvedLevel = ''
-    }
-    showToast(result.error || TEXT.noPlayableUrl, 'error')
-    renderPlayer()
-    syncWallPlaybackState()
-    return { ok: false }
-  }
-
   try {
+    const result = await withPlaybackResolveTimeout(appBridge.getSongUrl(playbackTrackId, {
+      preferredQuality: requestedQuality,
+    }))
+    if (token !== state.playToken) {
+      return { ok: false, cancelled: true }
+    }
+
+    state.isResolving = false
+
+    if (!result.ok || !result.url) {
+      if (!refs.audio.src || state.currentTrackId === track.id) {
+        state.currentPlaybackRequestedQuality = ''
+        state.currentPlaybackResolvedLevel = ''
+      }
+      showToast(result.error || TEXT.noPlayableUrl, 'error')
+      return { ok: false }
+    }
+
     state.isPreview = isPreviewByDuration(track.durationMs, result.streamDurationMs)
     await loadResolvedAudioSource(result.url, {
       resumeAtSeconds,
@@ -9060,13 +9115,24 @@ async function resolveQueueTrackSource(track, options = {}) {
       void recordTrackPlay(playbackTrackId)
     }
   } catch (error) {
+    if (token !== state.playToken) {
+      return { ok: false, cancelled: true }
+    }
+
+    state.isResolving = false
+    if (!refs.audio.src || state.currentTrackId === track.id) {
+      state.currentPlaybackRequestedQuality = ''
+      state.currentPlaybackResolvedLevel = ''
+    }
     if ((error.message || '') !== TEXT.unavailableTrack) {
       showToast(error.message || TEXT.playbackFailed, 'error')
     }
     return { ok: false }
   } finally {
-    renderPlayer()
-    syncWallPlaybackState()
+    if (token === state.playToken) {
+      renderPlayer()
+      syncWallPlaybackState()
+    }
   }
 
   return { ok: true }

@@ -1376,6 +1376,10 @@ function createWindow() {
     },
   })
 
+  if (process.platform === 'win32' || process.platform === 'linux') {
+    win.removeMenu()
+  }
+
   attachWindowDiagnostics(win)
   registerWindowStateTracking(win)
   if (windowsTaskbarDetails && typeof win.setAppDetails === 'function') {
