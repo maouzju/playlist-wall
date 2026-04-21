@@ -239,6 +239,11 @@ const state = {
   shuffle: false,
   repeat: 'all',
   playToken: 0,
+  lyrics: {
+    windowOpen: false,
+    lastPushedTrackId: null,
+    fetchToken: 0,
+  },
   theme: loadStoredTheme(),
   settings: loadStoredSettings(),
   uiSession: loadUiSessionState(),
@@ -1728,6 +1733,11 @@ function cacheRefs() {
   refs.nextBtn = document.getElementById('next-btn')
   refs.shuffleBtn = document.getElementById('shuffle-btn')
   refs.repeatBtn = document.getElementById('repeat-btn')
+  refs.lyricsBtn = document.getElementById('lyrics-btn')
+  refs.lyricsMenu = document.getElementById('lyrics-menu')
+  refs.lyricsMenuToggleLock = document.getElementById('lyrics-menu-toggle-lock')
+  refs.lyricsMenuResetBounds = document.getElementById('lyrics-menu-reset-bounds')
+  refs.lyricsMenuClose = document.getElementById('lyrics-menu-close')
   refs.progressRange = document.getElementById('progress-range')
   refs.currentTime = document.getElementById('player-time-current')
   refs.totalTime = document.getElementById('player-time-total')
@@ -1858,6 +1868,21 @@ function bindEvents() {
     renderPlayer()
   })
   refs.repeatBtn.addEventListener('click', cycleRepeatMode)
+  if (refs.lyricsBtn) {
+    refs.lyricsBtn.addEventListener('click', handleLyricsButtonClick)
+    refs.lyricsBtn.addEventListener('contextmenu', handleLyricsButtonContextMenu)
+  }
+  if (refs.lyricsMenuToggleLock) {
+    refs.lyricsMenuToggleLock.addEventListener('click', handleLyricsMenuToggleLock)
+  }
+  if (refs.lyricsMenuResetBounds) {
+    refs.lyricsMenuResetBounds.addEventListener('click', handleLyricsMenuResetBounds)
+  }
+  if (refs.lyricsMenuClose) {
+    refs.lyricsMenuClose.addEventListener('click', handleLyricsMenuClose)
+  }
+  document.addEventListener('click', handleLyricsMenuOutsideClick, true)
+  document.addEventListener('keydown', handleLyricsMenuEsc)
   refs.progressRange.addEventListener('input', () => {
     if (!Number.isFinite(refs.audio.duration) || refs.audio.duration <= 0) return
     refs.currentTime.textContent = formatTime((Number(refs.progressRange.value) / 1000) * refs.audio.duration)
@@ -1882,7 +1907,10 @@ function bindEvents() {
     updateProgressUI()
     renderPlayer()
   })
-  refs.audio.addEventListener('timeupdate', updateProgressUI)
+  refs.audio.addEventListener('timeupdate', () => {
+    updateProgressUI()
+    pushLyricsPlaybackTime()
+  })
   refs.audio.addEventListener('ended', () => {
     if (state.repeat === 'one') return playQueueIndex(state.queueIndex)
     nextTrack({ fromEnded: true })
@@ -1930,6 +1958,167 @@ function wireBridge() {
   }
   if (appBridge && typeof appBridge.onSubscribedPlaylistRemovalFailed === 'function') {
     appBridge.onSubscribedPlaylistRemovalFailed((payload) => handleSubscribedPlaylistRemovalFailed(payload))
+  }
+  if (appBridge && typeof appBridge.onLyricsWindowState === 'function') {
+    appBridge.onLyricsWindowState((payload) => {
+      const enabled = Boolean(payload?.enabled)
+      state.lyrics.windowOpen = enabled
+      if (refs.lyricsBtn) {
+        refs.lyricsBtn.dataset.active = enabled ? 'true' : 'false'
+      }
+      if (enabled) {
+        state.lyrics.lastPushedTrackId = null
+        void pushLyricsForCurrentTrack()
+      }
+    })
+  }
+}
+
+async function handleLyricsButtonClick() {
+  closeLyricsMenu()
+  if (!appBridge || typeof appBridge.toggleLyricsWindow !== 'function') return
+  const nextEnabled = !state.lyrics.windowOpen
+  try {
+    await appBridge.toggleLyricsWindow({ enabled: nextEnabled })
+  } catch (error) {
+    console.warn('toggle lyrics window failed', error)
+  }
+}
+
+async function handleLyricsButtonContextMenu(event) {
+  event.preventDefault()
+  if (!refs.lyricsMenu) return
+  let locked = false
+  try {
+    if (appBridge && typeof appBridge.getLyricsPrefs === 'function') {
+      const result = await appBridge.getLyricsPrefs()
+      if (result && result.ok) {
+        locked = Boolean(result.locked)
+      }
+    }
+  } catch (error) {
+    console.warn('get lyrics prefs failed', error)
+  }
+  if (refs.lyricsMenuToggleLock) {
+    refs.lyricsMenuToggleLock.textContent = locked ? '解锁位置' : '锁定位置'
+    refs.lyricsMenuToggleLock.dataset.locked = locked ? 'true' : 'false'
+  }
+  if (refs.lyricsMenuClose) {
+    refs.lyricsMenuClose.disabled = !state.lyrics.windowOpen
+  }
+  refs.lyricsMenu.classList.remove('hidden')
+  const menuRect = refs.lyricsMenu.getBoundingClientRect()
+  const viewportPadding = 8
+  const left = Math.min(
+    Math.max(viewportPadding, event.clientX),
+    Math.max(viewportPadding, window.innerWidth - menuRect.width - viewportPadding)
+  )
+  const top = Math.min(
+    Math.max(viewportPadding, event.clientY),
+    Math.max(viewportPadding, window.innerHeight - menuRect.height - viewportPadding)
+  )
+  refs.lyricsMenu.style.left = `${left}px`
+  refs.lyricsMenu.style.top = `${top}px`
+}
+
+function closeLyricsMenu() {
+  if (refs.lyricsMenu && !refs.lyricsMenu.classList.contains('hidden')) {
+    refs.lyricsMenu.classList.add('hidden')
+  }
+}
+
+function handleLyricsMenuOutsideClick(event) {
+  if (!refs.lyricsMenu || refs.lyricsMenu.classList.contains('hidden')) return
+  if (refs.lyricsMenu.contains(event.target) || (refs.lyricsBtn && refs.lyricsBtn.contains(event.target))) return
+  closeLyricsMenu()
+}
+
+function handleLyricsMenuEsc(event) {
+  if (event.key === 'Escape') closeLyricsMenu()
+}
+
+async function handleLyricsMenuToggleLock() {
+  closeLyricsMenu()
+  if (!appBridge || typeof appBridge.saveLyricsPrefs !== 'function') return
+  const currentLocked = refs.lyricsMenuToggleLock?.dataset.locked === 'true'
+  try {
+    await appBridge.saveLyricsPrefs({ locked: !currentLocked })
+  } catch (error) {
+    console.warn('toggle lyrics lock failed', error)
+  }
+}
+
+async function handleLyricsMenuResetBounds() {
+  closeLyricsMenu()
+  if (!appBridge || typeof appBridge.saveLyricsPrefs !== 'function') return
+  try {
+    await appBridge.saveLyricsPrefs({ bounds: { x: null, y: null, width: 820, height: 160 } })
+  } catch (error) {
+    console.warn('reset lyrics bounds failed', error)
+  }
+}
+
+async function handleLyricsMenuClose() {
+  closeLyricsMenu()
+  if (!appBridge || typeof appBridge.toggleLyricsWindow !== 'function') return
+  try {
+    await appBridge.toggleLyricsWindow({ enabled: false })
+  } catch (error) {
+    console.warn('close lyrics window failed', error)
+  }
+}
+
+function pushLyricsPlaybackTime() {
+  if (!state.lyrics.windowOpen) return
+  if (!appBridge || typeof appBridge.pushLyricsPlaybackTime !== 'function') return
+  const currentTime = Number(refs.audio?.currentTime) || 0
+  appBridge.pushLyricsPlaybackTime({
+    currentTime,
+    trackId: state.currentTrackId,
+    isPlaying: Boolean(state.isPlaying),
+  })
+}
+
+async function pushLyricsForCurrentTrack() {
+  if (!state.lyrics.windowOpen) return
+  if (!appBridge || typeof appBridge.getLyrics !== 'function' || typeof appBridge.pushLyricsData !== 'function') return
+  const track = getCurrentTrack()
+  if (!track) {
+    appBridge.pushLyricsData({ trackId: null, title: '', artist: '', lrc: '', tlrc: '', noLyric: false })
+    state.lyrics.lastPushedTrackId = null
+    return
+  }
+  const trackId = Number(track.id)
+  if (!Number.isSafeInteger(trackId) || trackId <= 0) return
+  if (state.lyrics.lastPushedTrackId === trackId) return
+  const token = ++state.lyrics.fetchToken
+  state.lyrics.lastPushedTrackId = trackId
+  const title = track.name || ''
+  const artist = Array.isArray(track.artists) ? track.artists.join('、') : ''
+  try {
+    const result = await appBridge.getLyrics(trackId)
+    if (token !== state.lyrics.fetchToken) return
+    if (!state.lyrics.windowOpen) return
+    appBridge.pushLyricsData({
+      trackId,
+      title,
+      artist,
+      lrc: result?.lrc || '',
+      tlrc: result?.tlrc || '',
+      noLyric: Boolean(result?.noLyric),
+      errorMessage: result?.ok === false ? (result?.error || '') : '',
+    })
+  } catch (error) {
+    if (token !== state.lyrics.fetchToken) return
+    appBridge.pushLyricsData({
+      trackId,
+      title,
+      artist,
+      lrc: '',
+      tlrc: '',
+      noLyric: false,
+      errorMessage: error?.message || String(error),
+    })
   }
 }
 
@@ -8836,6 +9025,7 @@ async function resolveQueueTrackSource(track, options = {}) {
   state.isPreview = false
   syncWallPlaybackState()
   renderPlayer()
+  void pushLyricsForCurrentTrack()
 
   const token = ++state.playToken
   const result = await appBridge.getSongUrl(playbackTrackId, {

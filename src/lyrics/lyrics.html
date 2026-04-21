@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>桌面歌词</title>
+  <link rel="stylesheet" href="lyrics.css">
+</head>
+<body>
+  <div id="lyrics-root" class="lyrics-root" data-locked="false" data-hover="false">
+    <div class="lyrics-stack">
+      <div class="lyrics-toolbar" id="lyrics-toolbar">
+        <button class="lyrics-tool-btn" id="lyrics-btn-font-dec" type="button" title="缩小字号" aria-label="缩小字号">A-</button>
+        <button class="lyrics-tool-btn" id="lyrics-btn-font-inc" type="button" title="放大字号" aria-label="放大字号">A+</button>
+        <label class="lyrics-tool-color" title="当前行颜色">
+          <span>行</span>
+          <input type="color" id="lyrics-color-current" value="#ffffff">
+        </label>
+        <label class="lyrics-tool-color" title="翻译颜色">
+          <span>译</span>
+          <input type="color" id="lyrics-color-translate" value="#cfd8e6">
+        </label>
+        <button class="lyrics-tool-btn" id="lyrics-btn-lock" type="button" title="锁定歌词" aria-label="锁定歌词">锁定</button>
+        <button class="lyrics-tool-btn lyrics-tool-btn--close" id="lyrics-btn-close" type="button" title="关闭桌面歌词" aria-label="关闭桌面歌词">×</button>
+      </div>
+      <div class="lyrics-content">
+        <div id="lyrics-main" class="lyrics-main">桌面歌词 · 等待播放</div>
+        <div id="lyrics-translate" class="lyrics-translate"></div>
+      </div>
+    </div>
+  </div>
+  <script src="lyrics.js"></script>
+</body>
+</html>
