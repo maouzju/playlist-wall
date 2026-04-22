@@ -1,6 +1,6 @@
 {
   "name": "playlist-wall",
-  "version": "0.22.7",
+  "version": "0.22.8",
   "description": "Unofficial NetEase Cloud Music desktop client with a searchable, draggable playlist wall / 非官方网易云音乐桌面客户端",
   "type": "commonjs",
   "main": "src/main/main.js",
