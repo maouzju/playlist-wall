@@ -1,6 +1,6 @@
 {
   "name": "playlist-wall",
-  "version": "0.22.8",
+  "version": "0.22.9",
   "description": "Unofficial NetEase Cloud Music desktop client with a searchable, draggable playlist wall / 非官方网易云音乐桌面客户端",
   "type": "commonjs",
   "main": "src/main/main.js",
@@ -25,7 +25,7 @@
     "test:node": "node --test tests/*.test.js",
     "test:ui": "playwright test tests/electron-ui.spec.js --reporter=line",
     "third-party:notices": "node scripts/generate-third-party-notices.js",
-    "dist:win": "npm run third-party:notices && electron-builder --win dir --x64 --publish never && node scripts/package-win-folder.js"
+    "dist:win": "npm run third-party:notices && electron-builder --win dir --x64 --publish never && node scripts/patch-win-unpacked-exe.js && node scripts/package-win-folder.js"
   },
   "dependencies": {
     "NeteaseCloudMusicApi": "4.30.0"
@@ -40,6 +40,7 @@
     "appId": "com.maouzju.playlistwall",
     "productName": "Playlist Wall",
     "artifactName": "playlist-wall-${version}-${productName}-${arch}.${ext}",
+    "copyright": "Copyright © 2026 maou",
     "asar": true,
     "directories": {
       "output": "release"
@@ -57,7 +58,7 @@
     },
     "win": {
       "icon": "assets/icon.ico",
-      "signAndEditExecutable": true,
+      "signAndEditExecutable": false,
       "target": [
         {
           "target": "dir",
