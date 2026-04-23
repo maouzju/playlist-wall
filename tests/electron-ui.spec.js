@@ -918,6 +918,107 @@ test('renaming an owned playlist keeps its loaded tracks', async ({ page }) => {
   await expect(renamedCard.locator('.track-row .track-name').first()).toHaveText(firstTrackName)
 })
 
+
+
+test('lyrics button can be hidden in settings and stays at the right end of player controls', async ({ page }) => {
+  await waitForWall(page)
+
+  const buttonOrder = await page.locator('.player-buttons > .player-btn').evaluateAll((buttons) => {
+    return buttons.map((button) => button.id)
+  })
+  expect(buttonOrder).toEqual(['shuffle-btn', 'prev-btn', 'play-btn', 'next-btn', 'repeat-btn', 'lyrics-btn'])
+
+  const rightmostButtonId = await page.locator('.player-buttons > .player-btn').evaluateAll((buttons) => {
+    return buttons
+      .map((button) => ({ id: button.id, right: button.getBoundingClientRect().right }))
+      .sort((left, right) => right.right - left.right)[0]?.id || ''
+  })
+  expect(rightmostButtonId).toBe('lyrics-btn')
+
+  await page.click('#settings-btn')
+  await expect(page.locator('#settings-panel')).toHaveClass(/is-open/)
+  await expect(page.locator('#lyrics-button-toggle')).toBeChecked()
+  await setCheckbox(page, '#lyrics-button-toggle', false)
+  await expect(page.locator('#lyrics-btn')).toBeHidden()
+  await closeSettingsPanel(page)
+
+  await page.reload()
+  await page.waitForSelector('.playlist-card')
+  await expect(page.locator('#lyrics-btn')).toBeHidden()
+  await page.click('#settings-btn')
+  await expect(page.locator('#lyrics-button-toggle')).not.toBeChecked()
+})
+
+test('volume assist hotkey with mouse wheel adjusts app volume and persists', async ({ page }) => {
+  await waitForWall(page)
+
+  await page.click('#settings-btn')
+  await expect(page.locator('#settings-panel')).toHaveClass(/is-open/)
+  await expect(page.locator('#volume-assist-hotkey-btn')).toHaveText('Alt')
+  await setCheckbox(page, '#volume-assist-toggle', true)
+  await expect(page.locator('#volume-assist-status')).toContainText('Alt + 鼠标滚轮')
+  await closeSettingsPanel(page)
+
+  await page.locator('#volume-range').evaluate((node) => {
+    node.value = '50'
+    node.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+  await page.evaluate(() => {
+    document.dispatchEvent(new WheelEvent('wheel', {
+      bubbles: true,
+      cancelable: true,
+      deltaY: -120,
+      altKey: true,
+    }))
+  })
+
+  await expect(page.locator('#volume-range')).toHaveValue('55')
+  await expect.poll(async () => {
+    return page.evaluate(() => document.querySelector('audio')?.volume)
+  }).toBe(0.55)
+
+  await page.reload()
+  await page.waitForSelector('.playlist-card')
+  await page.click('#settings-btn')
+  await expect(page.locator('#volume-assist-toggle')).toBeChecked()
+  await expect(page.locator('#volume-assist-hotkey-btn')).toHaveText('Alt')
+})
+
+test('volume assist can record a hotkey and send system volume requests', async ({ page }) => {
+  await waitForWall(page)
+
+  await page.click('#settings-btn')
+  await setCheckbox(page, '#volume-assist-toggle', true)
+  await page.selectOption('#volume-assist-target-select', 'system')
+  await page.click('#volume-assist-hotkey-btn')
+  await expect(page.locator('#volume-assist-hotkey-btn')).toContainText('请按下')
+  await page.keyboard.press('Control+Shift+X')
+  await expect(page.locator('#volume-assist-hotkey-btn')).toHaveText('Ctrl+Shift+X')
+  await closeSettingsPanel(page)
+
+  await page.evaluate(() => {
+    document.dispatchEvent(new KeyboardEvent('keydown', {
+      bubbles: true,
+      cancelable: true,
+      key: 'x',
+      code: 'KeyX',
+      ctrlKey: true,
+      shiftKey: true,
+    }))
+    document.dispatchEvent(new WheelEvent('wheel', {
+      bubbles: true,
+      cancelable: true,
+      deltaY: 120,
+      ctrlKey: true,
+      shiftKey: true,
+    }))
+  })
+
+  await expect.poll(async () => {
+    return page.evaluate(() => window.__mockSystemVolumeAdjustments || [])
+  }).toEqual([-1])
+})
+
 test('audio quality settings affect playback requests and persist across reload', async ({ page }) => {
   await waitForWall(page)
 

@@ -210,20 +210,6 @@
               <path d="M5.5 6v12l9-6-9-6Z"></path>
             </svg>
           </button>
-          <button class="player-btn player-btn--icon" id="lyrics-btn" type="button" aria-label="桌面歌词" title="桌面歌词（右键更多选项）" data-active="false">
-            <svg class="icon-stroke player-btn__icon" viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M4 6h11"></path>
-              <path d="M4 11h16"></path>
-              <path d="M4 16h9"></path>
-              <path d="M17.5 14.5v5"></path>
-              <circle cx="15.5" cy="19.5" r="2"></circle>
-            </svg>
-          </button>
-          <div id="lyrics-menu" class="lyrics-menu hidden" role="menu">
-            <button class="lyrics-menu__item" id="lyrics-menu-toggle-lock" type="button" role="menuitem">锁定位置</button>
-            <button class="lyrics-menu__item" id="lyrics-menu-reset-bounds" type="button" role="menuitem">重置位置和大小</button>
-            <button class="lyrics-menu__item lyrics-menu__item--danger" id="lyrics-menu-close" type="button" role="menuitem">关闭桌面歌词</button>
-          </div>
           <button class="player-btn player-btn--icon" id="repeat-btn" type="button" aria-label="循环 全部" title="循环 全部" data-mode="all">
             <svg class="icon-stroke player-btn__icon player-btn__icon--repeat-all" viewBox="0 0 24 24" aria-hidden="true">
               <path d="M17 2l4 4-4 4"></path>
@@ -246,6 +232,20 @@
               <path d="M6 6 18 18"></path>
             </svg>
           </button>
+          <button class="player-btn player-btn--icon player-btn--lyrics" id="lyrics-btn" type="button" aria-label="桌面歌词" title="桌面歌词（右键更多选项）" data-active="false">
+            <svg class="icon-stroke player-btn__icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M4 6h11"></path>
+              <path d="M4 11h16"></path>
+              <path d="M4 16h9"></path>
+              <path d="M17.5 14.5v5"></path>
+              <circle cx="15.5" cy="19.5" r="2"></circle>
+            </svg>
+          </button>
+          <div id="lyrics-menu" class="lyrics-menu hidden" role="menu">
+            <button class="lyrics-menu__item" id="lyrics-menu-toggle-lock" type="button" role="menuitem">锁定位置</button>
+            <button class="lyrics-menu__item" id="lyrics-menu-reset-bounds" type="button" role="menuitem">重置位置和大小</button>
+            <button class="lyrics-menu__item lyrics-menu__item--danger" id="lyrics-menu-close" type="button" role="menuitem">关闭桌面歌词</button>
+          </div>
         </div>
 
         <div class="player-progress">
@@ -290,6 +290,16 @@
       </label>
 
       <div class="settings-section-label">音乐</div>
+      <label class="settings-row" for="lyrics-button-toggle">
+        <div class="settings-copy">
+          <div class="settings-label">显示歌词按钮</div>
+          <div class="settings-hint">关闭后会隐藏底部播放栏最右侧的桌面歌词按钮。</div>
+        </div>
+        <div class="settings-toggle">
+          <input id="lyrics-button-toggle" type="checkbox" class="settings-toggle-input" checked>
+          <div class="settings-toggle-track"><div class="settings-toggle-thumb"></div></div>
+        </div>
+      </label>
       <label class="settings-row" for="playlist-recommendations-toggle">
         <div class="settings-copy">
           <div class="settings-label">歌单推荐音乐</div>
@@ -333,6 +343,27 @@
           <div class="settings-toggle-track"><div class="settings-toggle-thumb"></div></div>
         </div>
       </label>
+      <div class="settings-row settings-row--stack" id="volume-assist-row">
+        <div class="settings-copy">
+          <div class="settings-label">音量辅助调节功能</div>
+          <div class="settings-hint">打开后，按住设置好的热键再滚动鼠标滚轮，即可调节音量。</div>
+        </div>
+        <div class="settings-volume-assist">
+          <label class="settings-toggle settings-volume-assist__toggle" for="volume-assist-toggle">
+            <input id="volume-assist-toggle" type="checkbox" class="settings-toggle-input">
+            <div class="settings-toggle-track"><div class="settings-toggle-thumb"></div></div>
+            <span>启用</span>
+          </label>
+          <div class="settings-volume-assist__controls">
+            <button class="settings-hotkey-btn" id="volume-assist-hotkey-btn" type="button">Alt</button>
+            <select id="volume-assist-target-select" class="settings-select">
+              <option value="app">调节本软件音量</option>
+              <option value="system">调节系统音量</option>
+            </select>
+          </div>
+          <div class="settings-status" id="volume-assist-status">当前：Alt + 鼠标滚轮</div>
+        </div>
+      </div>
 
       <div class="settings-section-label">系统</div>
       <div class="settings-row settings-row--stack">

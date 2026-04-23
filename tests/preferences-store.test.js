@@ -6,6 +6,7 @@ const {
   normalizeAudioQualityPreference,
   normalizePlaylistOrderIds,
   normalizePreferences,
+  normalizeVolumeAssistSettings,
 } = require('../src/main/preferences-store')
 
 test('normalizeArtistTrackDisplayLimit clamps invalid values to the supported range', () => {
@@ -49,6 +50,33 @@ test('normalizePreferences persists audio quality preferences', () => {
 
   assert.equal(preferences.defaultAudioQuality, 'lossless')
   assert.equal(preferences.autoAdjustAudioQuality, false)
+})
+
+test('normalizePreferences persists volume assist preferences', () => {
+  assert.deepEqual(normalizeVolumeAssistSettings(), {
+    enabled: false,
+    target: 'app',
+    hotkey: 'Alt',
+  })
+
+  const preferences = normalizePreferences({
+    volumeAssist: {
+      enabled: true,
+      target: 'system',
+      hotkey: 'ctrl+shift+x',
+    },
+  })
+
+  assert.deepEqual(preferences.volumeAssist, {
+    enabled: true,
+    target: 'system',
+    hotkey: 'Ctrl+Shift+X',
+  })
+})
+
+test('normalizePreferences defaults lyrics button to visible and persists opt-out', () => {
+  assert.equal(normalizePreferences().showLyricsButton, true)
+  assert.equal(normalizePreferences({ showLyricsButton: false }).showLyricsButton, false)
 })
 
 test('normalizePreferences persists owned playlist order ids', () => {

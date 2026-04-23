@@ -49,6 +49,11 @@ const PLAYBACK_RESOLVE_TIMEOUT_MS = 10000
 const AUDIO_QUALITY_SWITCH_DEBOUNCE_MS = 180
 const AUDIO_QUALITY_REFRESH_REASON_SETTINGS = 'settings'
 const AUDIO_QUALITY_REFRESH_REASON_NETWORK = 'network'
+const VOLUME_ASSIST_TARGET_APP = 'app'
+const VOLUME_ASSIST_TARGET_SYSTEM = 'system'
+const VOLUME_ASSIST_DEFAULT_HOTKEY = 'Alt'
+const VOLUME_ASSIST_STEP = 5
+const VOLUME_ASSIST_SYSTEM_THROTTLE_MS = 80
 
 const TEXT = {
   tabOwned: '\u81ea\u5df1\u521b\u5efa',
@@ -165,6 +170,8 @@ const TEXT = {
   repeatAll: '\u5faa\u73af \u5168\u90e8',
   repeatOne: '\u5faa\u73af \u5355\u66f2',
   repeatOff: '\u5faa\u73af \u5173\u95ed',
+  lyricsButton: '\u684c\u9762\u6b4c\u8bcd',
+  lyricsButtonMore: '\u684c\u9762\u6b4c\u8bcd\uff08\u53f3\u952e\u66f4\u591a\u9009\u9879\uff09',
   nowPlaying: '\u5728\u64ad',
   authLoadingQr: '\u6b63\u5728\u751f\u6210\u767b\u5f55\u4e8c\u7ef4\u7801...',
   authWaiting: '\u8bf7\u4f7f\u7528\u7f51\u6613\u4e91\u97f3\u4e50\u626b\u7801\u767b\u5f55\u3002',
@@ -207,6 +214,11 @@ const TEXT = {
   appUpdateRestarting: '更新包已准备完成，应用即将重启',
   appUpdateInstallFailed: '启动更新失败',
   appUpdateOpenFailed: '打开更新链接失败',
+  volumeAssistRecording: '请按下要设置的热键',
+  volumeAssistShortcutSuffix: ' + 鼠标滚轮',
+  volumeAssistAppAdjusted: '本软件音量',
+  volumeAssistSystemUnsupported: '系统音量调节当前只支持桌面版 Windows。',
+  volumeAssistSystemFailed: '系统音量调节失败',
 }
 
 TEXT.spotifyImportLoginWindowOpened = '已打开 Spotify 登录窗口，请在窗口里完成登录'
@@ -295,6 +307,11 @@ const state = {
     installMessage: '',
     error: '',
     errorStage: '',
+  },
+  volumeAssist: {
+    recording: false,
+    lastSystemAdjustAt: 0,
+    pressedKeys: new Set(),
   },
 }
 
@@ -464,6 +481,10 @@ function createMockBridge() {
     likedPlaylistDisplayMode: normalizeLikedPlaylistDisplayMode(storedSettings.likedPlaylistDisplayMode),
     defaultAudioQuality: normalizeAudioQualityPreference(storedSettings.defaultAudioQuality),
     autoAdjustAudioQuality: storedSettings.autoAdjustAudioQuality !== false,
+    volumeAssist: normalizeVolumeAssistSettings(storedSettings.volumeAssist),
+    showLyricsButton: Object.prototype.hasOwnProperty.call(storedSettings, 'showLyricsButton')
+      ? storedSettings.showLyricsButton !== false
+      : true,
     artistTrackDisplayLimit: normalizeArtistTrackDisplayLimit(storedSettings.artistTrackDisplayLimit),
     collapsedPlaylistIds: normalizeCollapsedPlaylistIds(storedSettings.collapsedPlaylistIds),
     ownedPlaylistOrderIds: normalizePlaylistOrderIds(storedSettings.ownedPlaylistOrderIds),
@@ -669,6 +690,15 @@ function createMockBridge() {
         latestVersion: mockLatestVersion,
       }
     },
+    adjustSystemVolume: async (payload = {}) => {
+      const direction = Number(payload?.direction || 0)
+      window.__mockSystemVolumeAdjustments = Array.isArray(window.__mockSystemVolumeAdjustments)
+        ? [...window.__mockSystemVolumeAdjustments, direction]
+        : [direction]
+      return !Number.isFinite(direction) || direction === 0
+        ? { ok: false, error: 'Invalid volume direction' }
+        : { ok: true }
+    },
     getPreferences: async () => ({
       ok: true,
       preferences: {
@@ -677,6 +707,8 @@ function createMockBridge() {
         likedPlaylistDisplayMode: normalizeLikedPlaylistDisplayMode(storedPreferences.likedPlaylistDisplayMode),
         defaultAudioQuality: normalizeAudioQualityPreference(storedPreferences.defaultAudioQuality),
         autoAdjustAudioQuality: storedPreferences.autoAdjustAudioQuality !== false,
+        volumeAssist: normalizeVolumeAssistSettings(storedPreferences.volumeAssist),
+        showLyricsButton: storedPreferences.showLyricsButton !== false,
         artistTrackDisplayLimit: normalizeArtistTrackDisplayLimit(storedPreferences.artistTrackDisplayLimit),
         collapsedPlaylistIds: normalizeCollapsedPlaylistIds(storedPreferences.collapsedPlaylistIds),
         ownedPlaylistOrderIds: normalizePlaylistOrderIds(storedPreferences.ownedPlaylistOrderIds),
@@ -696,6 +728,12 @@ function createMockBridge() {
         autoAdjustAudioQuality: preferences?.autoAdjustAudioQuality !== undefined
           ? preferences.autoAdjustAudioQuality !== false
           : storedPreferences.autoAdjustAudioQuality !== false,
+        volumeAssist: normalizeVolumeAssistSettings(
+          preferences?.volumeAssist ?? storedPreferences.volumeAssist
+        ),
+        showLyricsButton: preferences?.showLyricsButton !== undefined
+          ? preferences.showLyricsButton !== false
+          : storedPreferences.showLyricsButton !== false,
         artistTrackDisplayLimit: normalizeArtistTrackDisplayLimit(
           preferences?.artistTrackDisplayLimit ?? storedPreferences.artistTrackDisplayLimit
         ),
@@ -715,6 +753,8 @@ function createMockBridge() {
           likedPlaylistDisplayMode: normalizeLikedPlaylistDisplayMode(storedPreferences.likedPlaylistDisplayMode),
           defaultAudioQuality: normalizeAudioQualityPreference(storedPreferences.defaultAudioQuality),
           autoAdjustAudioQuality: storedPreferences.autoAdjustAudioQuality !== false,
+          volumeAssist: normalizeVolumeAssistSettings(storedPreferences.volumeAssist),
+          showLyricsButton: storedPreferences.showLyricsButton !== false,
           artistTrackDisplayLimit: normalizeArtistTrackDisplayLimit(storedPreferences.artistTrackDisplayLimit),
           collapsedPlaylistIds: normalizeCollapsedPlaylistIds(storedPreferences.collapsedPlaylistIds),
           ownedPlaylistOrderIds: normalizePlaylistOrderIds(storedPreferences.ownedPlaylistOrderIds),
@@ -1414,6 +1454,137 @@ function normalizeAudioQualityPreference(input) {
   return AUDIO_QUALITY_BEST
 }
 
+function normalizeVolumeAssistTarget(input) {
+  return input === VOLUME_ASSIST_TARGET_SYSTEM
+    ? VOLUME_ASSIST_TARGET_SYSTEM
+    : VOLUME_ASSIST_TARGET_APP
+}
+
+function normalizeVolumeAssistHotkey(input) {
+  const tokens = String(input || '')
+    .split('+')
+    .map((token) => token.trim())
+    .filter(Boolean)
+
+  const modifierMap = new Map([
+    ['control', 'Ctrl'],
+    ['ctrl', 'Ctrl'],
+    ['shift', 'Shift'],
+    ['alt', 'Alt'],
+    ['option', 'Alt'],
+    ['meta', 'Meta'],
+    ['cmd', 'Meta'],
+    ['command', 'Meta'],
+    ['super', 'Meta'],
+    ['win', 'Meta'],
+    ['windows', 'Meta'],
+  ])
+  const modifierOrder = ['Ctrl', 'Shift', 'Alt', 'Meta']
+  const modifiers = new Set()
+  let mainKey = ''
+
+  for (const token of tokens) {
+    const mappedModifier = modifierMap.get(token.toLowerCase())
+    if (mappedModifier) {
+      modifiers.add(mappedModifier)
+      continue
+    }
+
+    if (!mainKey) {
+      mainKey = token.length === 1 ? token.toUpperCase() : token
+    }
+  }
+
+  const parts = modifierOrder.filter((modifier) => modifiers.has(modifier))
+  if (mainKey) {
+    parts.push(mainKey)
+  }
+
+  return parts.length ? parts.join('+') : VOLUME_ASSIST_DEFAULT_HOTKEY
+}
+
+function normalizeVolumeAssistSettings(input = {}) {
+  const raw = input && typeof input === 'object' ? input : {}
+  return {
+    enabled: Boolean(raw.enabled),
+    target: normalizeVolumeAssistTarget(raw.target),
+    hotkey: normalizeVolumeAssistHotkey(raw.hotkey),
+  }
+}
+
+function formatHotkeyFromKeyboardEvent(event) {
+  const modifiers = []
+  if (event.ctrlKey) modifiers.push('Ctrl')
+  if (event.shiftKey) modifiers.push('Shift')
+  if (event.altKey) modifiers.push('Alt')
+  if (event.metaKey) modifiers.push('Meta')
+
+  const rawKey = String(event.key || '').trim()
+  const modifierKeyMap = {
+    Control: 'Ctrl',
+    Shift: 'Shift',
+    Alt: 'Alt',
+    Meta: 'Meta',
+    OS: 'Meta',
+  }
+  const mainKey = modifierKeyMap[rawKey]
+    ? ''
+    : normalizeKeyboardMainKey(rawKey, event.code)
+  const hotkey = [...modifiers, mainKey].filter(Boolean).join('+')
+  return normalizeVolumeAssistHotkey(hotkey)
+}
+
+function normalizeKeyboardMainKey(key, code) {
+  if (!key) {
+    return ''
+  }
+
+  if (key === ' ') {
+    return 'Space'
+  }
+
+  if (key.length === 1) {
+    return key.toUpperCase()
+  }
+
+  if (/^Arrow/.test(key)) {
+    return key.replace(/^Arrow/, '')
+  }
+
+  if (key === 'Esc') {
+    return 'Escape'
+  }
+
+  const normalizedCode = String(code || '')
+  if (/^Digit\d$/.test(normalizedCode)) {
+    return normalizedCode.replace('Digit', '')
+  }
+
+  return key
+}
+
+function getPressedKeySetValue(event) {
+  const normalizedKey = normalizeKeyboardMainKey(event.key, event.code)
+  return normalizedKey ? normalizedKey.toLowerCase() : ''
+}
+
+function isVolumeAssistHotkeyPressed(event, hotkey, pressedKeys = state.volumeAssist.pressedKeys) {
+  const tokens = normalizeVolumeAssistHotkey(hotkey).split('+').filter(Boolean)
+  const modifiers = new Set(tokens.filter((token) => ['Ctrl', 'Shift', 'Alt', 'Meta'].includes(token)))
+  const mainKey = tokens.find((token) => !modifiers.has(token)) || ''
+
+  if (modifiers.has('Ctrl') && !event.ctrlKey) return false
+  if (modifiers.has('Shift') && !event.shiftKey) return false
+  if (modifiers.has('Alt') && !event.altKey) return false
+  if (modifiers.has('Meta') && !event.metaKey) return false
+
+  if (!mainKey) {
+    return modifiers.size > 0
+  }
+
+  return pressedKeys?.has(mainKey.toLowerCase())
+}
+
 function normalizeArtistTrackDisplayLimit(input) {
   const numeric = Number(input)
   if (!Number.isFinite(numeric)) {
@@ -1707,6 +1878,11 @@ function cacheRefs() {
   refs.likedPlaylistDisplayModeSelect = document.getElementById('liked-playlist-display-mode-select')
   refs.defaultAudioQualitySelect = document.getElementById('default-audio-quality-select')
   refs.autoAdjustAudioQualityToggle = document.getElementById('auto-adjust-audio-quality-toggle')
+  refs.volumeAssistToggle = document.getElementById('volume-assist-toggle')
+  refs.volumeAssistHotkeyBtn = document.getElementById('volume-assist-hotkey-btn')
+  refs.volumeAssistTargetSelect = document.getElementById('volume-assist-target-select')
+  refs.volumeAssistStatus = document.getElementById('volume-assist-status')
+  refs.lyricsButtonToggle = document.getElementById('lyrics-button-toggle')
   refs.settingsUpdateHint = document.getElementById('settings-update-hint')
   refs.settingsUpdateStatus = document.getElementById('settings-update-status')
   refs.settingsUpdateCheckBtn = document.getElementById('settings-update-check-btn')
@@ -1812,6 +1988,10 @@ function bindEvents() {
   refs.likedPlaylistDisplayModeSelect.addEventListener('change', handleSettingsChange)
   refs.defaultAudioQualitySelect.addEventListener('change', handleSettingsChange)
   refs.autoAdjustAudioQualityToggle.addEventListener('change', handleSettingsChange)
+  refs.volumeAssistToggle.addEventListener('change', handleSettingsChange)
+  refs.volumeAssistTargetSelect.addEventListener('change', handleSettingsChange)
+  refs.volumeAssistHotkeyBtn.addEventListener('click', startVolumeAssistHotkeyRecording)
+  refs.lyricsButtonToggle.addEventListener('change', handleSettingsChange)
   refs.settingsUpdateCheckBtn.addEventListener('click', () => {
     void refreshAppUpdateStatus({ force: true })
   })
@@ -1941,7 +2121,11 @@ function bindEvents() {
   window.addEventListener('blur', hideAlbumHoverPreview)
   window.addEventListener('blur', clearPlaylistDragState)
   window.addEventListener('blur', clearTrackDragState)
+  window.addEventListener('blur', clearVolumeAssistPressedKeys)
   document.addEventListener('keydown', handleKeydown)
+  document.addEventListener('keydown', handleVolumeAssistKeydown, true)
+  document.addEventListener('keyup', handleVolumeAssistKeyup, true)
+  document.addEventListener('wheel', handleVolumeAssistWheel, { capture: true, passive: false })
   document.addEventListener('mousedown', handleDocumentPointerDown, true)
   document.addEventListener('mouseup', scheduleTrackDragStateRecovery, true)
   document.addEventListener('pointerup', scheduleTrackDragStateRecovery, true)
@@ -1981,6 +2165,7 @@ function wireBridge() {
 }
 
 async function handleLyricsButtonClick() {
+  if (!shouldShowLyricsButton()) return
   closeLyricsMenu()
   if (!appBridge || typeof appBridge.toggleLyricsWindow !== 'function') return
   const nextEnabled = !state.lyrics.windowOpen
@@ -1992,6 +2177,7 @@ async function handleLyricsButtonClick() {
 }
 
 async function handleLyricsButtonContextMenu(event) {
+  if (!shouldShowLyricsButton()) return
   event.preventDefault()
   if (!refs.lyricsMenu) return
   let locked = false
@@ -9370,6 +9556,46 @@ function applyTheme(theme, { silent = false, persistLocal = true } = {}) {
   }
 }
 
+function shouldShowLyricsButton() {
+  return state.settings.showLyricsButton !== false
+}
+
+function syncLyricsButtonVisibility() {
+  if (!refs.lyricsBtn) return
+  const visible = shouldShowLyricsButton()
+  refs.lyricsBtn.classList.toggle('hidden', !visible)
+  refs.lyricsBtn.setAttribute('aria-hidden', visible ? 'false' : 'true')
+  if (!visible) {
+    closeLyricsMenu()
+    if (typeof refs.lyricsBtn.blur === 'function') {
+      refs.lyricsBtn.blur()
+    }
+  }
+}
+
+function getVolumeAssistSettings() {
+  return normalizeVolumeAssistSettings(state.settings.volumeAssist)
+}
+
+function getVolumeAssistHotkeyLabel() {
+  return getVolumeAssistSettings().hotkey
+}
+
+function renderVolumeAssistSettings() {
+  if (!refs.volumeAssistToggle || !refs.volumeAssistHotkeyBtn || !refs.volumeAssistTargetSelect) {
+    return
+  }
+
+  const settings = getVolumeAssistSettings()
+  refs.volumeAssistToggle.checked = settings.enabled
+  refs.volumeAssistTargetSelect.value = settings.target
+  refs.volumeAssistHotkeyBtn.textContent = state.volumeAssist.recording
+    ? TEXT.volumeAssistRecording
+    : settings.hotkey
+  refs.volumeAssistHotkeyBtn.classList.toggle('is-recording', state.volumeAssist.recording)
+  refs.volumeAssistStatus.textContent = `当前：${settings.hotkey}${TEXT.volumeAssistShortcutSuffix}`
+}
+
 function renderSettings() {
   syncSpotifyImportActionLabels()
   applyUiScale(state.settings.uiScale)
@@ -9381,6 +9607,9 @@ function renderSettings() {
     state.settings.defaultAudioQuality
   )
   refs.autoAdjustAudioQualityToggle.checked = state.settings.autoAdjustAudioQuality !== false
+  renderVolumeAssistSettings()
+  refs.lyricsButtonToggle.checked = shouldShowLyricsButton()
+  syncLyricsButtonVisibility()
   const spotifyBusy = Boolean(state.spotifyImport.busy)
   const spotifyConnected = Boolean(state.spotifyImport.connected)
   const spotifySyncBusy = Boolean(state.spotifySync.busy)
@@ -9773,24 +10002,178 @@ function handleSettingsChange() {
     refs.defaultAudioQualitySelect.value
   )
   const nextAutoAdjustAudioQuality = refs.autoAdjustAudioQualityToggle.checked
+  const nextVolumeAssist = normalizeVolumeAssistSettings({
+    enabled: refs.volumeAssistToggle.checked,
+    target: refs.volumeAssistTargetSelect.value,
+    hotkey: getVolumeAssistHotkeyLabel(),
+  })
+  const nextShowLyricsButton = refs.lyricsButtonToggle.checked
   const recommendationsChanged = nextShowPlaylistRecommendations !== state.settings.showPlaylistRecommendations
   const audioQualityChanged = nextDefaultAudioQuality !== state.settings.defaultAudioQuality
     || nextAutoAdjustAudioQuality !== state.settings.autoAdjustAudioQuality
+  const lyricsButtonChanged = nextShowLyricsButton !== shouldShowLyricsButton()
 
   state.settings.showPlaylistRecommendations = nextShowPlaylistRecommendations
   state.settings.likedPlaylistDisplayMode = nextLikedPlaylistDisplayMode
   state.settings.defaultAudioQuality = nextDefaultAudioQuality
   state.settings.autoAdjustAudioQuality = nextAutoAdjustAudioQuality
+  state.settings.volumeAssist = nextVolumeAssist
+  state.settings.showLyricsButton = nextShowLyricsButton
 
   if (recommendationsChanged) {
     resetRecommendationRuntime()
   }
 
   saveSettings()
+  if (lyricsButtonChanged) {
+    syncLyricsButtonVisibility()
+  }
+  renderVolumeAssistSettings()
   if (audioQualityChanged) {
     scheduleAudioQualityRefresh(AUDIO_QUALITY_REFRESH_REASON_SETTINGS)
   }
   applyFilters({ syncAll: true })
+}
+
+function startVolumeAssistHotkeyRecording() {
+  state.volumeAssist.recording = true
+  renderVolumeAssistSettings()
+  let pendingModifierHotkey = ''
+
+  const finish = (hotkey) => {
+    window.removeEventListener('keydown', handleRecordKey, true)
+    window.removeEventListener('keyup', handleRecordKeyUp, true)
+    window.removeEventListener('pointerdown', handleCancel, true)
+    state.volumeAssist.recording = false
+    if (hotkey) {
+      state.settings.volumeAssist = normalizeVolumeAssistSettings({
+        ...getVolumeAssistSettings(),
+        hotkey,
+      })
+      saveSettings()
+    }
+    renderVolumeAssistSettings()
+  }
+
+  const handleRecordKey = (event) => {
+    event.preventDefault()
+    event.stopPropagation()
+
+    if (event.key === 'Escape') {
+      finish('')
+      return
+    }
+
+    const rawKey = String(event.key || '').trim()
+    const modifierOnly = rawKey === 'Control'
+      || rawKey === 'Shift'
+      || rawKey === 'Alt'
+      || rawKey === 'Meta'
+      || rawKey === 'OS'
+    const hotkey = formatHotkeyFromKeyboardEvent(event)
+    if (modifierOnly) {
+      pendingModifierHotkey = hotkey
+      refs.volumeAssistHotkeyBtn.textContent = hotkey
+      return
+    }
+
+    finish(hotkey)
+  }
+
+  const handleRecordKeyUp = (event) => {
+    if (!pendingModifierHotkey) {
+      return
+    }
+
+    event.preventDefault()
+    event.stopPropagation()
+    finish(pendingModifierHotkey)
+  }
+
+  const handleCancel = (event) => {
+    if (event.target === refs.volumeAssistHotkeyBtn) {
+      return
+    }
+
+    finish('')
+  }
+
+  window.addEventListener('keydown', handleRecordKey, true)
+  window.addEventListener('keyup', handleRecordKeyUp, true)
+  window.addEventListener('pointerdown', handleCancel, true)
+}
+
+function handleVolumeAssistKeydown(event) {
+  const key = getPressedKeySetValue(event)
+  if (key) {
+    state.volumeAssist.pressedKeys.add(key)
+  }
+}
+
+function handleVolumeAssistKeyup(event) {
+  const key = getPressedKeySetValue(event)
+  if (key) {
+    state.volumeAssist.pressedKeys.delete(key)
+  }
+}
+
+function clearVolumeAssistPressedKeys() {
+  state.volumeAssist.pressedKeys.clear()
+}
+
+function handleVolumeAssistWheel(event) {
+  const settings = getVolumeAssistSettings()
+  if (!settings.enabled || state.volumeAssist.recording) {
+    return
+  }
+
+  handleVolumeAssistKeydown(event)
+
+  const direction = event.deltaY < 0 ? 1 : event.deltaY > 0 ? -1 : 0
+  if (direction === 0 || !isVolumeAssistHotkeyPressed(event, settings.hotkey)) {
+    return
+  }
+
+  event.preventDefault()
+  event.stopPropagation()
+
+  if (settings.target === VOLUME_ASSIST_TARGET_SYSTEM) {
+    void adjustSystemVolumeByAssist(direction)
+    return
+  }
+
+  adjustAppVolumeByAssist(direction)
+}
+
+function adjustAppVolumeByAssist(direction) {
+  const current = Number(refs.volumeRange.value || 0)
+  const next = clamp(current + (direction > 0 ? VOLUME_ASSIST_STEP : -VOLUME_ASSIST_STEP), 0, 100)
+  if (next === current) {
+    return
+  }
+
+  refs.volumeRange.value = String(next)
+  refs.audio.volume = next / 100
+  refs.volumeRange.dispatchEvent(new Event('input', { bubbles: true }))
+  showToast(`${TEXT.volumeAssistAppAdjusted} ${next}%`)
+}
+
+async function adjustSystemVolumeByAssist(direction) {
+  const now = Date.now()
+  if (now - state.volumeAssist.lastSystemAdjustAt < VOLUME_ASSIST_SYSTEM_THROTTLE_MS) {
+    return
+  }
+  state.volumeAssist.lastSystemAdjustAt = now
+
+  if (!appBridge || typeof appBridge.adjustSystemVolume !== 'function') {
+    showToast(TEXT.volumeAssistSystemUnsupported, 'error')
+    return
+  }
+
+  const result = await appBridge.adjustSystemVolume({ direction })
+  if (!result?.ok) {
+    showToast(result?.error || TEXT.volumeAssistSystemFailed, 'error')
+  }
 }
 
 function handleUiScaleInput(event) {
@@ -9861,6 +10244,10 @@ function loadStoredSettings() {
       likedPlaylistDisplayMode: normalizeLikedPlaylistDisplayMode(parsed.likedPlaylistDisplayMode),
       defaultAudioQuality: normalizeAudioQualityPreference(parsed.defaultAudioQuality),
       autoAdjustAudioQuality: parsed.autoAdjustAudioQuality !== false,
+      volumeAssist: normalizeVolumeAssistSettings(parsed.volumeAssist),
+      showLyricsButton: Object.prototype.hasOwnProperty.call(parsed, 'showLyricsButton')
+        ? parsed.showLyricsButton !== false
+        : true,
       artistTrackDisplayLimit: normalizeArtistTrackDisplayLimit(parsed.artistTrackDisplayLimit),
       collapsedPlaylistIds: normalizeCollapsedPlaylistIds(parsed.collapsedPlaylistIds),
       ownedPlaylistOrderIds: normalizePlaylistOrderIds(parsed.ownedPlaylistOrderIds),
@@ -9872,6 +10259,8 @@ function loadStoredSettings() {
       likedPlaylistDisplayMode: LIKED_PLAYLIST_DISPLAY_MODE_ALL,
       defaultAudioQuality: AUDIO_QUALITY_BEST,
       autoAdjustAudioQuality: true,
+      volumeAssist: normalizeVolumeAssistSettings(),
+      showLyricsButton: true,
       artistTrackDisplayLimit: ARTIST_TRACK_DISPLAY_LIMIT_DEFAULT,
       collapsedPlaylistIds: [],
       ownedPlaylistOrderIds: [],
@@ -9901,6 +10290,8 @@ async function hydrateStoredPreferences() {
     result.preferences.defaultAudioQuality
   )
   state.settings.autoAdjustAudioQuality = result.preferences.autoAdjustAudioQuality !== false
+  state.settings.volumeAssist = normalizeVolumeAssistSettings(result.preferences.volumeAssist)
+  state.settings.showLyricsButton = result.preferences.showLyricsButton !== false
   state.settings.artistTrackDisplayLimit = normalizeArtistTrackDisplayLimit(
     result.preferences.artistTrackDisplayLimit
   )
@@ -9929,6 +10320,8 @@ async function persistPreferences() {
     likedPlaylistDisplayMode: normalizeLikedPlaylistDisplayMode(state.settings.likedPlaylistDisplayMode),
     defaultAudioQuality: normalizeAudioQualityPreference(state.settings.defaultAudioQuality),
     autoAdjustAudioQuality: state.settings.autoAdjustAudioQuality !== false,
+    volumeAssist: normalizeVolumeAssistSettings(state.settings.volumeAssist),
+    showLyricsButton: state.settings.showLyricsButton !== false,
     artistTrackDisplayLimit: normalizeArtistTrackDisplayLimit(state.settings.artistTrackDisplayLimit),
     collapsedPlaylistIds: normalizeCollapsedPlaylistIds(state.settings.collapsedPlaylistIds),
     ownedPlaylistOrderIds: normalizePlaylistOrderIds(state.settings.ownedPlaylistOrderIds),
@@ -10029,6 +10422,11 @@ function syncPlayerButtonState(hasTrack) {
   refs.shuffleBtn.dataset.active = String(state.shuffle)
   setButtonLabel(refs.repeatBtn, formatRepeatButton())
   refs.repeatBtn.dataset.mode = state.repeat
+  if (refs.lyricsBtn) {
+    refs.lyricsBtn.setAttribute('aria-label', TEXT.lyricsButton)
+    refs.lyricsBtn.title = TEXT.lyricsButtonMore
+    refs.lyricsBtn.dataset.active = state.lyrics.windowOpen ? 'true' : 'false'
+  }
 }
 
 function updateProgressUI() {
@@ -10280,6 +10678,10 @@ function escapeHtml(value) {
 }
 
 function showToast(message, type = 'success') {
+  if (!message) {
+    return
+  }
+
   const toast = document.createElement('div')
   toast.className = `toast${type === 'error' ? ' error' : ''}`
   toast.textContent = message

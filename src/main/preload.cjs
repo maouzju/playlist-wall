@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld('bridge', {
   openExternalUrl: (url) => ipcRenderer.invoke('openExternalUrl', url),
   getPreferences: () => ipcRenderer.invoke('getPreferences'),
   savePreferences: (preferences) => ipcRenderer.invoke('savePreferences', preferences),
+  adjustSystemVolume: (payload) => ipcRenderer.invoke('adjustSystemVolume', payload),
   checkAppUpdate: (options) => ipcRenderer.invoke('checkAppUpdate', options),
   installAppUpdate: () => ipcRenderer.invoke('installAppUpdate'),
   init: () => ipcRenderer.invoke('init'),

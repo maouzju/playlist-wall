@@ -21,6 +21,7 @@ const {
   resolveWindowState,
 } = require('./window-state')
 const { buildWindowsTaskbarDetails } = require('./windows-taskbar')
+const { adjustWindowsSystemVolume } = require('./volume-assist')
 
 const HYDRATE_CONCURRENCY = 5
 const PLAYLIST_UNDO_NOTICE_MS = 20000
@@ -1515,6 +1516,20 @@ function registerIpc() {
   ipcMain.handle('savePreferences', async (_event, preferences) => {
     try {
       return { ok: true, preferences: writePreferences(preferences) }
+    } catch (error) {
+      return { ok: false, error: error.message || String(error) }
+    }
+  })
+
+  ipcMain.handle('adjustSystemVolume', async (_event, payload = {}) => {
+    try {
+      const direction = Number(payload?.direction || 0)
+      if (!Number.isFinite(direction) || direction === 0) {
+        return { ok: false, error: 'Invalid volume direction' }
+      }
+
+      await adjustWindowsSystemVolume(direction)
+      return { ok: true }
     } catch (error) {
       return { ok: false, error: error.message || String(error) }
     }

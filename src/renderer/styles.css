@@ -857,6 +857,49 @@ button:focus-visible,
   outline-offset: 2px;
 }
 
+.settings-volume-assist {
+  display: grid;
+  gap: 8px;
+}
+
+.settings-volume-assist__toggle {
+  justify-content: flex-start;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.settings-volume-assist__controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.settings-hotkey-btn {
+  min-width: 112px;
+  min-height: 32px;
+  padding: 6px 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: 999px;
+  background: var(--surface-soft);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.settings-hotkey-btn.is-recording {
+  border-color: var(--text);
+  background: var(--text);
+  color: var(--inverse-text);
+}
+
+.settings-hotkey-btn:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: 2px;
+}
+
 .settings-update-footer {
   display: flex;
   align-items: center;
@@ -1737,6 +1780,10 @@ button.track-row:hover:not(:disabled) {
 #repeat-btn[data-mode="one"] .player-btn__icon--repeat-one,
 #repeat-btn[data-mode="off"] .player-btn__icon--repeat-off {
   display: block;
+}
+
+.player-btn--lyrics {
+  order: 20;
 }
 
 .player-progress {

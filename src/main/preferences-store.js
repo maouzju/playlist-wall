@@ -15,6 +15,9 @@ const AUDIO_QUALITY_BEST = 'best'
 const AUDIO_QUALITY_LOSSLESS = 'lossless'
 const AUDIO_QUALITY_EXHIGH = 'exhigh'
 const AUDIO_QUALITY_STANDARD = 'standard'
+const VOLUME_ASSIST_TARGET_APP = 'app'
+const VOLUME_ASSIST_TARGET_SYSTEM = 'system'
+const VOLUME_ASSIST_DEFAULT_HOTKEY = 'Alt'
 const ARTIST_TRACK_DISPLAY_LIMIT_MIN = 20
 const ARTIST_TRACK_DISPLAY_LIMIT_MAX = 1000
 const ARTIST_TRACK_DISPLAY_LIMIT_DEFAULT = 100
@@ -69,6 +72,64 @@ function normalizeAudioQualityPreference(input) {
   }
 
   return AUDIO_QUALITY_BEST
+}
+
+function normalizeVolumeAssistTarget(input) {
+  return input === VOLUME_ASSIST_TARGET_SYSTEM
+    ? VOLUME_ASSIST_TARGET_SYSTEM
+    : VOLUME_ASSIST_TARGET_APP
+}
+
+function normalizeVolumeAssistHotkey(input) {
+  const tokens = String(input || '')
+    .split('+')
+    .map((token) => token.trim())
+    .filter(Boolean)
+
+  const modifierMap = new Map([
+    ['control', 'Ctrl'],
+    ['ctrl', 'Ctrl'],
+    ['shift', 'Shift'],
+    ['alt', 'Alt'],
+    ['option', 'Alt'],
+    ['meta', 'Meta'],
+    ['cmd', 'Meta'],
+    ['command', 'Meta'],
+    ['super', 'Meta'],
+    ['win', 'Meta'],
+    ['windows', 'Meta'],
+  ])
+  const modifierOrder = ['Ctrl', 'Shift', 'Alt', 'Meta']
+  const modifiers = new Set()
+  let mainKey = ''
+
+  for (const token of tokens) {
+    const mappedModifier = modifierMap.get(token.toLowerCase())
+    if (mappedModifier) {
+      modifiers.add(mappedModifier)
+      continue
+    }
+
+    if (!mainKey) {
+      mainKey = token.length === 1 ? token.toUpperCase() : token
+    }
+  }
+
+  const parts = modifierOrder.filter((modifier) => modifiers.has(modifier))
+  if (mainKey) {
+    parts.push(mainKey)
+  }
+
+  return parts.length ? parts.join('+') : VOLUME_ASSIST_DEFAULT_HOTKEY
+}
+
+function normalizeVolumeAssistSettings(input = {}) {
+  const raw = input && typeof input === 'object' ? input : {}
+  return {
+    enabled: Boolean(raw.enabled),
+    target: normalizeVolumeAssistTarget(raw.target),
+    hotkey: normalizeVolumeAssistHotkey(raw.hotkey),
+  }
 }
 
 function normalizeArtistTrackDisplayLimit(input) {
@@ -177,12 +238,15 @@ function normalizeLyricsPrefs(input) {
 }
 
 function normalizePreferences(input = {}) {
+  const hasShowLyricsButton = Object.prototype.hasOwnProperty.call(input || {}, 'showLyricsButton')
   return {
     theme: input?.theme === 'dark' ? 'dark' : 'light',
     showPlaylistRecommendations: Boolean(input?.showPlaylistRecommendations),
+    showLyricsButton: hasShowLyricsButton ? input.showLyricsButton !== false : true,
     likedPlaylistDisplayMode: normalizeLikedPlaylistDisplayMode(input?.likedPlaylistDisplayMode),
     defaultAudioQuality: normalizeAudioQualityPreference(input?.defaultAudioQuality),
     autoAdjustAudioQuality: input?.autoAdjustAudioQuality !== false,
+    volumeAssist: normalizeVolumeAssistSettings(input?.volumeAssist),
     artistTrackDisplayLimit: normalizeArtistTrackDisplayLimit(input?.artistTrackDisplayLimit),
     collapsedPlaylistIds: normalizeCollapsedPlaylistIds(input?.collapsedPlaylistIds),
     ownedPlaylistOrderIds: normalizePlaylistOrderIds(input?.ownedPlaylistOrderIds),
@@ -248,6 +312,7 @@ module.exports = {
   writePreferences,
   normalizePreferences,
   normalizeAudioQualityPreference,
+  normalizeVolumeAssistSettings,
   normalizeArtistTrackDisplayLimit,
   normalizePlaylistOrderIds,
   normalizeLyricsPrefs,
