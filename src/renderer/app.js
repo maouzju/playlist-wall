@@ -49,6 +49,7 @@ const PLAYBACK_RESOLVE_TIMEOUT_MS = 10000
 const AUDIO_QUALITY_SWITCH_DEBOUNCE_MS = 180
 const AUDIO_QUALITY_REFRESH_REASON_SETTINGS = 'settings'
 const AUDIO_QUALITY_REFRESH_REASON_NETWORK = 'network'
+const MAX_CONSECUTIVE_AUTO_SKIP = 5
 
 const TEXT = {
   tabOwned: '\u81ea\u5df1\u521b\u5efa',
@@ -261,6 +262,7 @@ const state = {
   totalOwnedPlaylistCount: 0,
   currentPlaybackRequestedQuality: '',
   currentPlaybackResolvedLevel: '',
+  consecutivePlaybackFailures: 0,
   tabScrollPositions: {
     owned: 0,
     spotify: 0,
@@ -1918,13 +1920,14 @@ function bindEvents() {
     pushLyricsPlaybackTime()
   })
   refs.audio.addEventListener('ended', () => {
-    if (state.repeat === 'one') return playQueueIndex(state.queueIndex)
+    if (state.repeat === 'one') return playQueueIndex(state.queueIndex, { autoSkipOnFailure: true })
     nextTrack({ fromEnded: true })
   })
   refs.audio.addEventListener('error', () => {
     state.isResolving = false
     showToast(TEXT.unavailableTrack, 'error')
     renderPlayer()
+    maybeAutoSkipFailedTrack(true)
   })
   window.addEventListener('resize', () => {
     hideAlbumHoverPreview()
@@ -9068,6 +9071,18 @@ async function loadResolvedAudioSource(url, { resumeAtSeconds = 0, autoplay = tr
   }
 }
 
+function maybeAutoSkipFailedTrack(autoSkipOnFailure) {
+  if (!autoSkipOnFailure) return false
+  if (state.queue.length <= 1) return false
+  state.consecutivePlaybackFailures = (state.consecutivePlaybackFailures || 0) + 1
+  if (state.consecutivePlaybackFailures >= MAX_CONSECUTIVE_AUTO_SKIP) {
+    state.consecutivePlaybackFailures = 0
+    return false
+  }
+  nextTrack({ fromEnded: true })
+  return true
+}
+
 async function resolveQueueTrackSource(track, options = {}) {
   const requestedQuality = getRequestedAudioQualityPreference(
     options?.preferredQuality ?? state.settings.defaultAudioQuality
@@ -9075,6 +9090,7 @@ async function resolveQueueTrackSource(track, options = {}) {
   const autoplay = options?.autoplay !== false
   const resumeAtSeconds = Math.max(0, Number(options?.resumeAtSeconds || 0) || 0)
   const shouldRecordPlay = Boolean(options?.recordPlay)
+  const autoSkipOnFailure = Boolean(options?.autoSkipOnFailure)
   const playbackTrackId = Number(track?.playbackTrackId || track?.id || 0)
 
   state.currentTrackId = track.id
@@ -9101,6 +9117,7 @@ async function resolveQueueTrackSource(track, options = {}) {
         state.currentPlaybackResolvedLevel = ''
       }
       showToast(result.error || TEXT.noPlayableUrl, 'error')
+      maybeAutoSkipFailedTrack(autoSkipOnFailure)
       return { ok: false }
     }
 
@@ -9111,6 +9128,7 @@ async function resolveQueueTrackSource(track, options = {}) {
     })
     state.currentPlaybackRequestedQuality = requestedQuality
     state.currentPlaybackResolvedLevel = String(result.level || '')
+    state.consecutivePlaybackFailures = 0
     if (shouldRecordPlay && playbackTrackId > 0) {
       void recordTrackPlay(playbackTrackId)
     }
@@ -9127,6 +9145,7 @@ async function resolveQueueTrackSource(track, options = {}) {
     if ((error.message || '') !== TEXT.unavailableTrack) {
       showToast(error.message || TEXT.playbackFailed, 'error')
     }
+    maybeAutoSkipFailedTrack(autoSkipOnFailure)
     return { ok: false }
   } finally {
     if (token === state.playToken) {
@@ -9176,11 +9195,14 @@ async function refreshCurrentTrackAudioQuality(reason = AUDIO_QUALITY_REFRESH_RE
   })
 }
 
-async function playQueueIndex(index) {
+async function playQueueIndex(index, options = {}) {
   if (!state.queue.length || index < 0 || index >= state.queue.length) return
   state.queueIndex = index
   const track = state.queue[index]
-  await resolveQueueTrackSource(track, { recordPlay: true })
+  await resolveQueueTrackSource(track, {
+    recordPlay: true,
+    autoSkipOnFailure: Boolean(options?.autoSkipOnFailure),
+  })
 }
 
 async function recordTrackPlay(trackId) {
@@ -9252,7 +9274,7 @@ function previousTrack() {
 function nextTrack({ fromEnded }) {
   if (!state.queue.length) return
   if (state.shuffle && state.queue.length > 1) {
-    playQueueIndex(randomQueueIndex())
+    playQueueIndex(randomQueueIndex(), { autoSkipOnFailure: Boolean(fromEnded) })
     return
   }
 
@@ -9270,7 +9292,7 @@ function nextTrack({ fromEnded }) {
     }
   }
 
-  playQueueIndex(target)
+  playQueueIndex(target, { autoSkipOnFailure: Boolean(fromEnded) })
 }
 
 function randomQueueIndex() {
