@@ -1059,6 +1059,105 @@ test('audio quality settings affect playback requests and persist across reload'
   await expect(page.locator('#auto-adjust-audio-quality-toggle')).not.toBeChecked()
 })
 
+
+
+test('concerts tab loads event cards and filters by city picker or venue search', async ({ page }) => {
+  await waitForWall(page)
+
+  await page.click('#tab-concerts')
+  const concertCards = page.locator('.playlist-card')
+  await expect(concertCards).toHaveCount(2)
+  await expect(page.locator('#tab-concerts')).toHaveClass(/is-active/)
+  await expect(page.locator('#search-input')).toHaveAttribute('placeholder', /\u6f14\u51fa/)
+  await expect(page.locator('#concert-location-filter')).toBeVisible()
+  await expect(page.locator('[data-concert-city-filter=""]')).toContainText('\u5168\u90e8\u5730\u70b9')
+  await expect(page.locator('[data-concert-city-filter="\u4e0a\u6d77"]')).toContainText('\u4e0a\u6d77')
+  await expect(page.locator('[data-concert-city-filter="\u5317\u4eac"]')).toContainText('\u5317\u4eac')
+  await expect(page.locator('.playlist-title').filter({ hasText: '\u827a\u4eba 1 \u4e16\u754c\u5de1\u6f14' })).toBeVisible()
+  await expect(page.locator('.playlist-placeholder--concert').filter({ hasText: '\u4e0a\u6d77' })).toBeVisible()
+
+  await page.click('[data-concert-city-filter="\u5317\u4eac"]')
+  await expect(page.locator('.playlist-title').filter({ hasText: '\u590f\u65e5\u97f3\u4e50\u8282' })).toBeVisible()
+  await expect(page.locator('.playlist-card')).toHaveCount(1)
+  await expect(page.locator('[data-concert-city-filter="\u5317\u4eac"]')).toHaveClass(/is-active/)
+
+  await page.click('[data-concert-city-filter=""]')
+  await expect(page.locator('.playlist-card')).toHaveCount(2)
+
+  await page.fill('#search-input', '\u51ef\u8fea\u62c9\u514b')
+  await expect(page.locator('.playlist-title').filter({ hasText: '\u590f\u65e5\u97f3\u4e50\u8282' })).toBeVisible()
+  await expect(page.locator('.playlist-card')).toHaveCount(1)
+
+  await page.fill('#search-input', '\u4e0d\u5b58\u5728\u7684\u573a\u9986')
+  await expect(page.locator('#wall-empty .empty-copy')).toContainText('\u6362\u4e2a\u827a\u4eba\u3001\u57ce\u5e02\u6216\u573a\u9986\u8bd5\u8bd5')
+})
+
+test('playback reports listened tracks with NetEase source and listened seconds', async ({ page }) => {
+  await waitForWall(page)
+
+  await page.evaluate(() => {
+    function createSilentWavUrl(durationSeconds = 4, sampleRate = 8000) {
+      const sampleCount = Math.max(1, Math.round(durationSeconds * sampleRate))
+      const dataLength = sampleCount * 2
+      const buffer = new ArrayBuffer(44 + dataLength)
+      const view = new DataView(buffer)
+      const writeString = (offset, value) => {
+        for (let index = 0; index < value.length; index += 1) {
+          view.setUint8(offset + index, value.charCodeAt(index))
+        }
+      }
+
+      writeString(0, 'RIFF')
+      view.setUint32(4, 36 + dataLength, true)
+      writeString(8, 'WAVE')
+      writeString(12, 'fmt ')
+      view.setUint32(16, 16, true)
+      view.setUint16(20, 1, true)
+      view.setUint16(22, 1, true)
+      view.setUint32(24, sampleRate, true)
+      view.setUint32(28, sampleRate * 2, true)
+      view.setUint16(32, 2, true)
+      view.setUint16(34, 16, true)
+      writeString(36, 'data')
+      view.setUint32(40, dataLength, true)
+
+      return URL.createObjectURL(new Blob([buffer], { type: 'audio/wav' }))
+    }
+
+    window.__mockRecordTrackPlayCalls = []
+    window.__mockSongUrlResult = {
+      ok: true,
+      url: createSilentWavUrl(160),
+      level: 'standard',
+      streamDurationMs: 160000,
+    }
+  })
+
+  await page.locator('.playlist-card[data-playlist-id="101"] .track-row[data-track-id="101001"]').click()
+  await expect.poll(async () => {
+    return page.evaluate(() => Number(document.getElementById('audio')?.duration || 0))
+  }).toBeGreaterThan(0)
+  await expect.poll(async () => {
+    return page.evaluate(() => window.__mockRecordTrackPlayCalls?.length || 0)
+  }).toBe(0)
+
+  await page.evaluate(() => {
+    const audio = document.getElementById('audio')
+    audio.currentTime = 31
+    audio.dispatchEvent(new Event('timeupdate'))
+  })
+
+  await expect.poll(async () => {
+    return page.evaluate(() => window.__mockRecordTrackPlayCalls?.length || 0)
+  }).toBe(1)
+
+  const call = await page.evaluate(() => window.__mockRecordTrackPlayCalls[0])
+  expect(call.payload.trackId).toBe(101001)
+  expect(call.payload.sourceId).toBe(101)
+  expect(call.payload.listenedSeconds).toBeGreaterThanOrEqual(30)
+  expect(call.payload.syncCloud).toBe(true)
+})
+
 test('timed out song resolution does not leave playback stuck in resolving state', async ({ page }) => {
   await waitForWall(page)
 

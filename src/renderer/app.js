@@ -47,6 +47,8 @@ const ARTIST_SUMMARY_TRACK_COUNT_MAX = 20
 const AUDIO_SOURCE_WAIT_TIMEOUT_MS = 4000
 const PLAYBACK_RESOLVE_TIMEOUT_MS = 10000
 const AUDIO_QUALITY_SWITCH_DEBOUNCE_MS = 180
+const PLAY_RECORD_MIN_SECONDS = 30
+const PLAY_RECORD_MIN_PROGRESS_RATIO = 0.5
 const AUDIO_QUALITY_REFRESH_REASON_SETTINGS = 'settings'
 const AUDIO_QUALITY_REFRESH_REASON_NETWORK = 'network'
 const VOLUME_ASSIST_TARGET_APP = 'app'
@@ -61,6 +63,7 @@ const TEXT = {
   tabSubscribed: '\u6536\u85cf\u8ba2\u9605',
   tabExplore: '\u63a2\u7d22\u6b4c\u5355',
   tabArtists: '\u827a\u4eba\u6b4c\u5355',
+  tabConcerts: '\u6f14\u51fa',
   loadingFailed: '\u52a0\u8f7d\u5931\u8d25\uff1a',
   initFailed: '\u521d\u59cb\u5316\u5931\u8d25',
   loadingDefault: '\u6b63\u5728\u521d\u59cb\u5316...',
@@ -70,6 +73,12 @@ const TEXT = {
   emptySpotify: '还没有读取到 Spotify 歌单',
   emptyExplore: '\u8fd8\u6ca1\u52a0\u8f7d\u5230\u53ef\u63a2\u7d22\u7684\u6b4c\u5355',
   emptyArtists: '\u8fd8\u6ca1\u751f\u6210\u827a\u4eba\u6b4c\u5355',
+  emptyConcerts: '\u8fd8\u6ca1\u6709\u8bfb\u5230\u6f14\u51fa\u4fe1\u606f',
+  loadingConcerts: '\u6b63\u5728\u52a0\u8f7d\u6f14\u51fa\u65e5\u5386...',
+  concertsFailed: '\u52a0\u8f7d\u6f14\u51fa\u65e5\u5386\u5931\u8d25',
+  openConcertDetail: '\u6253\u5f00\u6f14\u51fa\u8be6\u60c5',
+  openConcertDetailFailed: '\u6253\u5f00\u6f14\u51fa\u8be6\u60c5\u5931\u8d25',
+  searchConcertsPlaceholder: '\u641c\u7d22\u6f14\u51fa\u3001\u827a\u4eba\u3001\u57ce\u5e02\u6216\u573a\u9986',
   loadingExplore: '\u6b63\u5728\u52a0\u8f7d\u63a2\u7d22\u6b4c\u5355...',
   loadingExploreSearch: '\u6b63\u5728\u641c\u7d22\u793e\u533a\u6b4c\u5355...',
   exploreFailed: '\u52a0\u8f7d\u63a2\u7d22\u6b4c\u5355\u5931\u8d25',
@@ -230,6 +239,7 @@ const state = {
   spotifyPlaylists: [],
   explorePlaylists: [],
   artistPlaylists: [],
+  concertPlaylists: [],
   playlistMap: new Map(),
   recommendations: new Map(),
   activeTab: 'owned',
@@ -241,6 +251,10 @@ const state = {
   exploreArtistSearchRef: '',
   exploreArtistFilterKey: '',
   exploreError: '',
+  concertsLoaded: false,
+  concertsLoading: false,
+  concertsError: '',
+  concertCityFilter: '',
   queue: [],
   queueMode: '',
   queuePlaylistId: null,
@@ -253,6 +267,7 @@ const state = {
   shuffle: false,
   repeat: 'all',
   playToken: 0,
+  playRecord: null,
   lyrics: {
     windowOpen: false,
     lastPushedTrackId: null,
@@ -279,6 +294,7 @@ const state = {
     subscribed: 0,
     explore: 0,
     artists: 0,
+    concerts: 0,
   },
   neteaseAuthenticated: false,
   spotifyImport: {
@@ -328,6 +344,8 @@ const renderRuntime = {
   wallPlacementsByColumn: [],
   wallTrackAnchors: new Map(),
   wallRenderedKeys: [],
+  concertRequestToken: 0,
+  concertRequestPromise: null,
   renderedPlaylistIds: new Set(),
   pendingTabScrollRestore: null,
   pendingPlaylistPatches: [],
@@ -844,6 +862,11 @@ function createMockBridge() {
       if (mockDelay > 0) {
         await new Promise((resolve) => window.setTimeout(resolve, mockDelay))
       }
+      if (window.__mockSongUrlResult) {
+        return typeof window.__mockSongUrlResult === 'function'
+          ? window.__mockSongUrlResult(songId, options)
+          : window.__mockSongUrlResult
+      }
       return { ok: false, error: '\u6a21\u62df\u6a21\u5f0f\u4e0d\u63d0\u4f9b\u97f3\u9891\u94fe\u63a5' }
     },
     getArtistSongs: async (artistId, maxCount) => {
@@ -876,10 +899,19 @@ function createMockBridge() {
 
       return { ok: true, playlist: buildMockPlaylistSummary(playlist) }
     },
-    recordTrackPlay: async (_userId, trackId) => {
-      const key = String(Number(trackId || 0))
+    recordTrackPlay: async (_userId, payload) => {
+      const input = payload && typeof payload === 'object' ? payload : { trackId: payload }
+      const key = String(Number(input.trackId || 0))
+      window.__mockRecordTrackPlayCalls = Array.isArray(window.__mockRecordTrackPlayCalls)
+        ? window.__mockRecordTrackPlayCalls
+        : []
+      window.__mockRecordTrackPlayCalls.push({ userId: _userId, payload: { ...input } })
       localPlayCounts[key] = Number(localPlayCounts[key] || 0) + 1
-      return { ok: true, localPlayCount: localPlayCounts[key] }
+      return {
+        ok: true,
+        localPlayCount: localPlayCounts[key],
+        cloudScrobbled: input.syncCloud !== false,
+      }
     },
     getPlaylistRecommendations: async (playlistId) => {
       if (!recommendationStore.has(playlistId)) {
@@ -923,6 +955,46 @@ function createMockBridge() {
       }
 
       return { ok: true, playlists: source }
+    },
+    getConcertEvents: async () => {
+      if (window.__mockConcertEventsResult) {
+        return typeof window.__mockConcertEventsResult === 'function'
+          ? window.__mockConcertEventsResult()
+          : window.__mockConcertEventsResult
+      }
+
+      return {
+        ok: true,
+        events: [
+          {
+            id: 801001,
+            eventId: 'mock-concert-1',
+            title: '\u827a\u4eba 1 \u4e16\u754c\u5de1\u6f14',
+            name: '\u827a\u4eba 1 \u4e16\u754c\u5de1\u6f14',
+            artists: ['\u827a\u4eba 1'],
+            artistEntries: [{ id: 1, name: '\u827a\u4eba 1' }],
+            city: '\u4e0a\u6d77',
+            venue: '\u6885\u5954\u4e2d\u5fc3-\u4e3b\u573a\u9986',
+            startTime: Date.now() + 14 * 24 * 60 * 60 * 1000,
+            endTime: Date.now() + 14 * 24 * 60 * 60 * 1000 + 2 * 60 * 60 * 1000,
+            coverUrl: buildMockCover(801001),
+            externalUrl: 'https://music.163.com/',
+          },
+          {
+            id: 801002,
+            eventId: 'mock-concert-2',
+            title: '\u590f\u65e5\u97f3\u4e50\u8282',
+            name: '\u590f\u65e5\u97f3\u4e50\u8282',
+            artists: ['\u827a\u4eba 2', '\u827a\u4eba 5'],
+            artistEntries: [{ id: 2, name: '\u827a\u4eba 2' }, { id: 5, name: '\u827a\u4eba 5' }],
+            city: '\u5317\u4eac',
+            venue: '\u51ef\u8fea\u62c9\u514b\u4e2d\u5fc3',
+            startTime: Date.now() + 46 * 24 * 60 * 60 * 1000,
+            coverUrl: buildMockCover(801002),
+            externalUrl: 'https://music.163.com/',
+          },
+        ],
+      }
     },
     subscribePlaylist: async (playlist) => {
       const sourcePlaylistId = Number(playlist?.sourcePlaylistId || playlist?.id || 0)
@@ -1647,6 +1719,7 @@ function normalizePlaylistOrderByTab(input = {}) {
     subscribed: normalizePlaylistOrderIds(input?.subscribed),
     explore: normalizePlaylistOrderIds(input?.explore),
     artists: normalizePlaylistOrderIds(input?.artists),
+    concerts: normalizePlaylistOrderIds(input?.concerts),
   }
 }
 
@@ -1677,6 +1750,7 @@ function normalizePlaylistWallLayoutByTab(input = {}) {
     subscribed: normalizePlaylistWallLayout(input?.subscribed),
     explore: normalizePlaylistWallLayout(input?.explore),
     artists: normalizePlaylistWallLayout(input?.artists),
+    concerts: normalizePlaylistWallLayout(input?.concerts),
   }
 }
 
@@ -1843,13 +1917,16 @@ function cacheRefs() {
   refs.tabSubscribed = document.getElementById('tab-subscribed')
   refs.tabExplore = document.getElementById('tab-explore')
   refs.tabArtists = document.getElementById('tab-artists')
+  refs.tabConcerts = document.getElementById('tab-concerts')
   refs.tabOwnedCount = document.getElementById('tab-owned-count')
   refs.tabSpotifyCount = document.getElementById('tab-spotify-count')
   refs.tabSubscribedCount = document.getElementById('tab-subscribed-count')
   refs.tabExploreCount = document.getElementById('tab-explore-count')
   refs.tabArtistsCount = document.getElementById('tab-artists-count')
+  refs.tabConcertsCount = document.getElementById('tab-concerts-count')
   refs.searchInput = document.getElementById('search-input')
   refs.searchClearBtn = document.getElementById('search-clear-btn')
+  refs.concertLocationFilter = document.getElementById('concert-location-filter')
   refs.createOwnedPlaylistBtn = document.getElementById('create-owned-playlist-btn')
   refs.themeToggleBtn = document.getElementById('theme-toggle-btn')
   refs.locateCurrentBtn = document.getElementById('locate-current-btn')
@@ -1960,6 +2037,9 @@ function bindEvents() {
   refs.tabArtists.addEventListener('click', () => {
     void setActiveTab('artists')
   })
+  refs.tabConcerts.addEventListener('click', () => {
+    void setActiveTab('concerts')
+  })
   refs.createOwnedPlaylistBtn.addEventListener('click', () => {
     openPlaylistEditorForCreate()
   })
@@ -2022,6 +2102,15 @@ function bindEvents() {
   refs.searchClearBtn.addEventListener('click', () => {
     void clearSearch({ focus: true })
   })
+  if (refs.concertLocationFilter) {
+    refs.concertLocationFilter.addEventListener('click', (event) => {
+      const button = event.target ? event.target.closest('[data-concert-city-filter]') : null
+      if (!button) {
+        return
+      }
+      setConcertCityFilter(button.getAttribute('data-concert-city-filter') || '')
+    })
+  }
   refs.searchInput.addEventListener('input', (event) => {
     if (state.exploreArtistFilterKey) {
       state.exploreArtistFilterKey = ''
@@ -2086,6 +2175,7 @@ function bindEvents() {
   })
   refs.audio.addEventListener('pause', () => {
     state.isPlaying = false
+    maybeRecordCurrentTrackPlay()
     renderPlayer()
   })
   refs.audio.addEventListener('loadedmetadata', () => {
@@ -2096,8 +2186,10 @@ function bindEvents() {
   refs.audio.addEventListener('timeupdate', () => {
     updateProgressUI()
     pushLyricsPlaybackTime()
+    maybeRecordCurrentTrackPlay()
   })
   refs.audio.addEventListener('ended', () => {
+    maybeRecordCurrentTrackPlay({ force: true })
     if (state.repeat === 'one') return playQueueIndex(state.queueIndex)
     nextTrack({ fromEnded: true })
   })
@@ -2940,6 +3032,7 @@ async function init() {
   renderPlayer()
   applyFilters()
   silentlyPreloadExplorePlaylists()
+  silentlyPreloadConcertPlaylists()
 
   if (result.sessionStorageMode === 'plain-text-fallback') {
     showToast(TEXT.plaintextSessionWarning, 'error')
@@ -3006,6 +3099,36 @@ function silentlyPreloadArtistPlaylists() {
   }
 }
 
+
+function hashStringToInt(input, offset = 0) {
+  const text = String(input || '')
+  let hash = 2166136261
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index)
+    hash = Math.imul(hash, 16777619)
+  }
+  return Math.trunc(Number(offset || 0)) + (hash >>> 0)
+}
+
+function formatConcertDateTime(timestamp) {
+  const value = Number(timestamp || 0)
+  if (!Number.isFinite(value) || value <= 0) {
+    return ''
+  }
+
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) {
+    return ''
+  }
+
+  return date.toLocaleString('zh-CN', {
+    month: 'numeric',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
 function buildExploreArtistSearchRef(artistRef = '', artistName = '', seedTrackId = 0) {
   const normalizedArtistId = Number(artistRef || 0)
   const normalizedSeedTrackId = Number(seedTrackId || 0)
@@ -3027,6 +3150,170 @@ function buildExploreArtistSearchRef(artistRef = '', artistName = '', seedTrackI
 
 function buildExploreRequestKey(query = '', artistRef = '', artistName = '', seedTrackId = 0) {
   return `${normalizeQuery(query)}::${buildExploreArtistSearchRef(artistRef, artistName, seedTrackId)}`
+}
+
+function renderConcertLoadingState() {
+  if (state.activeTab !== 'concerts') {
+    return
+  }
+
+  renderEmptyState(getSourcePlaylists())
+  scheduleWallRenderWithOptions({ immediate: true, syncAll: true })
+}
+
+function silentlyPreloadConcertPlaylists() {
+  if (!canUseNeteaseFeatures() || state.activeTab === 'concerts' || state.concertsLoaded || state.concertsLoading) {
+    return
+  }
+
+  void loadConcertPlaylists()
+}
+
+function normalizeConcertArtistEntries(event) {
+  const entries = []
+  const pushArtist = (artist) => {
+    if (!artist) {
+      return
+    }
+    if (typeof artist === 'string') {
+      const name = artist.trim()
+      if (name) entries.push({ id: 0, name })
+      return
+    }
+    const name = String(artist.name || '').trim()
+    if (name) {
+      entries.push({
+        id: Number(artist.id || artist.artistId || 0),
+        name,
+      })
+    }
+  }
+
+  ;(event?.artistEntries || []).forEach(pushArtist)
+  ;(event?.artists || []).forEach(pushArtist)
+
+  const seen = new Set()
+  return entries.filter((artist) => {
+    const key = artist.id > 0 ? `id:${artist.id}` : `name:${normalizeQuery(artist.name)}`
+    if (!artist.name || seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
+function buildConcertPlaylistFromEvent(event, index = 0) {
+  const rawId = String(event?.eventId || event?.id || `${event?.title || event?.name || 'concert'}:${event?.startTime || index}`)
+  const numericEventId = Number(event?.id || event?.eventId || 0)
+  const stableId = Number.isFinite(numericEventId) && numericEventId > 0
+    ? Math.trunc(numericEventId)
+    : Math.abs(hashStringToInt(rawId, 810000000 + index))
+  const artistEntries = normalizeConcertArtistEntries(event)
+  const artistNames = artistEntries.map((artist) => artist.name)
+  const city = String(event?.city || '').trim()
+  const venue = String(event?.venue || '').trim()
+  const startTime = Number(event?.startTime || 0)
+  const endTime = Number(event?.endTime || 0)
+  const title = String(event?.title || event?.name || TEXT.tabConcerts).trim()
+    || TEXT.tabConcerts
+  const metaText = [
+    formatConcertDateTime(startTime),
+    city,
+    venue,
+    artistNames.join(' '),
+  ].filter(Boolean).join(' \u00b7 ')
+
+  return normalizePlaylist({
+    id: -Math.abs(stableId),
+    sourcePlaylistId: stableId,
+    name: title,
+    trackCount: 0,
+    coverUrl: event?.coverUrl || '',
+    creatorName: city || TEXT.tabConcerts,
+    description: metaText,
+    exploreSourceLabel: TEXT.tabConcerts,
+    externalUrl: String(event?.externalUrl || '').trim(),
+    isConcert: true,
+    concertEventId: rawId,
+    concertCity: city,
+    concertVenue: venue,
+    concertStartTime: startTime,
+    concertEndTime: endTime,
+    concertArtists: artistNames,
+    concertArtistEntries: artistEntries,
+    tracks: [],
+    hydrated: true,
+  })
+}
+
+function setConcertPlaylists(playlists) {
+  state.concertPlaylists = playlists
+  state.concertsLoaded = true
+  refreshPlaylistMap()
+}
+
+async function loadConcertPlaylists({ force = false } = {}) {
+  if (state.concertsLoading && renderRuntime.concertRequestPromise) {
+    renderConcertLoadingState()
+    await renderRuntime.concertRequestPromise
+    return
+  }
+
+  if (!force && state.concertsLoaded && !state.concertsError) {
+    if (state.activeTab === 'concerts') {
+      applyFilters({ syncAll: true })
+    }
+    return
+  }
+
+  const requestToken = ++renderRuntime.concertRequestToken
+  state.concertsLoading = true
+  state.concertsError = ''
+  renderConcertLoadingState()
+
+  const requestPromise = (async () => {
+    let result
+    try {
+      if (!appBridge || typeof appBridge.getConcertEvents !== 'function') {
+        throw new Error(TEXT.concertsFailed)
+      }
+      result = await appBridge.getConcertEvents({})
+    } catch (error) {
+      result = { ok: false, error: error?.message || String(error), events: [] }
+    }
+
+    if (requestToken !== renderRuntime.concertRequestToken) {
+      return
+    }
+
+    state.concertsLoading = false
+    if (!result?.ok) {
+      state.concertsError = result?.error || TEXT.concertsFailed
+      setConcertPlaylists([])
+      renderTabs()
+      if (state.activeTab === 'concerts') {
+        showToast(state.concertsError, 'error')
+        applyFilters({ syncAll: true })
+      }
+      return
+    }
+
+    state.concertsError = ''
+    const events = Array.isArray(result?.events) ? result.events : []
+    setConcertPlaylists(events.map(buildConcertPlaylistFromEvent))
+    renderTabs()
+    if (state.activeTab === 'concerts') {
+      applyFilters({ syncAll: true })
+    }
+  })()
+
+  renderRuntime.concertRequestPromise = requestPromise
+  try {
+    await requestPromise
+  } finally {
+    if (requestToken === renderRuntime.concertRequestToken) {
+      renderRuntime.concertRequestPromise = null
+    }
+  }
 }
 
 async function loadExplorePlaylists(query = '', {
@@ -3114,7 +3401,8 @@ async function loadExplorePlaylists(query = '', {
     }
 
     state.exploreError = ''
-    setExplorePlaylists((result.playlists || []).map(normalizePlaylist), query, { artistSearchRef })
+    const remotePlaylists = Array.isArray(result?.playlists) ? result.playlists : []
+    setExplorePlaylists(remotePlaylists.map(normalizePlaylist), query, { artistSearchRef })
     renderTabs()
 
     if (state.activeTab === 'explore') {
@@ -3242,6 +3530,7 @@ function resetAppState() {
   state.spotifyPlaylists = []
   state.explorePlaylists = []
   state.artistPlaylists = []
+  state.concertPlaylists = []
   state.playlistMap = new Map()
   state.recommendations = new Map()
   state.activeTab = 'owned'
@@ -3253,6 +3542,10 @@ function resetAppState() {
   state.exploreArtistSearchRef = ''
   state.exploreArtistFilterKey = ''
   state.exploreError = ''
+  state.concertsLoaded = false
+  state.concertsLoading = false
+  state.concertsError = ''
+  state.concertCityFilter = ''
   state.queue = []
   state.queueMode = ''
   state.queuePlaylistId = null
@@ -3262,6 +3555,7 @@ function resetAppState() {
   state.isPlaying = false
   state.isResolving = false
   state.isPreview = false
+  state.playRecord = null
   state.localPlayCounts = new Map()
   state.cloudPlayCounts = new Map()
   state.combinedPlayCounts = new Map()
@@ -3289,6 +3583,8 @@ function resetAppState() {
   renderRuntime.exploreRequestToken = 0
   renderRuntime.exploreRequestKey = ''
   renderRuntime.exploreRequestPromise = null
+  renderRuntime.concertRequestToken += 1
+  renderRuntime.concertRequestPromise = null
   renderRuntime.subscribingPlaylistIds = new Set()
   renderRuntime.playlistRemovalPendingIds = new Set()
   renderRuntime.playlistUndoNotice = null
@@ -3851,6 +4147,21 @@ function normalizePlaylist(playlist) {
     importReadOnly: Boolean(playlist.importReadOnly),
     isExplore,
     isArtist,
+    isConcert: Boolean(playlist.isConcert),
+    concertEventId: String(playlist.concertEventId || playlist.eventId || '').trim(),
+    concertCity: String(playlist.concertCity || playlist.city || '').trim(),
+    concertVenue: String(playlist.concertVenue || playlist.venue || '').trim(),
+    concertStartTime: Number(playlist.concertStartTime || playlist.startTime || 0),
+    concertEndTime: Number(playlist.concertEndTime || playlist.endTime || 0),
+    concertArtists: Array.isArray(playlist.concertArtists || playlist.artists)
+      ? (playlist.concertArtists || playlist.artists).map((artist) => String(artist || '').trim()).filter(Boolean)
+      : [],
+    concertArtistEntries: Array.isArray(playlist.concertArtistEntries || playlist.artistEntries)
+      ? (playlist.concertArtistEntries || playlist.artistEntries).map((artist) => ({
+        id: Number(artist?.id || artist?.artistId || 0),
+        name: String(artist?.name || '').trim(),
+      })).filter((artist) => artist.name)
+      : [],
     artistKey: playlist.artistKey || '',
     artistId: Number(playlist.artistId || 0),
     artistName: playlist.artistName || playlist.name || '',
@@ -3890,6 +4201,10 @@ function normalizePlaylist(playlist) {
       playlist.artistName || '',
       playlist.creatorName || '',
       playlist.exploreSourceLabel || '',
+      playlist.description || '',
+      playlist.concertCity || playlist.city || '',
+      playlist.concertVenue || playlist.venue || '',
+      (playlist.concertArtists || playlist.artists || []).join(' '),
     ].join(' ')),
     _normalized: true,
   }
@@ -3901,6 +4216,7 @@ function refreshPlaylistMap() {
     ...state.spotifyPlaylists.map((playlist) => [playlist.id, playlist]),
     ...state.explorePlaylists.map((playlist) => [playlist.id, playlist]),
     ...state.artistPlaylists.map((playlist) => [playlist.id, playlist]),
+    ...state.concertPlaylists.map((playlist) => [playlist.id, playlist]),
   ])
 }
 
@@ -4127,6 +4443,56 @@ function getArtistPlaylists() {
   return applyStoredPlaylistOrder(state.artistPlaylists, 'artists')
 }
 
+function getConcertPlaylists() {
+  return applyStoredPlaylistOrder(state.concertPlaylists, 'concerts')
+}
+
+function getConcertCities(playlists = getConcertPlaylists()) {
+  const counts = new Map()
+  for (const playlist of playlists || []) {
+    const city = String(playlist?.concertCity || '').trim()
+    if (!city) {
+      continue
+    }
+    counts.set(city, (counts.get(city) || 0) + 1)
+  }
+  return Array.from(counts.entries())
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'zh-Hans-CN'))
+    .map(([city, count]) => ({ city, count }))
+}
+
+function isConcertCityFilterAvailable(city, playlists = getConcertPlaylists()) {
+  const normalizedCity = String(city || '').trim()
+  if (!normalizedCity) {
+    return true
+  }
+  return (playlists || []).some((playlist) => String(playlist?.concertCity || '').trim() === normalizedCity)
+}
+
+function getConcertLocationFilterLabel() {
+  return '\u6f14\u51fa\u5730\u70b9\u7b5b\u9009'
+}
+
+function getAllConcertCitiesLabel() {
+  return '\u5168\u90e8\u5730\u70b9'
+}
+
+function getConcertCityButtonLabel(city, count) {
+  return `${city} ${formatNumber(count)}`
+}
+
+function setConcertCityFilter(city = '', { syncAll = true } = {}) {
+  const nextCity = String(city || '').trim()
+  if (state.concertCityFilter === nextCity) {
+    return
+  }
+  state.concertCityFilter = nextCity
+  if (state.activeTab === 'concerts') {
+    renderConcertLocationFilter()
+    applyFilters({ syncAll })
+  }
+}
+
 function getLibraryPlaylistBySourceId(sourcePlaylistId) {
   const normalizedSourcePlaylistId = Number(sourcePlaylistId || 0)
   if (normalizedSourcePlaylistId <= 0) {
@@ -4181,6 +4547,7 @@ function canRemoveSubscribedPlaylist(playlist) {
     playlist
     && !playlist.isExplore
     && !playlist.isArtist
+    && !playlist.isConcert
     && !isOwnedPlaylist(playlist)
     && !isImportedReadOnlyPlaylist(playlist)
   )
@@ -4191,6 +4558,7 @@ function canEditOwnedPlaylist(playlist) {
     playlist
     && !playlist.isExplore
     && !playlist.isArtist
+    && !playlist.isConcert
     && isOwnedPlaylist(playlist)
     && !isLikedPlaylist(playlist)
   )
@@ -4269,6 +4637,9 @@ function getSourcePlaylists() {
   if (state.activeTab === 'explore') {
     return getExplorePlaylists()
   }
+  if (state.activeTab === 'concerts') {
+    return getConcertPlaylists()
+  }
   if (state.activeTab === 'spotify') {
     return getSpotifyPlaylists()
   }
@@ -4297,6 +4668,10 @@ function getPlaylistTab(playlistOrId) {
 
   if (playlist.isArtist) {
     return 'artists'
+  }
+
+  if (playlist.isConcert) {
+    return 'concerts'
   }
 
   return isOwnedPlaylist(playlist) ? 'owned' : 'subscribed'
@@ -4509,13 +4884,17 @@ function activateTab(tab, { restoreTargetScroll = true } = {}) {
 async function setActiveTab(tab) {
   if (state.activeTab === tab) return
   closeContextMenu()
-  if (tab === 'explore' && !canUseNeteaseFeatures()) {
-    showToast(TEXT.exploreRequiresNetease, 'error')
+  if ((tab === 'explore' || tab === 'concerts') && !canUseNeteaseFeatures()) {
+    showToast(tab === 'concerts' ? TEXT.concertsFailed : TEXT.exploreRequiresNetease, 'error')
     return
   }
   activateTab(tab)
   if (tab === 'explore') {
     await loadExplorePlaylists(state.search)
+    return
+  }
+  if (tab === 'concerts') {
+    await loadConcertPlaylists()
     return
   }
   applyFilters()
@@ -4531,24 +4910,70 @@ function renderTabs() {
   refs.tabSpotifyCount.textContent = spotifyCount
   refs.tabSubscribedCount.textContent = subscribedCount
   refs.tabExploreCount.textContent = exploreCount
+  const concertsCount = formatNumber(getConcertPlaylists().length)
   refs.tabArtistsCount.textContent = artistsCount
+  refs.tabConcertsCount.textContent = concertsCount
   setButtonLabel(refs.tabOwned, `${TEXT.tabOwned} ${ownedCount}`)
   setButtonLabel(refs.tabSpotify, `${TEXT.tabSpotify} ${spotifyCount}`)
   setButtonLabel(refs.tabSubscribed, `${TEXT.tabSubscribed} ${subscribedCount}`)
   setButtonLabel(refs.tabExplore, `${TEXT.tabExplore} ${exploreCount}`)
   setButtonLabel(refs.tabArtists, `${TEXT.tabArtists} ${artistsCount}`)
+  setButtonLabel(refs.tabConcerts, `${TEXT.tabConcerts} ${concertsCount}`)
   refs.tabOwned.classList.toggle('is-active', state.activeTab === 'owned')
   refs.tabSpotify.classList.toggle('is-active', state.activeTab === 'spotify')
   refs.tabSubscribed.classList.toggle('is-active', state.activeTab === 'subscribed')
   refs.tabExplore.classList.toggle('is-active', state.activeTab === 'explore')
   refs.tabArtists.classList.toggle('is-active', state.activeTab === 'artists')
+  refs.tabConcerts.classList.toggle('is-active', state.activeTab === 'concerts')
   refs.tabOwned.setAttribute('aria-selected', String(state.activeTab === 'owned'))
   refs.tabSpotify.setAttribute('aria-selected', String(state.activeTab === 'spotify'))
   refs.tabSubscribed.setAttribute('aria-selected', String(state.activeTab === 'subscribed'))
   refs.tabExplore.setAttribute('aria-selected', String(state.activeTab === 'explore'))
   refs.tabArtists.setAttribute('aria-selected', String(state.activeTab === 'artists'))
+  refs.tabConcerts.setAttribute('aria-selected', String(state.activeTab === 'concerts'))
   refs.tabSpotify.classList.toggle('hidden', !state.spotifyImport.connected && !state.spotifyPlaylists.length)
   refs.tabExplore.disabled = !canUseNeteaseFeatures()
+  refs.tabConcerts.disabled = !canUseNeteaseFeatures()
+}
+
+function renderConcertLocationFilter() {
+  if (!refs.concertLocationFilter) {
+    return
+  }
+
+  const show = state.activeTab === 'concerts'
+  refs.concertLocationFilter.classList.toggle('hidden', !show)
+  if (!show) {
+    refs.concertLocationFilter.replaceChildren()
+    return
+  }
+
+  const cities = getConcertCities()
+  if (state.concertCityFilter && !isConcertCityFilterAvailable(state.concertCityFilter)) {
+    state.concertCityFilter = ''
+  }
+
+  refs.concertLocationFilter.setAttribute('aria-label', getConcertLocationFilterLabel())
+  const allButton = document.createElement('button')
+  allButton.type = 'button'
+  allButton.className = 'concert-location-chip'
+  allButton.dataset.concertCityFilter = ''
+  allButton.textContent = getAllConcertCitiesLabel()
+  allButton.classList.toggle('is-active', !state.concertCityFilter)
+  allButton.setAttribute('aria-pressed', String(!state.concertCityFilter))
+  refs.concertLocationFilter.replaceChildren(allButton)
+
+  for (const { city, count } of cities) {
+    const button = document.createElement('button')
+    button.type = 'button'
+    button.className = 'concert-location-chip'
+    button.dataset.concertCityFilter = city
+    button.textContent = getConcertCityButtonLabel(city, count)
+    const active = state.concertCityFilter === city
+    button.classList.toggle('is-active', active)
+    button.setAttribute('aria-pressed', String(active))
+    refs.concertLocationFilter.appendChild(button)
+  }
 }
 
 function renderSearchInput() {
@@ -4558,7 +4983,9 @@ function renderSearchInput() {
       ? TEXT.searchSpotifyPlaceholder
       : state.activeTab === 'artists'
         ? TEXT.searchArtistsPlaceholder
-        : TEXT.searchLibraryPlaceholder
+        : state.activeTab === 'concerts'
+          ? TEXT.searchConcertsPlaceholder
+          : TEXT.searchLibraryPlaceholder
 
   const hasSearchValue = Boolean(refs.searchInput.value || state.search)
   refs.searchClearBtn.classList.toggle('hidden', !hasSearchValue)
@@ -4610,6 +5037,7 @@ function renderHeader() {
   }
   refs.createOwnedPlaylistBtn.classList.toggle('hidden', state.activeTab !== 'owned' || !canUseNeteaseFeatures())
   renderSearchInput()
+  renderConcertLocationFilter()
 }
 
 function applyFilters({ syncAll = false } = {}) {
@@ -4629,6 +5057,29 @@ function applyFilters({ syncAll = false } = {}) {
     }))
     pruneTrackSelection()
     renderEmptyState(source)
+    scheduleWallRenderWithOptions({ immediate: true, syncAll })
+    return
+  }
+
+  if (state.activeTab === 'concerts') {
+    renderConcertLocationFilter()
+    const cityFilter = String(state.concertCityFilter || '').trim()
+    const filteredSource = cityFilter
+      ? source.filter((playlist) => String(playlist?.concertCity || '').trim() === cityFilter)
+      : source
+    state.visiblePlaylists = filteredSource.flatMap((playlist) => {
+      if (!query || playlist.searchText.includes(query)) {
+        return [{
+          ...playlist,
+          wallTracks: playlist.tracks,
+          matchedCount: playlist.tracks.length,
+          searchMode: query ? 'playlist' : 'all',
+        }]
+      }
+      return []
+    })
+    pruneTrackSelection()
+    renderEmptyState(filteredSource)
     scheduleWallRenderWithOptions({ immediate: true, syncAll })
     return
   }
@@ -4720,7 +5171,9 @@ function shouldHideEmptyFilteredLikedPlaylist(playlist, tracks) {
 }
 
 function renderExploreLoadingIndicator() {
-  const show = state.activeTab === 'explore' && state.exploreLoading
+  const showExploreLoading = state.activeTab === 'explore' && state.exploreLoading
+  const showConcertLoading = state.activeTab === 'concerts' && state.concertsLoading
+  const show = showExploreLoading || showConcertLoading
   refs.exploreLoadingIndicator.classList.toggle('hidden', !show)
   refs.wallView.setAttribute('aria-busy', String(show))
 
@@ -4728,9 +5181,11 @@ function renderExploreLoadingIndicator() {
     return
   }
 
-  refs.exploreLoadingText.textContent = queryHasContent()
-    ? TEXT.loadingExploreSearch
-    : TEXT.loadingExplore
+  refs.exploreLoadingText.textContent = showConcertLoading
+    ? TEXT.loadingConcerts
+    : queryHasContent()
+      ? TEXT.loadingExploreSearch
+      : TEXT.loadingExplore
 }
 
 function renderEmptyState(sourcePlaylists) {
@@ -4742,9 +5197,21 @@ function renderEmptyState(sourcePlaylists) {
     return
   }
 
+  if (state.activeTab === 'concerts' && state.concertsLoading) {
+    refs.wallEmpty.querySelector('.empty-title').textContent = TEXT.loadingConcerts
+    refs.wallEmpty.querySelector('.empty-copy').textContent = '\u6b63\u5728\u62c9\u53d6\u8fd1\u671f\u6f14\u51fa\u3001\u5de1\u6f14\u548c\u97f3\u4e50\u8282\u3002'
+    return
+  }
+
   if (state.activeTab === 'explore' && state.exploreError && !sourcePlaylists.length) {
     refs.wallEmpty.querySelector('.empty-title').textContent = TEXT.exploreFailed
     refs.wallEmpty.querySelector('.empty-copy').textContent = state.exploreError
+    return
+  }
+
+  if (state.activeTab === 'concerts' && state.concertsError && !sourcePlaylists.length) {
+    refs.wallEmpty.querySelector('.empty-title').textContent = TEXT.concertsFailed
+    refs.wallEmpty.querySelector('.empty-copy').textContent = state.concertsError
     return
   }
 
@@ -4753,16 +5220,20 @@ function renderEmptyState(sourcePlaylists) {
       ? TEXT.emptyExplore
       : state.activeTab === 'spotify'
         ? TEXT.emptySpotify
-      : state.activeTab === 'artists'
-        ? TEXT.emptyArtists
-        : TEXT.emptyTab
+        : state.activeTab === 'artists'
+          ? TEXT.emptyArtists
+          : state.activeTab === 'concerts'
+            ? TEXT.emptyConcerts
+            : TEXT.emptyTab
     refs.wallEmpty.querySelector('.empty-copy').textContent = state.activeTab === 'explore'
       ? '\u53ef\u4ee5\u76f4\u63a5\u641c\u7d22\u793e\u533a\u6b4c\u5355\uff0c\u6216\u7a0d\u540e\u518d\u8bd5\u3002'
       : state.activeTab === 'spotify'
-        ? '连上 Spotify 之后，这里会单独显示你的 Spotify 歌单。'
-      : state.activeTab === 'artists'
-        ? '\u8fd9\u91cc\u4f1a\u81ea\u52a8\u6309\u4f60\u5df2\u52a0\u8f7d\u7684\u66f2\u5e93\u805a\u5408\u51fa\u827a\u4eba\u6b4c\u5355\u3002'
-        : '\u8fd9\u4e2a\u5206\u533a\u8fd8\u6ca1\u6709\u6b4c\u5355\u3002'
+        ? '\u8fde\u4e0a Spotify \u4e4b\u540e\uff0c\u8fd9\u91cc\u4f1a\u5355\u72ec\u663e\u793a\u4f60\u7684 Spotify \u6b4c\u5355\u3002'
+        : state.activeTab === 'artists'
+          ? '\u8fd9\u91cc\u4f1a\u81ea\u52a8\u6309\u4f60\u5df2\u52a0\u8f7d\u7684\u66f2\u5e93\u805a\u5408\u51fa\u827a\u4eba\u6b4c\u5355\u3002'
+          : state.activeTab === 'concerts'
+            ? '\u767b\u5f55\u7f51\u6613\u4e91\u540e\uff0c\u8fd9\u91cc\u4f1a\u663e\u793a\u8fd1\u671f\u6f14\u51fa\u65e5\u5386\u3002'
+            : '\u8fd9\u4e2a\u5206\u533a\u8fd8\u6ca1\u6709\u6b4c\u5355\u3002'
     return
   }
   if (!state.visiblePlaylists.length && queryHasContent()) {
@@ -4773,7 +5244,9 @@ function renderEmptyState(sourcePlaylists) {
       ? '\u6362\u4e2a\u641c\u7d22\u8bcd\uff0c\u770b\u770b\u522b\u7684\u793e\u533a\u6b4c\u5355\u3002'
       : state.activeTab === 'artists'
         ? '\u6362\u4e2a\u827a\u4eba\u540d\u6216\u6b4c\u540d\uff0c\u770b\u770b\u522b\u7684\u827a\u4eba\u6b4c\u5355\u3002'
-      : '\u6362\u4e2a\u5173\u952e\u8bcd\uff0c\u6216\u8005\u5207\u6362\u5230\u53e6\u4e00\u4e2a tab \u3002'
+        : state.activeTab === 'concerts'
+          ? '\u6362\u4e2a\u827a\u4eba\u3001\u57ce\u5e02\u6216\u573a\u9986\u8bd5\u8bd5\u3002'
+          : '\u6362\u4e2a\u5173\u952e\u8bcd\uff0c\u6216\u8005\u5207\u6362\u5230\u53e6\u4e00\u4e2a tab \u3002'
     return
   }
   refs.wallEmpty.querySelector('.empty-title').textContent = '\u5f53\u524d\u6ca1\u6709\u53ef\u663e\u793a\u7684\u6b4c\u5355'
@@ -5186,6 +5659,24 @@ function renderPlaylistHeader(playlist, totalCount) {
 }
 
 function renderPlaylistHeaderAction(playlist) {
+  if (playlist?.isConcert) {
+    if (!String(playlist.externalUrl || '').trim()) {
+      return ''
+    }
+    const label = TEXT.openConcertDetail
+    return `
+      <div class="playlist-header-actions">
+        <button
+          class="playlist-header-action"
+          type="button"
+          data-open-concert-detail="${playlist.id}"
+          title="${escapeHtml(label)}"
+          aria-label="${escapeHtml(label)}"
+        >${renderOpenExternalIcon()}</button>
+      </div>
+    `
+  }
+
   if (playlist?.isArtist) {
     const expanded = Boolean(playlist.artistExpanded)
     const label = expanded ? TEXT.shrinkArtistTracks : TEXT.expandArtistTracks
@@ -5359,6 +5850,15 @@ function describePlaylistMeta(playlist, totalCount) {
     ].filter(Boolean)
     return parts.join(' \u00b7 ')
   }
+  if (playlist.isConcert) {
+    const parts = [
+      formatConcertDateTime(playlist.concertStartTime),
+      playlist.concertCity || '',
+      playlist.concertVenue || '',
+      (playlist.concertArtists || []).join('\u3001'),
+    ].filter(Boolean)
+    return parts.join(' \u00b7 ')
+  }
   if (playlist.isExplore) {
     const parts = [
       playlist.exploreSourceLabel || '',
@@ -5382,6 +5882,15 @@ function renderPlaylistRows(placement, rowWindow) {
   const tracks = playlist.wallTracks || []
 
   if (!tracks.length) {
+    if (playlist.isConcert) {
+      const details = [
+        formatConcertDateTime(playlist.concertStartTime),
+        playlist.concertCity || '',
+        playlist.concertVenue || '',
+        (playlist.concertArtists || []).join('\u3001'),
+      ].filter(Boolean).join(' \u00b7 ')
+      return `<div class="playlist-placeholder playlist-placeholder--concert">${escapeHtml(details || TEXT.emptyPlaylist)}</div>`
+    }
     const message = playlist.hydrating ? TEXT.hydratingPlaylist : (playlist.tracksError || TEXT.emptyPlaylist)
     return `<div class="playlist-placeholder">${escapeHtml(message)}</div>`
   }
@@ -5446,6 +5955,7 @@ function shouldRenderPlaylistRecommendations(item) {
     && !isPlaylistCollapsed(item.playlist)
     && !item.playlist.isExplore
     && !item.playlist.isArtist
+    && !item.playlist.isConcert
     && !isImportedReadOnlyPlaylist(item.playlist)
     && item.playlist.hydrated
     && !item.playlist.tracksError
@@ -6486,6 +6996,11 @@ function handleWallClick(event) {
     void openSpotifyPlaylistFromCard(Number(openSpotifyPlaylistButton.getAttribute('data-open-spotify-playlist')))
     return
   }
+  const openConcertDetailButton = target ? target.closest('[data-open-concert-detail]') : null
+  if (openConcertDetailButton) {
+    void openConcertDetailFromCard(Number(openConcertDetailButton.getAttribute('data-open-concert-detail')))
+    return
+  }
   const artistExpansionButton = target ? target.closest('[data-toggle-artist-track-expansion]') : null
   if (artistExpansionButton) {
     toggleArtistTrackExpansion(Number(artistExpansionButton.getAttribute('data-toggle-artist-track-expansion')))
@@ -7278,6 +7793,17 @@ async function openSpotifyPlaylistFromCard(playlistId) {
   }
 
   await openExternalUrl(playlist.externalUrl, TEXT.spotifyOpenFailed)
+}
+
+async function openConcertDetailFromCard(playlistId) {
+  const playlist = getPlaylistById(playlistId)
+  const targetUrl = String(playlist?.externalUrl || '').trim()
+  if (!playlist?.isConcert || !targetUrl) {
+    showToast(TEXT.openConcertDetailFailed, 'error')
+    return
+  }
+
+  await openExternalUrl(targetUrl, TEXT.openConcertDetailFailed)
 }
 
 async function openSpotifyTrackFromContextMenu() {
@@ -8845,6 +9371,7 @@ function clearCurrentPlayback() {
   state.isPlaying = false
   state.isResolving = false
   state.isPreview = false
+  state.playRecord = null
   state.currentPlaybackRequestedQuality = ''
   state.currentPlaybackResolvedLevel = ''
 }
@@ -9262,6 +9789,10 @@ async function resolveQueueTrackSource(track, options = {}) {
   const resumeAtSeconds = Math.max(0, Number(options?.resumeAtSeconds || 0) || 0)
   const shouldRecordPlay = Boolean(options?.recordPlay)
   const playbackTrackId = Number(track?.playbackTrackId || track?.id || 0)
+  if (shouldRecordPlay) {
+    maybeRecordCurrentTrackPlay()
+    state.playRecord = null
+  }
 
   state.currentTrackId = track.id
   state.isResolving = true
@@ -9298,7 +9829,8 @@ async function resolveQueueTrackSource(track, options = {}) {
     state.currentPlaybackRequestedQuality = requestedQuality
     state.currentPlaybackResolvedLevel = String(result.level || '')
     if (shouldRecordPlay && playbackTrackId > 0) {
-      void recordTrackPlay(playbackTrackId)
+      beginTrackPlayRecord(track, playbackTrackId)
+      maybeRecordCurrentTrackPlay()
     }
   } catch (error) {
     if (token !== state.playToken) {
@@ -9369,20 +9901,127 @@ async function playQueueIndex(index) {
   await resolveQueueTrackSource(track, { recordPlay: true })
 }
 
-async function recordTrackPlay(trackId) {
+function getCurrentPlaybackSourceId() {
+  const playlist = getPlaylistById(state.queuePlaylistId)
+  if (playlist && getPlaylistSourcePlatform(playlist) !== 'netease') {
+    return 0
+  }
+
+  const sourceId = Number(
+    playlist?.sourcePlaylistId
+    || playlist?.id
+    || state.queuePlaylistId
+    || 0
+  )
+  return sourceId > 0 ? Math.trunc(sourceId) : 0
+}
+
+function getPlaybackRecordDurationSeconds(track) {
+  const audioDuration = Number(refs.audio?.duration || 0)
+  if (Number.isFinite(audioDuration) && audioDuration > 0) {
+    return audioDuration
+  }
+
+  const trackDuration = Number(track?.durationMs || 0) / 1000
+  return Number.isFinite(trackDuration) && trackDuration > 0 ? trackDuration : 0
+}
+
+function getPlayRecordThresholdSeconds(durationSeconds) {
+  const normalizedDuration = Number(durationSeconds || 0)
+  if (Number.isFinite(normalizedDuration) && normalizedDuration > 0) {
+    return clamp(
+      Math.min(PLAY_RECORD_MIN_SECONDS, normalizedDuration * PLAY_RECORD_MIN_PROGRESS_RATIO),
+      1,
+      PLAY_RECORD_MIN_SECONDS
+    )
+  }
+
+  return PLAY_RECORD_MIN_SECONDS
+}
+
+function beginTrackPlayRecord(track, playbackTrackId) {
+  const normalizedTrackId = Number(playbackTrackId || 0)
+  if (normalizedTrackId <= 0) {
+    state.playRecord = null
+    return
+  }
+
+  state.playRecord = {
+    trackId: normalizedTrackId,
+    queueTrackId: Number(track?.id || 0),
+    sourceId: getCurrentPlaybackSourceId(),
+    durationSeconds: getPlaybackRecordDurationSeconds(track),
+    maxPlayedSeconds: 0,
+    submitted: false,
+    syncCloud: !state.isPreview,
+  }
+}
+
+function getCurrentPlaybackRecordSeconds() {
+  const currentTime = Number(refs.audio?.currentTime || 0)
+  return Number.isFinite(currentTime) && currentTime > 0 ? currentTime : 0
+}
+
+function maybeRecordCurrentTrackPlay(options = {}) {
+  const record = state.playRecord
+  if (!record || record.submitted || record.trackId <= 0) {
+    return
+  }
+  if (record.queueTrackId > 0 && Number(state.currentTrackId || 0) !== record.queueTrackId) {
+    return
+  }
+
+  const currentDurationSeconds = getPlaybackRecordDurationSeconds(getCurrentTrack())
+  if (currentDurationSeconds > 0) {
+    record.durationSeconds = currentDurationSeconds
+  }
+  record.maxPlayedSeconds = Math.max(record.maxPlayedSeconds || 0, getCurrentPlaybackRecordSeconds())
+  const thresholdSeconds = getPlayRecordThresholdSeconds(record.durationSeconds)
+  const force = options?.force === true
+
+  if (!force && record.maxPlayedSeconds < thresholdSeconds) {
+    return
+  }
+  if (force && record.maxPlayedSeconds <= 0) {
+    return
+  }
+
+  record.submitted = true
+  void recordTrackPlay(record.trackId, {
+    sourceId: record.sourceId,
+    listenedSeconds: Math.max(1, Math.round(record.maxPlayedSeconds || thresholdSeconds)),
+    syncCloud: record.syncCloud,
+  })
+}
+
+async function recordTrackPlay(trackId, options = {}) {
   if (!state.account?.userId || !appBridge || typeof appBridge.recordTrackPlay !== 'function') {
     return
   }
 
-  const result = await appBridge.recordTrackPlay(state.account.userId, trackId)
-  if (!result?.ok) {
+  const normalizedTrackId = Number(trackId || 0)
+  if (normalizedTrackId <= 0) {
     return
   }
 
-  state.localPlayCounts.set(Number(trackId), Number(result.localPlayCount || 0))
-  rebuildTrackPlayTiers()
-  renderWallViewport({ force: true })
-  updatePlaylistRecommendationNodesForVisible()
+  try {
+    const result = await appBridge.recordTrackPlay(state.account.userId, {
+      trackId: normalizedTrackId,
+      sourceId: Math.max(0, Math.trunc(Number(options?.sourceId || 0) || 0)),
+      listenedSeconds: Math.max(1, Math.round(Number(options?.listenedSeconds || 0) || 0)),
+      syncCloud: options?.syncCloud !== false,
+    })
+    if (!result?.ok) {
+      return
+    }
+
+    state.localPlayCounts.set(normalizedTrackId, Number(result.localPlayCount || 0))
+    rebuildTrackPlayTiers()
+    renderWallViewport({ force: true })
+    updatePlaylistRecommendationNodesForVisible()
+  } catch (error) {
+    console.warn('failed to record track play', error)
+  }
 }
 
 function togglePlayback() {
@@ -10632,6 +11271,8 @@ function handleKeydown(event) {
     void setActiveTab('explore')
   } else if (event.key === '4') {
     void setActiveTab('artists')
+  } else if (event.key === '5') {
+    void setActiveTab('concerts')
   } else if (event.key.toLowerCase() === 'n') {
     nextTrack({ fromEnded: false })
   } else if (event.key.toLowerCase() === 'p') {

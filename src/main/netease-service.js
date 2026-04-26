@@ -22,6 +22,10 @@ const AUDIO_QUALITY_LEVELS_BEST = [
   'exhigh',
   'standard',
 ]
+const CONCERT_LOOKAHEAD_DAYS = 365
+const CONCERT_DETAIL_CONCURRENCY = 1
+const CONCERT_DETAIL_REQUEST_DELAY_MS = 1200
+const CONCERT_EVENT_KEYWORD_RE = /(\u6f14\u5531\u4f1a|\u5de1\u6f14|\u97f3\u4e50\u8282|\u6f14\u51fa|\u7968\u52a1|\u5f00\u7968|livehouse|live house|concert|tour|festival|show)/i
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -366,19 +370,515 @@ function normalizeExplorePlaylistDetail(playlist, detail, overrides = {}) {
   }
 }
 
-async function mapWithConcurrency(items, limit, mapper) {
-  const results = new Array(items.length)
-  let cursor = 0
+function asArray(value) {
+  return Array.isArray(value) ? value : []
+}
 
-  async function worker() {
-    while (cursor < items.length) {
-      const index = cursor
-      cursor += 1
-      results[index] = await mapper(items[index], index)
+function hashPositiveString(input, offset = 900000000) {
+  const text = String(input || '')
+  let hash = 2166136261
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index)
+    hash = Math.imul(hash, 16777619)
+  }
+  return offset + (hash >>> 0) % 99999999
+}
+
+function firstNonEmptyString(...values) {
+  for (const value of values) {
+    if (value === null || value === undefined) {
+      continue
+    }
+    if (Array.isArray(value)) {
+      const nested = firstNonEmptyString(...value)
+      if (nested) return nested
+      continue
+    }
+    const text = String(value || '').trim()
+    if (text) {
+      return text
+    }
+  }
+  return ''
+}
+
+function parseCalendarTimestamp(...values) {
+  for (const value of values) {
+    if (value === null || value === undefined || value === '') {
+      continue
+    }
+
+    if (typeof value === 'number' || /^\d+$/.test(String(value))) {
+      const numericValue = Number(value)
+      if (!Number.isFinite(numericValue) || numericValue <= 0) {
+        continue
+      }
+      return numericValue < 100000000000 ? numericValue * 1000 : numericValue
+    }
+
+    const parsed = Date.parse(String(value))
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return parsed
     }
   }
 
-  const workerCount = Math.max(1, Math.min(limit, items.length))
+  return 0
+}
+
+function normalizeCalendarTargetUrl(input) {
+  const raw = String(input || '').trim()
+  if (!raw) {
+    return ''
+  }
+
+  const openUrlPrefix = 'orpheus://openurl?'
+  if (raw.toLowerCase().startsWith(openUrlPrefix)) {
+    try {
+      const params = new URLSearchParams(raw.slice(openUrlPrefix.length))
+      const nestedUrl = params.get('url') || ''
+      if (nestedUrl) {
+        return nestedUrl
+      }
+    } catch {}
+  }
+
+  return raw
+}
+
+function extractConcertIdFromCalendarObject(source) {
+  const nestedResource = source?.resource || source?.resourceExtInfo || {}
+  const directId = Number(source?.concertId || nestedResource.concertId || 0)
+  if (Number.isFinite(directId) && directId > 0) {
+    return Math.trunc(directId)
+  }
+
+  const resourceType = String(source?.resourceType || nestedResource.resourceType || '').trim().toUpperCase()
+  const resourceId = Number(source?.resourceId || nestedResource.resourceId || 0)
+  if (resourceType === 'CONCERT' && Number.isFinite(resourceId) && resourceId > 0) {
+    return Math.trunc(resourceId)
+  }
+
+  const idText = firstNonEmptyString(source?.id, source?.eventId, nestedResource.id, nestedResource.eventId)
+  const idMatch = idText.match(/concertEvent_(\d+)_/i)
+  if (idMatch) {
+    return Number(idMatch[1])
+  }
+
+  const targetUrl = normalizeCalendarTargetUrl(firstNonEmptyString(
+    source?.targetUrl,
+    source?.url,
+    source?.webUrl,
+    nestedResource.targetUrl,
+    nestedResource.url,
+    nestedResource.webUrl
+  ))
+  const queryMatch = targetUrl.match(/[?&](?:concertId|id)=(\d+)/i)
+  if (queryMatch) {
+    return Number(queryMatch[1])
+  }
+
+  return 0
+}
+
+function normalizeCalendarArtistEntries(source) {
+  const entries = []
+  const pushArtist = (artist) => {
+    if (artist === null || artist === undefined) {
+      return
+    }
+
+    if (typeof artist === 'string') {
+      const name = artist.trim()
+      if (name) {
+        entries.push({ id: 0, name })
+      }
+      return
+    }
+
+    if (Array.isArray(artist)) {
+      artist.forEach(pushArtist)
+      return
+    }
+
+    if (typeof artist !== 'object') {
+      return
+    }
+
+    const name = firstNonEmptyString(
+      artist.name,
+      artist.artistName,
+      artist.nickname,
+      artist.title,
+      artist.username
+    )
+    if (!name && Array.isArray(artist.artistInfoList)) {
+      pushArtist(artist.artistInfoList)
+    }
+    if (!name && Array.isArray(artist.artists)) {
+      pushArtist(artist.artists)
+    }
+    const id = Number(artist.id || artist.artistId || artist.userId || artist.uid || 0)
+    if (name) {
+      entries.push({ id: Number.isFinite(id) && id > 0 ? id : 0, name })
+    }
+  }
+
+  pushArtist(source?.artists)
+  pushArtist(source?.ar)
+  pushArtist(source?.artist)
+  pushArtist(source?.artistList)
+  pushArtist(source?.artistInfoList)
+  pushArtist(source?.artistName)
+  pushArtist(source?.artistNames)
+  pushArtist(source?.singers)
+  pushArtist(source?.performers)
+  pushArtist(source?.participants)
+  pushArtist(source?.resource?.artists)
+  pushArtist(source?.resource?.artist)
+  pushArtist(source?.resource?.artistInfoList)
+  pushArtist(source?.resourceExtInfo?.artists)
+  pushArtist(source?.resourceExtInfo?.artist)
+  pushArtist(source?.resourceExtInfo?.artistInfoList)
+
+  const seen = new Set()
+  return entries.filter((artist) => {
+    const key = artist.id > 0 ? `id:${artist.id}` : `name:${normalizeArtistLookupText(artist.name)}`
+    if (!artist.name || seen.has(key)) {
+      return false
+    }
+    seen.add(key)
+    return true
+  })
+}
+
+function collectCalendarObjects(source, out = [], depth = 0) {
+  if (depth > 5 || source === null || source === undefined) {
+    return out
+  }
+
+  if (Array.isArray(source)) {
+    source.forEach((item) => collectCalendarObjects(item, out, depth + 1))
+    return out
+  }
+
+  if (typeof source !== 'object') {
+    return out
+  }
+
+  const title = firstNonEmptyString(
+    source.title,
+    source.name,
+    source.eventName,
+    source.activityName,
+    source.resourceName,
+    source.mainTitle,
+    source.subTitle,
+    source.tag,
+    source.typeName
+  )
+  const startTime = parseCalendarTimestamp(
+    source.startTime,
+    source.beginTime,
+    source.eventTime,
+    source.showTime,
+    source.performanceTime,
+    source.time,
+    source.onlineTime,
+    source.publishTime
+  )
+  if (title || startTime) {
+    out.push(source)
+  }
+
+  const nestedKeys = [
+    'data',
+    'events',
+    'eventList',
+    'calendarEvents',
+    'calendarList',
+    'list',
+    'items',
+    'resources',
+    'resourceList',
+    'blocks',
+  ]
+  for (const key of nestedKeys) {
+    if (source[key] !== undefined) {
+      collectCalendarObjects(source[key], out, depth + 1)
+    }
+  }
+
+  return out
+}
+
+function getCalendarObjectSearchText(source) {
+  const shallow = { ...source }
+  for (const key of Object.keys(shallow)) {
+    if (typeof shallow[key] === 'object' && shallow[key] !== null) {
+      delete shallow[key]
+    }
+  }
+
+  return [
+    firstNonEmptyString(
+      source?.title,
+      source?.name,
+      source?.eventName,
+      source?.activityName,
+      source?.resourceName,
+      source?.mainTitle,
+      source?.subTitle
+    ),
+    firstNonEmptyString(source?.category, source?.type, source?.typeName, source?.tag, source?.label),
+    firstNonEmptyString(source?.desc, source?.description, source?.content, source?.copywriter),
+    firstNonEmptyString(source?.resource?.title, source?.resource?.name, source?.resource?.resourceName),
+    JSON.stringify(shallow),
+  ].filter(Boolean).join(' ')
+}
+
+function normalizeConcertEvent(source, index = 0, options = {}) {
+  if (!source || typeof source !== 'object') {
+    return null
+  }
+
+  const searchText = getCalendarObjectSearchText(source)
+  if (!CONCERT_EVENT_KEYWORD_RE.test(searchText)) {
+    return null
+  }
+
+  const nestedResource = source.resource || source.resourceExtInfo || {}
+  const title = firstNonEmptyString(
+    source.title,
+    source.name,
+    source.eventName,
+    source.activityName,
+    source.resourceName,
+    source.mainTitle,
+    nestedResource.title,
+    nestedResource.name,
+    nestedResource.resourceName
+  )
+  const startTime = parseCalendarTimestamp(
+    source.startTime,
+    source.beginTime,
+    source.eventTime,
+    source.showTime,
+    source.performanceTime,
+    source.time,
+    source.onlineTime,
+    source.offlineTime,
+    source.sellTime,
+    nestedResource.startTime,
+    nestedResource.eventTime,
+    nestedResource.showTime,
+    nestedResource.onlineTime,
+    nestedResource.offlineTime
+  )
+  const endTime = parseCalendarTimestamp(
+    source.endTime,
+    source.finishTime,
+    source.stopTime,
+    source.offlineTime,
+    nestedResource.endTime,
+    nestedResource.finishTime,
+    nestedResource.offlineTime
+  )
+
+  if (!title && !startTime) {
+    return null
+  }
+
+  const rangeStart = Number(options.startTime || 0)
+  const rangeEnd = Number(options.endTime || 0)
+  const rangeSlackMs = 24 * 60 * 60 * 1000
+  if (startTime > 0 && rangeStart > 0 && startTime < rangeStart - rangeSlackMs) {
+    return null
+  }
+  if (startTime > 0 && rangeEnd > 0 && startTime > rangeEnd + rangeSlackMs) {
+    return null
+  }
+
+  const concertId = extractConcertIdFromCalendarObject(source)
+  const rawId = firstNonEmptyString(
+    source.id,
+    source.eventId,
+    source.activityId,
+    source.resourceId,
+    nestedResource.id,
+    nestedResource.resourceId,
+    concertId,
+    `${title}:${startTime}:${index}`
+  )
+  const numericId = Number(rawId)
+  const id = Number.isFinite(numericId) && numericId > 0
+    ? Math.trunc(numericId)
+    : hashPositiveString(rawId || `${title}:${startTime}:${index}`)
+  const artistEntries = normalizeCalendarArtistEntries(source)
+  const city = firstNonEmptyString(
+    source.city,
+    source.cityName,
+    source.location?.city,
+    source.venue?.city,
+    nestedResource.city,
+    nestedResource.cityName
+  )
+  const venue = firstNonEmptyString(
+    source.venue,
+    source.venueName,
+    source.site,
+    source.place,
+    source.address,
+    source.location?.name,
+    source.location?.address,
+    nestedResource.venue,
+    nestedResource.venueName,
+    nestedResource.address
+  )
+  const externalUrl = normalizeCalendarTargetUrl(firstNonEmptyString(
+    source.url,
+    source.webUrl,
+    source.h5Url,
+    source.linkUrl,
+    source.targetUrl,
+    source.actionUrl,
+    source.shareUrl,
+    source.schemeUrl,
+    source.nativeUrl,
+    nestedResource.url,
+    nestedResource.webUrl,
+    nestedResource.targetUrl,
+    nestedResource.shareUrl
+  ))
+
+  return {
+    id,
+    eventId: String(rawId || id),
+    concertId,
+    title: title || '\u6f14\u51fa',
+    name: title || '\u6f14\u51fa',
+    artists: artistEntries.map((artist) => artist.name),
+    artistEntries,
+    city,
+    venue,
+    startTime,
+    endTime,
+    coverUrl: firstNonEmptyString(
+      source.coverUrl,
+      source.cover,
+      source.picUrl,
+      source.imgUrl,
+      nestedResource.coverUrl,
+      nestedResource.cover,
+      nestedResource.picUrl,
+      nestedResource.imgUrl
+    ),
+    externalUrl,
+    source: 'netease-calendar',
+  }
+}
+
+function normalizeConcertEvents(body, options = {}) {
+  const rawObjects = collectCalendarObjects(body?.data || body || {})
+  const deduped = new Map()
+
+  rawObjects.forEach((item, index) => {
+    const event = normalizeConcertEvent(item, index, options)
+    if (!event) {
+      return
+    }
+
+    const key = event.eventId && !/^0$/.test(event.eventId)
+      ? `id:${event.eventId}`
+      : `event:${normalizeArtistLookupText(event.title)}:${event.startTime}:${normalizeArtistLookupText(event.venue)}`
+    if (!deduped.has(key)) {
+      deduped.set(key, event)
+    }
+  })
+
+  return [...deduped.values()].sort((left, right) => {
+    const leftTime = Number(left.startTime || Number.MAX_SAFE_INTEGER)
+    const rightTime = Number(right.startTime || Number.MAX_SAFE_INTEGER)
+    return leftTime - rightTime || String(left.title || '').localeCompare(String(right.title || ''), 'zh-CN')
+  })
+}
+
+function getConcertDetailFromApiBody(body) {
+  if (body?.data && typeof body.data === 'object') {
+    return body.data
+  }
+
+  const batched = body?.['/api/concert/detail/v3']
+  if (batched?.data && typeof batched.data === 'object') {
+    return batched.data
+  }
+
+  return null
+}
+
+function mergeConcertEventDetail(event, detail) {
+  if (!event || !detail || typeof detail !== 'object') {
+    return event
+  }
+
+  const detailEvent = normalizeConcertEvent({
+    ...detail,
+    eventId: event.eventId,
+    concertId: event.concertId,
+    resourceId: event.concertId || detail.id,
+    resourceType: 'CONCERT',
+    targetUrl: event.externalUrl,
+  })
+
+  if (!detailEvent) {
+    return event
+  }
+
+  return {
+    ...event,
+    ...detailEvent,
+    id: event.id,
+    eventId: event.eventId,
+    concertId: event.concertId || detailEvent.concertId,
+    title: detailEvent.title || event.title,
+    name: detailEvent.name || event.name,
+    externalUrl: event.externalUrl || detailEvent.externalUrl,
+    source: event.source,
+  }
+}
+
+function getSearchResultItems(body, keys = []) {
+  const result = body && typeof body === 'object' ? body.result : null
+  if (!result || typeof result !== 'object') {
+    return []
+  }
+
+  for (const key of keys) {
+    const items = result[key]
+    if (Array.isArray(items)) {
+      return items
+    }
+  }
+
+  return []
+}
+
+async function mapWithConcurrency(items, limit, mapper) {
+  const sourceItems = asArray(items)
+  const results = new Array(sourceItems.length)
+  let cursor = 0
+
+  async function worker() {
+    while (cursor < sourceItems.length) {
+      const index = cursor
+      cursor += 1
+      results[index] = await mapper(sourceItems[index], index)
+    }
+  }
+
+  const normalizedLimit = Number.isFinite(Number(limit)) && Number(limit) > 0
+    ? Math.max(1, Math.floor(Number(limit)))
+    : 1
+  const workerCount = Math.max(1, Math.min(normalizedLimit, sourceItems.length || 1))
   await Promise.all(Array.from({ length: workerCount }, () => worker()))
   return results
 }
@@ -489,9 +989,7 @@ class NeteaseService {
       })
 
       ensureApiSuccess(response.body, '\u641c\u7d22\u6b4c\u66f2\u5931\u8d25')
-      const songs = Array.isArray(response.body?.result?.songs)
-        ? response.body.result.songs
-        : []
+      const songs = getSearchResultItems(response.body, ['songs'])
 
       songs.forEach((song, index) => {
         const track = normalizeTrackRecord(song, index)
@@ -549,9 +1047,7 @@ class NeteaseService {
     })
 
     ensureApiSuccess(response.body, '\u641c\u7d22\u827a\u4eba\u5931\u8d25')
-    const artists = Array.isArray(response.body?.result?.artists)
-      ? response.body.result.artists
-      : []
+    const artists = getSearchResultItems(response.body, ['artists'])
     const matchedArtist = await this.resolveArtistSearchMatch(artists, artistName, options?.resolveContext)
       || pickBestArtistSearchMatch(artists, artistName)
     const resolvedArtistId = Number(matchedArtist?.id || 0)
@@ -657,7 +1153,7 @@ class NeteaseService {
       limit: 1000,
     })
 
-    const playlists = response.body?.playlist || []
+    const playlists = asArray(response.body?.playlist)
     return playlists.map((playlist) => normalizePlaylistSummary(playlist))
   }
 
@@ -700,7 +1196,7 @@ class NeteaseService {
     })
 
     const playCounts = {}
-    for (const item of body.allData || []) {
+    for (const item of asArray(body.allData)) {
       const trackId = Number(item?.song?.id || item?.id || 0)
       const playCount = Number(item?.playCount || item?.score || item?.listenCount || 0)
       if (trackId > 0 && playCount > 0) {
@@ -709,6 +1205,42 @@ class NeteaseService {
     }
 
     return playCounts
+  }
+
+  async scrobbleTrackPlay(trackId, options = {}) {
+    const normalizedTrackId = Math.trunc(Number(trackId || 0))
+    if (!Number.isSafeInteger(normalizedTrackId) || normalizedTrackId <= 0) {
+      throw new Error('\u6b4c\u66f2\u4e0d\u5b58\u5728')
+    }
+
+    const normalizedSourceId = Math.max(
+      0,
+      Math.trunc(Number(options?.sourceId || options?.sourceid || options?.playlistId || 0) || 0)
+    )
+    const listenedSeconds = Math.max(
+      1,
+      Math.round(Number(options?.listenedSeconds || options?.playedSeconds || options?.time || 0) || 0)
+    )
+    const codeMessages = {
+      301: '\u540c\u6b65\u542c\u6b4c\u8bb0\u5f55\u9700\u8981\u6709\u6548\u7684\u7f51\u6613\u4e91\u767b\u5f55\u6001\uff0c\u8bf7\u5237\u65b0\u767b\u5f55\u540e\u518d\u8bd5\u3002',
+    }
+
+    const response = await callApi('scrobble', {
+      cookie: this.cookie,
+      id: normalizedTrackId,
+      sourceid: normalizedSourceId,
+      time: listenedSeconds,
+      timestamp: Date.now(),
+    }, {
+      fallbackMessage: '\u540c\u6b65\u542c\u6b4c\u8bb0\u5f55\u5931\u8d25',
+      codeMessages,
+      maxAttempts: 2,
+      timeoutMs: 8000,
+      retryDelayMs: 500,
+    })
+
+    ensureApiSuccess(response.body, '\u540c\u6b65\u542c\u6b4c\u8bb0\u5f55\u5931\u8d25', codeMessages)
+    return true
   }
 
   async getPlaylistTracks(playlistId, expectedCount = 0) {
@@ -775,7 +1307,7 @@ class NeteaseService {
       })
 
       ensureApiSuccess(response.body, '\u83b7\u53d6\u827a\u4eba\u6b4c\u66f2\u5931\u8d25')
-      const songs = Array.isArray(response.body?.songs) ? response.body.songs : []
+      const songs = asArray(response.body?.songs)
       if (!songs.length) {
         break
       }
@@ -1093,7 +1625,7 @@ class NeteaseService {
           301: '\u76f8\u4f3c\u63a8\u8350\u9700\u8981\u6709\u6548\u7684\u7f51\u6613\u4e91\u767b\u5f55\u6001\uff0c\u8bf7\u5237\u65b0\u767b\u5f55\u540e\u518d\u8bd5\u3002',
         })
 
-        for (const item of body.songs || []) {
+        for (const item of asArray(body.songs)) {
           const track = normalizeTrackRecord(item, tracks.length)
           if (track.id <= 0 || seen.has(track.id)) {
             continue
@@ -1171,7 +1703,11 @@ class NeteaseService {
       },
     })
 
-    const playlists = response.body?.result?.playlists || []
+    ensureApiSuccess(response.body, '\u641c\u7d22\u793e\u533a\u6b4c\u5355\u5931\u8d25', {
+      301: '\u641c\u7d22\u793e\u533a\u6b4c\u5355\u9700\u8981\u6709\u6548\u7684\u7f51\u6613\u4e91\u767b\u5f55\u6001\uff0c\u8bf7\u5237\u65b0\u767b\u5f55\u540e\u518d\u8bd5\u3002',
+    })
+
+    const playlists = getSearchResultItems(response.body, ['playlists'])
     return this.expandExplorePlaylistPreviews(
       playlists.map((playlist) => normalizePlaylistSummary(playlist, {
         sourcePlaylistId: Number(playlist?.id || 0),
@@ -1268,7 +1804,7 @@ class NeteaseService {
         301: '获取相似歌单需要有效的网易云登录态，请刷新登录后再试。',
       })
 
-      for (const rawPlaylist of response.body?.playlists || []) {
+      for (const rawPlaylist of asArray(response.body?.playlists)) {
         addCandidatePlaylist(rawPlaylist, {
           exploreSourceLabel: '相似歌单',
           isExplore: true,
@@ -1298,7 +1834,7 @@ class NeteaseService {
           301: '搜索社区歌单需要有效的网易云登录态，请刷新登录后再试。',
         })
 
-        for (const rawPlaylist of response.body?.result?.playlists || []) {
+        for (const rawPlaylist of getSearchResultItems(response.body, ['playlists'])) {
           addCandidatePlaylist(rawPlaylist, {
             exploreSourceLabel: '艺人相关歌单',
             isExplore: true,
@@ -1430,7 +1966,7 @@ class NeteaseService {
           301: '获取每日推荐歌单需要有效的网易云登录态，请刷新登录后再试。',
         },
       })
-      playlists = (response.body?.recommend || [])
+      playlists = asArray(response.body?.recommend)
         .slice(0, limit)
         .map((playlist) => normalizePlaylistSummary(playlist, {
           sourcePlaylistId: Number(playlist?.id || 0),
@@ -1450,7 +1986,7 @@ class NeteaseService {
       }, {
         fallbackMessage: '获取推荐歌单失败',
       })
-      playlists = (fallback.body?.result || [])
+      playlists = asArray(fallback.body?.result)
         .slice(0, limit)
         .map((playlist) => normalizePlaylistSummary(playlist, {
           sourcePlaylistId: Number(playlist?.id || 0),
@@ -1471,7 +2007,7 @@ class NeteaseService {
       fallbackMessage: '获取社区歌单失败',
     })
 
-    const playlists = (response.body?.playlists || [])
+    const playlists = asArray(response.body?.playlists)
       .slice(0, limit)
       .map((playlist) => normalizePlaylistSummary(playlist, {
         sourcePlaylistId: Number(playlist?.id || 0),
@@ -1486,7 +2022,7 @@ class NeteaseService {
 
   async expandExplorePlaylistPreviews(playlists, overrides = {}) {
     const normalizedPlaylists = [...new Map(
-      (playlists || [])
+      asArray(playlists)
         .map((playlist) => normalizePlaylistSummary(playlist, {
           ...overrides,
           sourcePlaylistId: Number(playlist?.sourcePlaylistId || playlist?.id || 0),
@@ -1518,6 +2054,85 @@ class NeteaseService {
         }
       }
     })
+  }
+
+  async getConcertDetail(concertId) {
+    const normalizedConcertId = Math.trunc(Number(concertId || 0))
+    if (!Number.isSafeInteger(normalizedConcertId) || normalizedConcertId <= 0) {
+      return null
+    }
+
+    const response = await callApi('api', {
+      cookie: this.cookie,
+      uri: '/api/concert/detail/v3',
+      data: { concertId: normalizedConcertId },
+      crypto: '',
+    }, {
+      fallbackMessage: '\u83b7\u53d6\u6f14\u51fa\u8be6\u60c5\u5931\u8d25',
+      maxAttempts: 2,
+      timeoutMs: 10000,
+      retryDelayMs: 500,
+    })
+
+    ensureApiSuccess(response.body, '\u83b7\u53d6\u6f14\u51fa\u8be6\u60c5\u5931\u8d25')
+    return getConcertDetailFromApiBody(response.body)
+  }
+
+  async hydrateConcertEventDetails(events) {
+    const sourceEvents = asArray(events)
+    if (!sourceEvents.length) {
+      return []
+    }
+
+    const hydrated = await mapWithConcurrency(sourceEvents, CONCERT_DETAIL_CONCURRENCY, async (event, index) => {
+      const concertId = Number(event?.concertId || 0)
+      if (!concertId) {
+        return event
+      }
+
+      if (index > 0) {
+        await sleep(CONCERT_DETAIL_REQUEST_DELAY_MS)
+      }
+
+      try {
+        const detail = await this.getConcertDetail(concertId)
+        return mergeConcertEventDetail(event, detail)
+      } catch (error) {
+        console.warn('failed to hydrate concert detail', concertId, error)
+        return event
+      }
+    })
+
+    return hydrated.sort((left, right) => {
+      const leftTime = Number(left.startTime || Number.MAX_SAFE_INTEGER)
+      const rightTime = Number(right.startTime || Number.MAX_SAFE_INTEGER)
+      return leftTime - rightTime || String(left.title || '').localeCompare(String(right.title || ''), 'zh-CN')
+    })
+  }
+
+  async getConcertEvents(options = {}) {
+    const now = Date.now()
+    const startTime = parseCalendarTimestamp(options?.startTime) || now
+    const endTime = parseCalendarTimestamp(options?.endTime)
+      || (startTime + (CONCERT_LOOKAHEAD_DAYS * 24 * 60 * 60 * 1000))
+
+    const response = await callApi('calendar', {
+      cookie: this.cookie,
+      startTime,
+      endTime,
+    }, {
+      fallbackMessage: '\u83b7\u53d6\u6f14\u51fa\u65e5\u5386\u5931\u8d25',
+      codeMessages: {
+        301: '\u83b7\u53d6\u6f14\u51fa\u65e5\u5386\u9700\u8981\u6709\u6548\u7684\u7f51\u6613\u4e91\u767b\u5f55\u6001\uff0c\u8bf7\u5237\u65b0\u767b\u5f55\u540e\u518d\u8bd5\u3002',
+      },
+    })
+
+    ensureApiSuccess(response.body, '\u83b7\u53d6\u6f14\u51fa\u65e5\u5386\u5931\u8d25', {
+      301: '\u83b7\u53d6\u6f14\u51fa\u65e5\u5386\u9700\u8981\u6709\u6548\u7684\u7f51\u6613\u4e91\u767b\u5f55\u6001\uff0c\u8bf7\u5237\u65b0\u767b\u5f55\u540e\u518d\u8bd5\u3002',
+    })
+
+    const events = normalizeConcertEvents(response.body, { startTime, endTime })
+    return this.hydrateConcertEventDetails(events)
   }
 
   async logout() {
@@ -1567,6 +2182,10 @@ module.exports = {
     buildSongUrlLevelCandidates,
     callApi,
     normalizeAudioQualityPreference,
+    normalizeConcertEvents,
+    normalizeConcertEvent,
+    extractConcertIdFromCalendarObject,
+    mergeConcertEventDetail,
     withTimeout,
   },
 }

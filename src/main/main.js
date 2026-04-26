@@ -584,6 +584,21 @@ function normalizePlaylistMeta(playlist) {
     externalUrl: playlist?.externalUrl || '',
     importReadOnly: Boolean(playlist?.importReadOnly),
     isExplore: Boolean(playlist?.isExplore),
+    isConcert: Boolean(playlist?.isConcert),
+    concertEventId: String(playlist?.concertEventId || playlist?.eventId || '').trim(),
+    concertCity: String(playlist?.concertCity || playlist?.city || '').trim(),
+    concertVenue: String(playlist?.concertVenue || playlist?.venue || '').trim(),
+    concertStartTime: Number(playlist?.concertStartTime || playlist?.startTime || 0),
+    concertEndTime: Number(playlist?.concertEndTime || playlist?.endTime || 0),
+    concertArtists: Array.isArray(playlist?.concertArtists || playlist?.artists)
+      ? (playlist.concertArtists || playlist.artists).map((artist) => String(artist || '').trim()).filter(Boolean)
+      : [],
+    concertArtistEntries: Array.isArray(playlist?.concertArtistEntries || playlist?.artistEntries)
+      ? (playlist.concertArtistEntries || playlist.artistEntries).map((artist) => ({
+        id: Number(artist?.id || artist?.artistId || 0),
+        name: String(artist?.name || '').trim(),
+      })).filter((artist) => artist.name)
+      : [],
   }
 }
 
@@ -951,6 +966,39 @@ async function buildPlaybackPayload(userId) {
   return {
     localPlayCounts: localStats.localPlayCounts || {},
     cloudPlayCounts,
+  }
+}
+
+function normalizeTrackPlayRecordPayload(trackIdOrPayload, options = {}) {
+  const input = trackIdOrPayload && typeof trackIdOrPayload === 'object'
+    ? trackIdOrPayload
+    : {
+      ...(options && typeof options === 'object' ? options : {}),
+      trackId: trackIdOrPayload,
+    }
+
+  const trackId = Math.trunc(Number(input?.trackId || input?.id || 0) || 0)
+  const sourceId = Math.max(
+    0,
+    Math.trunc(Number(
+      input?.sourceId
+      || input?.sourceid
+      || input?.sourcePlaylistId
+      || input?.playlistId
+      || 0
+    ) || 0)
+  )
+  const listenedSeconds = Math.max(
+    1,
+    Math.round(Number(input?.listenedSeconds || input?.playedSeconds || input?.time || 0) || 0)
+  )
+  const syncCloud = input?.syncCloud !== false
+
+  return {
+    trackId,
+    sourceId,
+    listenedSeconds,
+    syncCloud,
   }
 }
 
@@ -1696,14 +1744,35 @@ function registerIpc() {
     }
   })
 
-  ipcMain.handle('recordTrackPlay', async (_event, userId, trackId) => {
+  ipcMain.handle('recordTrackPlay', async (_event, userId, trackIdOrPayload, options = {}) => {
+    const recordPayload = normalizeTrackPlayRecordPayload(trackIdOrPayload, options)
+
     try {
+      const localPlayCount = incrementLocalPlayCount(userId, recordPayload.trackId)
+      let cloudScrobbled = false
+      let cloudError = ''
+
+      if (recordPayload.syncCloud && recordPayload.trackId > 0 && svc?.scrobbleTrackPlay) {
+        try {
+          await svc.scrobbleTrackPlay(recordPayload.trackId, {
+            sourceId: recordPayload.sourceId,
+            listenedSeconds: recordPayload.listenedSeconds,
+          })
+          cloudScrobbled = true
+        } catch (error) {
+          cloudError = error.message || String(error)
+          console.warn('failed to scrobble cloud play record', error)
+        }
+      }
+
       return {
         ok: true,
-        localPlayCount: incrementLocalPlayCount(userId, trackId),
+        localPlayCount,
+        cloudScrobbled,
+        cloudError,
       }
     } catch (error) {
-      return { ok: false, error: error.message || String(error), localPlayCount: 0 }
+      return { ok: false, error: error.message || String(error), localPlayCount: 0, cloudScrobbled: false }
     }
   })
 
@@ -2016,13 +2085,30 @@ function registerIpc() {
       const playlists = await service.getExplorePlaylists(options?.query || '', options)
       return {
         ok: true,
-        playlists: (playlists || []).map(normalizePlaylistPayload),
+        playlists: (Array.isArray(playlists) ? playlists : []).map(normalizePlaylistPayload),
       }
     } catch (error) {
       return {
         ok: false,
         error: error.message || String(error),
         playlists: [],
+      }
+    }
+  })
+
+  ipcMain.handle('getConcertEvents', async (_event, options = {}) => {
+    try {
+      const service = ensureServiceReady()
+      const events = await service.getConcertEvents(options)
+      return {
+        ok: true,
+        events: Array.isArray(events) ? events : [],
+      }
+    } catch (error) {
+      return {
+        ok: false,
+        error: error.message || String(error),
+        events: [],
       }
     }
   })

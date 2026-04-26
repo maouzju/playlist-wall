@@ -357,6 +357,35 @@ button:focus-visible,
   font-size: calc(13px * var(--ui-scale));
 }
 
+.concert-location-filter {
+  display: flex;
+  gap: calc(6px * var(--ui-scale));
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.concert-location-filter::-webkit-scrollbar {
+  display: none;
+}
+
+.concert-location-chip {
+  flex: none;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: calc(5px * var(--ui-scale)) calc(10px * var(--ui-scale));
+  background: var(--surface);
+  color: var(--text);
+  white-space: nowrap;
+  line-height: 1.1;
+  font-size: calc(13px * var(--ui-scale));
+}
+
+.concert-location-chip.is-active {
+  background: var(--inverse-surface);
+  color: var(--inverse-text);
+}
+
 .search-clear-btn {
   display: inline-flex;
   align-items: center;
@@ -1471,6 +1500,10 @@ button.track-row:hover:not(:disabled) {
   border-top: 1px solid var(--line-soft);
   color: var(--muted);
   font-size: calc(11px * var(--ui-scale));
+}
+
+.playlist-placeholder--concert {
+  line-height: var(--compact-label-line-height);
 }
 
 .playlist-recommendations {

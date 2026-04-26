@@ -783,3 +783,252 @@ test('subscribePlaylist retries timed out requests before failing', async () => 
     api.playlist_subscribe = original
   }
 })
+
+test('scrobbleTrackPlay reports listened tracks to NetEase with source and time', async () => {
+  const original = api.scrobble
+  const calls = []
+
+  api.scrobble = (params) => {
+    calls.push({ ...params })
+    return Promise.resolve({
+      body: {
+        code: 200,
+      },
+    })
+  }
+
+  try {
+    const service = new NeteaseService('mock-cookie')
+    await service.scrobbleTrackPlay(123.8, {
+      sourceId: 456.2,
+      listenedSeconds: 29.6,
+    })
+
+    assert.equal(calls.length, 1)
+    assert.equal(calls[0].cookie, 'mock-cookie')
+    assert.equal(calls[0].id, 123)
+    assert.equal(calls[0].sourceid, 456)
+    assert.equal(calls[0].time, 30)
+    assert.ok(Number(calls[0].timestamp) > 0)
+  } finally {
+    api.scrobble = original
+  }
+})
+
+
+test('normalizeConcertEvents extracts and sorts concert calendar entries', () => {
+  const events = __testing.normalizeConcertEvents({
+    data: {
+      calendarEvents: [
+        {
+          id: 12,
+          title: '??????',
+          startTime: 1700000000000,
+        },
+        {
+          eventId: 'tour-2',
+          title: 'Artist B Tour',
+          startTime: 1700200000000,
+          cityName: 'Beijing',
+          venueName: 'Live House',
+          artists: [{ id: 2, name: 'Artist B' }],
+          picUrl: 'cover-b',
+        },
+        {
+          id: 'concertEvent_12345_1700100000000',
+          resourceType: 'CONCERT',
+          resourceId: '12345',
+          title: 'Artist A ???',
+          onlineTime: 1700100000000,
+          city: 'Shanghai',
+          venue: 'Arena',
+          artists: ['Artist A'],
+          targetUrl: 'orpheus://openurl?url=https%3A%2F%2Fexample.com%2Fa%3FconcertId%3D12345',
+        },
+      ],
+    },
+  }, {
+    startTime: 1700000000000,
+    endTime: 1700300000000,
+  })
+
+  assert.deepEqual(events.map((event) => event.eventId), ['concertEvent_12345_1700100000000', 'tour-2'])
+  assert.equal(events[0].title, 'Artist A ???')
+  assert.equal(events[0].city, 'Shanghai')
+  assert.equal(events[0].venue, 'Arena')
+  assert.deepEqual(events[0].artists, ['Artist A'])
+  assert.equal(events[0].externalUrl, 'https://example.com/a?concertId=12345')
+  assert.equal(events[0].concertId, 12345)
+  assert.equal(events[1].coverUrl, 'cover-b')
+})
+
+test('getConcertEvents calls calendar and detail APIs then returns hydrated concert results', async () => {
+  const originals = {
+    calendar: api.calendar,
+    api: api.api,
+  }
+  const calendarCalls = []
+  const detailCalls = []
+
+  api.calendar = (params) => {
+    calendarCalls.push({ ...params })
+    return Promise.resolve({
+      body: {
+        code: 200,
+        data: {
+          calendarEvents: [
+            {
+              id: 'concertEvent_901_1700500000000',
+              resourceType: 'CONCERT',
+              resourceId: '901',
+              title: 'Mock Livehouse Show?????',
+              onlineTime: 1700500000000,
+              tag: '??',
+              imgUrl: 'calendar-cover',
+              targetUrl: 'orpheus://openurl?url=https%3A%2F%2Fmusic.163.com%2Fstore%2Fconcert%2Fdetail%3FconcertId%3D901',
+            },
+          ],
+        },
+      },
+    })
+  }
+
+  api.api = (params) => {
+    detailCalls.push({ ...params })
+    return Promise.resolve({
+      body: {
+        code: 200,
+        data: {
+          id: 901,
+          title: 'Mock Livehouse Show',
+          startTime: 1700500000000,
+          endTime: 1700507200000,
+          city: 'Hangzhou',
+          venue: 'MAO Livehouse',
+          address: 'Mock Address',
+          cover: 'detail-cover',
+          artistInfoList: [{ artistId: 9, name: 'Mock Artist' }],
+        },
+      },
+    })
+  }
+
+  try {
+    const service = new NeteaseService('mock-cookie')
+    const events = await service.getConcertEvents({
+      startTime: 1700400000000,
+      endTime: 1700600000000,
+    })
+
+    assert.equal(calendarCalls.length, 1)
+    assert.equal(calendarCalls[0].cookie, 'mock-cookie')
+    assert.equal(calendarCalls[0].startTime, 1700400000000)
+    assert.equal(calendarCalls[0].endTime, 1700600000000)
+    assert.equal(detailCalls.length, 1)
+    assert.equal(detailCalls[0].uri, '/api/concert/detail/v3')
+    assert.deepEqual(detailCalls[0].data, { concertId: 901 })
+    assert.equal(events.length, 1)
+    assert.equal(events[0].concertId, 901)
+    assert.equal(events[0].title, 'Mock Livehouse Show')
+    assert.equal(events[0].city, 'Hangzhou')
+    assert.equal(events[0].venue, 'MAO Livehouse')
+    assert.equal(events[0].startTime, 1700500000000)
+    assert.deepEqual(events[0].artists, ['Mock Artist'])
+    assert.equal(events[0].coverUrl, 'detail-cover')
+    assert.equal(events[0].externalUrl, 'https://music.163.com/store/concert/detail?concertId=901')
+  } finally {
+    api.calendar = originals.calendar
+    api.api = originals.api
+  }
+})
+
+test('searchExplorePlaylists treats empty search result object as no playlists', async () => {
+  const originalSearch = api.search
+  const calls = []
+
+  api.search = (params) => {
+    calls.push({ ...params })
+    return Promise.resolve({
+      body: {
+        code: 200,
+        result: {},
+      },
+    })
+  }
+
+  try {
+    const service = new NeteaseService('mock-cookie')
+    const playlists = await service.getExplorePlaylists('Jay concert', {
+      limit: 10,
+    })
+
+    assert.equal(calls.length, 1)
+    assert.equal(calls[0].type, 1000)
+    assert.deepEqual(playlists, [])
+  } finally {
+    api.search = originalSearch
+  }
+})
+
+test('artist explore search ignores non-array query payloads from search and simi playlist APIs', async () => {
+  const originals = {
+    artist_songs: api.artist_songs,
+    search: api.search,
+    simi_playlist: api.simi_playlist,
+  }
+  const searchCalls = []
+  const simiPlaylistCalls = []
+
+  api.artist_songs = () => Promise.resolve({
+    body: {
+      code: 200,
+      songs: [
+        {
+          id: 9002,
+          name: 'Song 9002',
+          ar: [{ id: 9, name: 'Artist 9' }],
+          al: { id: 99002, name: 'Album 9002', picUrl: 'cover-9002' },
+          dt: 180000,
+        },
+      ],
+    },
+  })
+
+  api.simi_playlist = (params) => {
+    simiPlaylistCalls.push({ ...params })
+    return Promise.resolve({
+      body: {
+        code: 200,
+        playlists: {},
+      },
+    })
+  }
+
+  api.search = (params) => {
+    searchCalls.push({ ...params })
+    return Promise.resolve({
+      body: {
+        code: 200,
+        result: {},
+      },
+    })
+  }
+
+  try {
+    const service = new NeteaseService('mock-cookie')
+    const playlists = await service.getExplorePlaylists('Artist 9', {
+      artistRef: 9,
+      artistName: 'Artist 9',
+      seedTrackId: 9001,
+      limit: 10,
+    })
+
+    assert.deepEqual(simiPlaylistCalls.map((call) => Number(call.id || 0)), [9001, 9002])
+    assert.equal(searchCalls.length, 1)
+    assert.deepEqual(playlists, [])
+  } finally {
+    api.artist_songs = originals.artist_songs
+    api.search = originals.search
+    api.simi_playlist = originals.simi_playlist
+  }
+})
