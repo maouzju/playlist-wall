@@ -59,6 +59,11 @@ function resolveRceditBinary() {
     return existingBinary
   }
 
+  const bundledRcedit = path.join(rootDir, 'node_modules', 'electron-winstaller', 'vendor', 'rcedit.exe')
+  if (fs.existsSync(bundledRcedit)) {
+    return bundledRcedit
+  }
+
   const archives = walkFiles(cacheDir, (fullPath) => fullPath.toLowerCase().endsWith('.7z'))
     .sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs)
   const sevenZipPath = path.join(rootDir, 'node_modules', '7zip-bin', 'win', 'x64', '7za.exe')
