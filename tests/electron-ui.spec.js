@@ -1,4 +1,4 @@
-﻿const path = require('path')
+const path = require('path')
 const { test, expect } = require('playwright/test')
 
 const rendererPath = path.resolve(__dirname, '../src/renderer/index.html').replace(/\\/g, '/')
@@ -977,6 +977,12 @@ test('volume assist hotkey with mouse wheel adjusts app volume and persists', as
     return page.evaluate(() => document.querySelector('audio')?.volume)
   }).toBe(0.55)
 
+  await page.evaluate(() => window.__mockEmitVolumeAssistWheel?.({ direction: -1 }))
+  await expect(page.locator('#volume-range')).toHaveValue('50')
+  await expect.poll(async () => {
+    return page.evaluate(() => document.querySelector('audio')?.volume)
+  }).toBe(0.5)
+
   await page.reload()
   await page.waitForSelector('.playlist-card')
   await page.click('#settings-btn')
@@ -1064,6 +1070,11 @@ test('audio quality settings affect playback requests and persist across reload'
 test('concerts tab loads event cards and filters by city picker or venue search', async ({ page }) => {
   await waitForWall(page)
 
+  await expect(page.locator('#tab-concerts')).toBeDisabled()
+  await page.click('#settings-btn')
+  await setCheckbox(page, '#concerts-enabled-toggle', true)
+  await closeSettingsPanel(page)
+
   await page.click('#tab-concerts')
   const concertCards = page.locator('.playlist-card')
   await expect(concertCards).toHaveCount(2)
@@ -1073,8 +1084,8 @@ test('concerts tab loads event cards and filters by city picker or venue search'
   await expect(page.locator('[data-concert-city-filter=""]')).toContainText('\u5168\u90e8\u5730\u70b9')
   await expect(page.locator('[data-concert-city-filter="\u4e0a\u6d77"]')).toContainText('\u4e0a\u6d77')
   await expect(page.locator('[data-concert-city-filter="\u5317\u4eac"]')).toContainText('\u5317\u4eac')
-  await expect(page.locator('.playlist-title').filter({ hasText: '\u827a\u4eba 1 \u4e16\u754c\u5de1\u6f14' })).toBeVisible()
-  await expect(page.locator('.playlist-placeholder--concert').filter({ hasText: '\u4e0a\u6d77' })).toBeVisible()
+  await expect(page.locator('.playlist-title').filter({ hasText: '\u827a\u672f\u5bb6 1 \u4e16\u754c\u5de1\u6f14' })).toBeVisible()
+  await expect(page.locator('.playlist-card').filter({ hasText: '\u827a\u672f\u5bb6 1 \u4e16\u754c\u5de1\u6f14' }).locator('.track-row').first()).toBeVisible()
 
   await page.click('[data-concert-city-filter="\u5317\u4eac"]')
   await expect(page.locator('.playlist-title').filter({ hasText: '\u590f\u65e5\u97f3\u4e50\u8282' })).toBeVisible()
@@ -2506,3 +2517,22 @@ test('huge datasets keep one card per playlist and bound row DOM size', async ({
 
 
 
+
+
+test('settings show configurable cache directory outside updater-covered app folder', async ({ page }) => {
+  await waitForWall(page)
+
+  await page.click('#settings-btn')
+  await expect(page.locator('#settings-panel')).toHaveClass(/is-open/)
+  await expect(page.locator('#settings-cache-directory-value')).toContainText('Playlist Wall Cache')
+  await expect(page.locator('#settings-cache-directory-status')).toContainText('default')
+
+  await page.click('#settings-cache-directory-choose-btn')
+  await expect(page.locator('#settings-cache-directory-value')).toContainText('D:')
+  await expect(page.locator('#settings-cache-directory-status')).toContainText('custom')
+  await expect(page.locator('#settings-cache-directory-reset-btn')).toBeEnabled()
+
+  await page.click('#settings-cache-directory-reset-btn')
+  await expect(page.locator('#settings-cache-directory-value')).toContainText('C:')
+  await expect(page.locator('#settings-cache-directory-status')).toContainText('default')
+})

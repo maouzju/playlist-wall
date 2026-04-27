@@ -6,6 +6,8 @@ const {
   isHotkeyPressed,
   normalizeVolumeAssistSettings,
   parseHotkeyParts,
+  parseVolumeAssistWheelLine,
+  parseWindowsHookHotkey,
 } = require('../src/main/volume-assist')
 
 test('normalizeVolumeAssistSettings defaults to app volume with Alt hotkey', () => {
@@ -48,4 +50,32 @@ test('getWheelDirection maps upward wheel to volume up', () => {
   assert.equal(getWheelDirection({ deltaY: -120 }), 1)
   assert.equal(getWheelDirection({ deltaY: 120 }), -1)
   assert.equal(getWheelDirection({ deltaY: 0 }), 0)
+})
+
+
+test('parseWindowsHookHotkey maps modifier-only and key-combo hotkeys for the global listener', () => {
+  assert.deepEqual(parseWindowsHookHotkey('Alt'), {
+    hotkey: 'Alt',
+    ctrl: false,
+    shift: false,
+    alt: true,
+    meta: false,
+    keyVk: 0,
+  })
+
+  assert.deepEqual(parseWindowsHookHotkey('Ctrl+Shift+X'), {
+    hotkey: 'Ctrl+Shift+X',
+    ctrl: true,
+    shift: true,
+    alt: false,
+    meta: false,
+    keyVk: 88,
+  })
+})
+
+test('parseVolumeAssistWheelLine extracts global wheel directions', () => {
+  assert.equal(parseVolumeAssistWheelLine('{"direction":1}'), 1)
+  assert.equal(parseVolumeAssistWheelLine('{"direction":-1}'), -1)
+  assert.equal(parseVolumeAssistWheelLine('{"direction":0}'), 0)
+  assert.equal(parseVolumeAssistWheelLine('not json'), 0)
 })

@@ -114,7 +114,7 @@ docs/           接口集成与兼容性记录
 
 ## 本地数据与登录态
 
-- 登录态、偏好设置、播放统计和歌单缓存会写入 Electron 的 `userData` 目录，不会回写到仓库目录
+- 登录态、偏好设置和播放统计会写入 Electron 的 `userData` 目录；歌单缓存默认写入程序文件夹旁的 `Playlist Wall Cache` 目录，并可在设置中修改
 - 登录 cookie 保存在 `userData/session.json`
 - 在支持的平台上，程序会优先使用 Electron `safeStorage` 对 cookie 做系统级保护后再落盘
 - 如果当前环境不支持 `safeStorage`，程序仍会保持登录态，但会退回到明文 `session.json` 持久化，并在应用内给出警告

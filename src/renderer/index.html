@@ -355,6 +355,17 @@
           <div class="settings-toggle-track"><div class="settings-toggle-thumb"></div></div>
         </div>
       </label>
+      <label class="settings-row" for="concerts-enabled-toggle">
+        <div class="settings-copy">
+          <div class="settings-label">演出入口</div>
+          <div class="settings-hint">打开后显示演出页签，可查看相关演出日历。</div>
+        </div>
+        <div class="settings-toggle">
+          <input id="concerts-enabled-toggle" type="checkbox" class="settings-toggle-input">
+          <div class="settings-toggle-track"><div class="settings-toggle-thumb"></div></div>
+        </div>
+      </label>
+
       <div class="settings-row settings-row--stack" id="volume-assist-row">
         <div class="settings-copy">
           <div class="settings-label">音量辅助调节功能</div>
@@ -378,6 +389,20 @@
       </div>
 
       <div class="settings-section-label">系统</div>
+      <div class="settings-row settings-row--stack">
+        <div class="settings-copy">
+          <div class="settings-label">缓存目录</div>
+          <div class="settings-hint">默认放在程序文件夹旁的 Playlist Wall Cache 目录，不在会被一键更新替换的程序目录里面。</div>
+        </div>
+        <div class="settings-path-control">
+          <div class="settings-path-value" id="settings-cache-directory-value">正在读取...</div>
+          <div class="settings-inline-actions">
+            <button class="settings-action-btn" id="settings-cache-directory-choose-btn" type="button">选择目录</button>
+            <button class="settings-action-btn" id="settings-cache-directory-reset-btn" type="button">恢复默认</button>
+          </div>
+          <div class="settings-status" id="settings-cache-directory-status">默认：程序目录旁 Playlist Wall Cache 文件夹</div>
+        </div>
+      </div>
       <div class="settings-row settings-row--stack">
         <div class="settings-copy">
           <div class="settings-label">版本更新</div>

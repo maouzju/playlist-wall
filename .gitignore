@@ -27,3 +27,4 @@ uncategorized-tracks.json
 out/
 .DS_Store
 Thumbs.db
+.tmp-cache-directory-test/

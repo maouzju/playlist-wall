@@ -4,6 +4,7 @@ const assert = require('node:assert/strict')
 const {
   normalizeArtistTrackDisplayLimit,
   normalizeAudioQualityPreference,
+  normalizeCacheDirectoryInput,
   normalizePlaylistOrderIds,
   normalizePreferences,
   normalizeVolumeAssistSettings,
@@ -103,4 +104,18 @@ test('normalizePreferences persists window state', () => {
     width: 1400,
     height: 900,
   })
+})
+
+
+test('concertsEnabled defaults to disabled and can be persisted', () => {
+  assert.equal(normalizePreferences().concertsEnabled, false)
+  assert.equal(normalizePreferences({ concertsEnabled: true }).concertsEnabled, true)
+})
+
+
+test('normalizePreferences trims and persists custom cache directory', () => {
+  const preferences = normalizePreferences({ cacheDirectory: '  D:\Music Cache  ' })
+
+  assert.equal(preferences.cacheDirectory, 'D:\Music Cache')
+  assert.equal(normalizeCacheDirectoryInput(42), '')
 })

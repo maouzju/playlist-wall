@@ -4,8 +4,9 @@ installSafeConsole()
 
 const fs = require('fs')
 const path = require('path')
-const { app, BrowserWindow, ipcMain, screen, shell } = require('electron')
+const { app, BrowserWindow, dialog, ipcMain, screen, shell } = require('electron')
 
+const { getCacheDirectoryInfo } = require('./cache-directory')
 const { createAppUpdater } = require('./app-updater')
 const { getPlaybackStats, incrementLocalPlayCount, writeCloudPlayCounts } = require('./playback-store')
 const { readPreferences, writePreferences } = require('./preferences-store')
@@ -21,7 +22,12 @@ const {
   resolveWindowState,
 } = require('./window-state')
 const { buildWindowsTaskbarDetails } = require('./windows-taskbar')
-const { adjustWindowsSystemVolume } = require('./volume-assist')
+const {
+  VOLUME_ASSIST_TARGET_SYSTEM,
+  adjustWindowsSystemVolume,
+  createWindowsVolumeAssistWheelListener,
+  normalizeVolumeAssistSettings,
+} = require('./volume-assist')
 
 const HYDRATE_CONCURRENCY = 5
 const PLAYLIST_UNDO_NOTICE_MS = 20000
@@ -64,10 +70,13 @@ const pendingSubscribedPlaylistRemovals = new Map()
 let mainProcessDiagnosticsRegistered = false
 let windowStateSaveTimer = null
 let displayTopologyListenersRegistered = false
+let volumeAssistWheelListener = null
+let volumeAssistWheelListenerRestartTimer = null
 const appUpdater = createAppUpdater({
   app,
   owner: 'maouzju',
   repo: 'playlist-wall',
+  getCacheDirectory: () => getCacheDirectory(),
 })
 
 if (process.platform === 'win32') {
@@ -308,6 +317,83 @@ function send(channel, data) {
   }
 }
 
+
+function sendVolumeAssistWheel(direction) {
+  const normalizedDirection = Number(direction || 0) > 0 ? 1 : -1
+  try {
+    send('volume-assist-wheel', { direction: normalizedDirection })
+  } catch (error) {
+    console.warn('failed to send volume assist wheel event', error)
+  }
+}
+
+function stopVolumeAssistWheelListener() {
+  if (volumeAssistWheelListenerRestartTimer) {
+    clearTimeout(volumeAssistWheelListenerRestartTimer)
+    volumeAssistWheelListenerRestartTimer = null
+  }
+
+  if (volumeAssistWheelListener) {
+    try {
+      volumeAssistWheelListener.stop()
+    } catch (error) {
+      console.warn('failed to stop volume assist wheel listener', error)
+    }
+    volumeAssistWheelListener = null
+  }
+}
+
+function scheduleVolumeAssistWheelListenerRestart(settings) {
+  if (volumeAssistWheelListenerRestartTimer || app.isQuitting) {
+    return
+  }
+
+  volumeAssistWheelListenerRestartTimer = setTimeout(() => {
+    volumeAssistWheelListenerRestartTimer = null
+    updateVolumeAssistWheelListener(settings)
+  }, 1000)
+  if (typeof volumeAssistWheelListenerRestartTimer.unref === 'function') {
+    volumeAssistWheelListenerRestartTimer.unref()
+  }
+}
+
+function updateVolumeAssistWheelListener(rawSettings = null) {
+  const settings = normalizeVolumeAssistSettings(rawSettings || readPreferences().volumeAssist)
+  const shouldListen = process.platform === 'win32'
+    && settings.enabled
+
+  if (!shouldListen) {
+    stopVolumeAssistWheelListener()
+    return { ok: true, enabled: false }
+  }
+
+  if (volumeAssistWheelListener?.hotkey === settings.hotkey
+    && volumeAssistWheelListener?.target === settings.target) {
+    return { ok: true, enabled: true }
+  }
+
+  stopVolumeAssistWheelListener()
+
+  try {
+    volumeAssistWheelListener = createWindowsVolumeAssistWheelListener({
+      hotkey: settings.hotkey,
+      target: settings.target,
+      onWheel: sendVolumeAssistWheel,
+      onExit: ({ stopped }) => {
+        volumeAssistWheelListener = null
+        if (!stopped) {
+          scheduleVolumeAssistWheelListenerRestart(settings)
+        }
+      },
+      logger: console,
+    })
+    return { ok: true, enabled: Boolean(volumeAssistWheelListener) }
+  } catch (error) {
+    console.warn('failed to start volume assist wheel listener', error)
+    return { ok: false, error: error.message || String(error) }
+  }
+}
+
 function sendToLyrics(channel, data) {
   if (lyricsWindow && !lyricsWindow.isDestroyed()) {
     lyricsWindow.webContents.send(channel, data)
@@ -448,8 +534,63 @@ function destroyLyricsWindow() {
   }
 }
 
+function getCacheDirectory() {
+  return getCacheDirectoryInfo(readPreferences(), {
+    app,
+    execPath: process.execPath,
+    cwd: process.cwd(),
+  }).cacheDirectory
+}
+
+function getCacheDirectoryDetails() {
+  return getCacheDirectoryInfo(readPreferences(), {
+    app,
+    execPath: process.execPath,
+    cwd: process.cwd(),
+  })
+}
+
+function selectCacheDirectory(ownerWindow) {
+  const current = getCacheDirectoryDetails()
+  const result = dialog.showOpenDialogSync(ownerWindow || win || null, {
+    title: '选择缓存目录',
+    defaultPath: current.cacheDirectory,
+    properties: ['openDirectory', 'createDirectory'],
+  })
+
+  if (!Array.isArray(result) || !result[0]) {
+    return current
+  }
+
+  const selectedDirectory = path.resolve(result[0])
+  const selectedInfo = getCacheDirectoryInfo({ cacheDirectory: selectedDirectory }, {
+    app,
+    execPath: process.execPath,
+    cwd: process.cwd(),
+  })
+  if (selectedInfo.usesDefault) {
+    throw new Error('\u7f13\u5b58\u76ee\u5f55\u4e0d\u80fd\u653e\u5728\u7a0b\u5e8f\u5b89\u88c5\u76ee\u5f55\u91cc\u9762\uff0c\u8bf7\u9009\u62e9\u5b89\u88c5\u76ee\u5f55\u5916\u7684\u4f4d\u7f6e\u3002')
+  }
+
+  const preferences = writePreferences({ cacheDirectory: selectedDirectory })
+  return getCacheDirectoryInfo(preferences, {
+    app,
+    execPath: process.execPath,
+    cwd: process.cwd(),
+  })
+}
+
+function resetCacheDirectoryToDefault() {
+  const preferences = writePreferences({ cacheDirectory: '' })
+  return getCacheDirectoryInfo(preferences, {
+    app,
+    execPath: process.execPath,
+    cwd: process.cwd(),
+  })
+}
+
 function getCacheFilePath(fileName) {
-  return getUserDataFilePath(fileName)
+  return path.join(getCacheDirectory(), fileName)
 }
 
 function readJsonCache(fileName) {
@@ -490,16 +631,16 @@ function deleteJsonCache(fileName) {
 }
 
 function clearPlaylistCaches() {
-  const userDataDir = path.dirname(getCacheFilePath('playlists-current.json'))
+  const cacheDir = getCacheDirectory()
 
   try {
-    if (!fs.existsSync(userDataDir)) {
+    if (!fs.existsSync(cacheDir)) {
       return
     }
 
-    for (const entry of fs.readdirSync(userDataDir)) {
+    for (const entry of fs.readdirSync(cacheDir)) {
       if (entry === 'playlists-current.json' || /^playlist-detail-\d+\.json$/.test(entry)) {
-        fs.rmSync(path.join(userDataDir, entry), { force: true })
+        fs.rmSync(path.join(cacheDir, entry), { force: true })
       }
     }
   } catch (error) {
@@ -1555,7 +1696,36 @@ async function buildBootstrapPayload() {
 function registerIpc() {
   ipcMain.handle('getPreferences', async () => {
     try {
-      return { ok: true, preferences: readPreferences() }
+      return {
+        ok: true,
+        preferences: readPreferences(),
+        cacheDirectoryInfo: getCacheDirectoryDetails(),
+      }
+    } catch (error) {
+      return { ok: false, error: error.message || String(error) }
+    }
+  })
+
+  ipcMain.handle('getCacheDirectoryInfo', async () => {
+    try {
+      return { ok: true, ...getCacheDirectoryDetails() }
+    } catch (error) {
+      return { ok: false, error: error.message || String(error) }
+    }
+  })
+
+  ipcMain.handle('selectCacheDirectory', async (event) => {
+    try {
+      const ownerWindow = BrowserWindow.fromWebContents(event.sender)
+      return { ok: true, ...selectCacheDirectory(ownerWindow) }
+    } catch (error) {
+      return { ok: false, error: error.message || String(error) }
+    }
+  })
+
+  ipcMain.handle('resetCacheDirectory', async () => {
+    try {
+      return { ok: true, ...resetCacheDirectoryToDefault() }
     } catch (error) {
       return { ok: false, error: error.message || String(error) }
     }
@@ -1563,7 +1733,9 @@ function registerIpc() {
 
   ipcMain.handle('savePreferences', async (_event, preferences) => {
     try {
-      return { ok: true, preferences: writePreferences(preferences) }
+      const nextPreferences = writePreferences(preferences)
+      updateVolumeAssistWheelListener(nextPreferences.volumeAssist)
+      return { ok: true, preferences: nextPreferences }
     } catch (error) {
       return { ok: false, error: error.message || String(error) }
     }
@@ -2216,9 +2388,11 @@ app.whenReady().then(() => {
   cleanupLegacyWorkspaceCache()
   registerIpc()
   createWindow()
+  updateVolumeAssistWheelListener()
 })
 
 app.on('before-quit', (event) => {
+  stopVolumeAssistWheelListener()
   if (flushingPendingSubscribedPlaylistRemovals || pendingSubscribedPlaylistRemovals.size === 0) {
     return
   }

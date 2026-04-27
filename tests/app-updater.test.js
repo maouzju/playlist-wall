@@ -122,7 +122,7 @@ test('buildUpdaterScript avoids PowerShell reserved PID variable names', () => {
   const script = buildUpdaterScript()
 
   assert.equal(script.includes('param([int]$Pid)'), false)
-  assert.match(script, /Wait-ParentExit -ProcessId \$ParentPid/)
+  assert.match(script, /Wait-AppExit -ProcessId \$ParentPid/)
 
   if (process.platform !== 'win32') {
     return
@@ -204,9 +204,12 @@ test('installUpdate downloads the asset, spawns the updater script and requests 
     },
     spawnImpl: (command, args, options) => {
       spawnCalls.push({ command, args, options })
-      return {
-        unref() {},
-      }
+      const child = new EventEmitter()
+      child.unref = () => {}
+      process.nextTick(() => {
+        child.emit('spawn')
+      })
+      return child
     },
   })
 
@@ -215,8 +218,14 @@ test('installUpdate downloads the asset, spawns the updater script and requests 
   assert.equal(result.ok, true)
   assert.equal(result.scheduled, true)
   assert.equal(spawnCalls.length, 1)
-  assert.equal(path.basename(spawnCalls[0].command).toLowerCase(), 'powershell.exe')
+  assert.equal(path.win32.basename(spawnCalls[0].command).toLowerCase(), 'cmd.exe')
+  assert.deepEqual(spawnCalls[0].args.slice(0, 4), ['/c', 'start', '""', '/B'])
+  assert.equal(spawnCalls[0].args.includes('-File'), true)
+  assert.equal(spawnCalls[0].args.includes('-LogPath'), true)
+  assert.equal(spawnCalls[0].args.includes('-WaitTimeoutSeconds'), true)
   assert.match(spawnCalls[0].args.join(' '), /apply-update\.ps1/)
+  assert.equal(spawnCalls[0].options.detached, true)
+  assert.equal(spawnCalls[0].options.cwd, tempRoot)
 
   await new Promise((resolve) => setTimeout(resolve, 450))
   assert.equal(quitCalled, true)
@@ -264,9 +273,14 @@ test('installUpdate keeps downloading while data continues to arrive before the 
         }),
       }
     },
-    spawnImpl: () => ({
-      unref() {},
-    }),
+    spawnImpl: () => {
+      const child = new EventEmitter()
+      child.unref = () => {}
+      process.nextTick(() => {
+        child.emit('spawn')
+      })
+      return child
+    },
   })
 
   const result = await updater.installUpdate()
@@ -328,6 +342,10 @@ test('installUpdate falls back to PowerShell download when the fetch downloader 
           fs.writeFileSync(destinationPath, Buffer.from([80, 75, 3, 4]))
           child.emit('exit', 0)
         })
+      } else {
+        process.nextTick(() => {
+          child.emit('spawn')
+        })
       }
 
       return child
@@ -341,7 +359,9 @@ test('installUpdate falls back to PowerShell download when the fetch downloader 
   assert.equal(spawnCalls.length, 2)
   assert.equal(path.basename(spawnCalls[0].command).toLowerCase(), 'powershell.exe')
   assert.equal(spawnCalls[0].args.includes('-Command'), true)
+  assert.equal(path.win32.basename(spawnCalls[1].command).toLowerCase(), 'cmd.exe')
   assert.equal(spawnCalls[1].args.includes('-File'), true)
+  assert.equal(spawnCalls[1].args.includes('-LogPath'), true)
   assert.match(spawnCalls[0].args.join(' '), /SecurityProtocol/)
   assert.match(spawnCalls[0].args.join(' '), /Parameters\.ContainsKey\('UseBasicParsing'\)/)
   assert.match(spawnCalls[0].args.join(' '), /System\.Net\.Http\.HttpClient/)

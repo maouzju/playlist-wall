@@ -56,6 +56,7 @@ const VOLUME_ASSIST_TARGET_SYSTEM = 'system'
 const VOLUME_ASSIST_DEFAULT_HOTKEY = 'Alt'
 const VOLUME_ASSIST_STEP = 5
 const VOLUME_ASSIST_SYSTEM_THROTTLE_MS = 80
+const CONCERT_ARTIST_TITLE_MATCH_MIN_LENGTH = 2
 
 const TEXT = {
   tabOwned: '\u81ea\u5df1\u521b\u5efa',
@@ -79,6 +80,8 @@ const TEXT = {
   openConcertDetail: '\u6253\u5f00\u6f14\u51fa\u8be6\u60c5',
   openConcertDetailFailed: '\u6253\u5f00\u6f14\u51fa\u8be6\u60c5\u5931\u8d25',
   searchConcertsPlaceholder: '\u641c\u7d22\u6f14\u51fa\u3001\u827a\u4eba\u3001\u57ce\u5e02\u6216\u573a\u9986',
+  concertsFeatureDisabled: '\u6f14\u51fa\u529f\u80fd\u9ed8\u8ba4\u5173\u95ed\uff0c\u8bf7\u5728\u8bbe\u7f6e\u91cc\u5f00\u542f\u3002',
+  concertRelatedSongsLabel: '\u76f8\u5173\u6b4c\u66f2',
   loadingExplore: '\u6b63\u5728\u52a0\u8f7d\u63a2\u7d22\u6b4c\u5355...',
   loadingExploreSearch: '\u6b63\u5728\u641c\u7d22\u793e\u533a\u6b4c\u5355...',
   exploreFailed: '\u52a0\u8f7d\u63a2\u7d22\u6b4c\u5355\u5931\u8d25',
@@ -239,6 +242,7 @@ const state = {
   spotifyPlaylists: [],
   explorePlaylists: [],
   artistPlaylists: [],
+  concertEvents: [],
   concertPlaylists: [],
   playlistMap: new Map(),
   recommendations: new Map(),
@@ -306,6 +310,14 @@ const state = {
   },
   spotifySync: {
     busy: false,
+  },
+  cacheDirectory: {
+    cacheDirectory: '',
+    customCacheDirectory: '',
+    defaultCacheDirectory: '',
+    usesDefault: true,
+    busy: false,
+    error: '',
   },
   appUpdate: {
     busy: false,
@@ -473,6 +485,7 @@ function createMockBridge() {
   const progressListeners = new Set()
   const patchListeners = new Set()
   const subscribedPlaylistRemovalFailureListeners = new Set()
+  const volumeAssistWheelListeners = new Set()
   const account = { userId: 1, nickname: '\u793a\u4f8b\u8d26\u53f7' }
   let loggedIn = !authRequired
   let qrChecks = 0
@@ -499,6 +512,7 @@ function createMockBridge() {
     likedPlaylistDisplayMode: normalizeLikedPlaylistDisplayMode(storedSettings.likedPlaylistDisplayMode),
     defaultAudioQuality: normalizeAudioQualityPreference(storedSettings.defaultAudioQuality),
     autoAdjustAudioQuality: storedSettings.autoAdjustAudioQuality !== false,
+    cacheDirectory: typeof storedSettings.cacheDirectory === 'string' ? storedSettings.cacheDirectory.trim() : '',
     volumeAssist: normalizeVolumeAssistSettings(storedSettings.volumeAssist),
     showLyricsButton: Object.prototype.hasOwnProperty.call(storedSettings, 'showLyricsButton')
       ? storedSettings.showLyricsButton !== false
@@ -507,6 +521,7 @@ function createMockBridge() {
     collapsedPlaylistIds: normalizeCollapsedPlaylistIds(storedSettings.collapsedPlaylistIds),
     ownedPlaylistOrderIds: normalizePlaylistOrderIds(storedSettings.ownedPlaylistOrderIds),
     uiScale: normalizeUiScale(storedSettings.uiScale),
+    concertsEnabled: Boolean(storedSettings.concertsEnabled),
   }
   const basePlaylists = huge
     ? buildHugeMockPlaylists()
@@ -529,6 +544,11 @@ function createMockBridge() {
   window.__mockAppUpdateInstallCount = 0
   const emitProgress = (payload) => progressListeners.forEach((listener) => listener(payload))
   const emitPatch = (payload) => patchListeners.forEach((listener) => listener(payload))
+  window.__mockEmitVolumeAssistWheel = (payload) => {
+    for (const listener of volumeAssistWheelListeners) {
+      listener(payload)
+    }
+  }
   const clearPendingMockSubscribedPlaylistRemoval = (entry) => {
     if (entry?.timer) {
       window.clearTimeout(entry.timer)
@@ -717,20 +737,55 @@ function createMockBridge() {
         ? { ok: false, error: 'Invalid volume direction' }
         : { ok: true }
     },
+    getCacheDirectoryInfo: async () => ({
+      ok: true,
+      cacheDirectory: storedPreferences.cacheDirectory || 'C:\\Playlist Wall Cache',
+      customCacheDirectory: storedPreferences.cacheDirectory || '',
+      defaultCacheDirectory: 'C:\\Playlist Wall Cache',
+      usesDefault: !storedPreferences.cacheDirectory,
+    }),
+    selectCacheDirectory: async () => {
+      storedPreferences.cacheDirectory = 'D:\\Playlist Wall Cache'
+      return {
+        ok: true,
+        cacheDirectory: storedPreferences.cacheDirectory,
+        customCacheDirectory: storedPreferences.cacheDirectory,
+        defaultCacheDirectory: 'C:\\Playlist Wall Cache',
+        usesDefault: false,
+      }
+    },
+    resetCacheDirectory: async () => {
+      storedPreferences.cacheDirectory = ''
+      return {
+        ok: true,
+        cacheDirectory: 'C:\\Playlist Wall Cache',
+        customCacheDirectory: '',
+        defaultCacheDirectory: 'C:\\Playlist Wall Cache',
+        usesDefault: true,
+      }
+    },
     getPreferences: async () => ({
       ok: true,
+      cacheDirectoryInfo: {
+        cacheDirectory: storedPreferences.cacheDirectory || 'C:\\Playlist Wall Cache',
+        customCacheDirectory: storedPreferences.cacheDirectory || '',
+        defaultCacheDirectory: 'C:\\Playlist Wall Cache',
+        usesDefault: !storedPreferences.cacheDirectory,
+      },
       preferences: {
         theme: storedPreferences.theme === 'dark' ? 'dark' : 'light',
         showPlaylistRecommendations: Boolean(storedPreferences.showPlaylistRecommendations),
         likedPlaylistDisplayMode: normalizeLikedPlaylistDisplayMode(storedPreferences.likedPlaylistDisplayMode),
         defaultAudioQuality: normalizeAudioQualityPreference(storedPreferences.defaultAudioQuality),
         autoAdjustAudioQuality: storedPreferences.autoAdjustAudioQuality !== false,
+        cacheDirectory: typeof storedPreferences.cacheDirectory === 'string' ? storedPreferences.cacheDirectory : '',
         volumeAssist: normalizeVolumeAssistSettings(storedPreferences.volumeAssist),
         showLyricsButton: storedPreferences.showLyricsButton !== false,
         artistTrackDisplayLimit: normalizeArtistTrackDisplayLimit(storedPreferences.artistTrackDisplayLimit),
         collapsedPlaylistIds: normalizeCollapsedPlaylistIds(storedPreferences.collapsedPlaylistIds),
         ownedPlaylistOrderIds: normalizePlaylistOrderIds(storedPreferences.ownedPlaylistOrderIds),
         uiScale: normalizeUiScale(storedPreferences.uiScale),
+        concertsEnabled: Boolean(storedPreferences.concertsEnabled),
       },
     }),
     savePreferences: async (preferences) => {
@@ -746,6 +801,9 @@ function createMockBridge() {
         autoAdjustAudioQuality: preferences?.autoAdjustAudioQuality !== undefined
           ? preferences.autoAdjustAudioQuality !== false
           : storedPreferences.autoAdjustAudioQuality !== false,
+        cacheDirectory: preferences?.cacheDirectory !== undefined
+          ? String(preferences.cacheDirectory || '').trim()
+          : String(storedPreferences.cacheDirectory || '').trim(),
         volumeAssist: normalizeVolumeAssistSettings(
           preferences?.volumeAssist ?? storedPreferences.volumeAssist
         ),
@@ -762,6 +820,9 @@ function createMockBridge() {
           preferences?.ownedPlaylistOrderIds ?? storedPreferences.ownedPlaylistOrderIds
         ),
         uiScale: normalizeUiScale(preferences?.uiScale ?? storedPreferences.uiScale),
+        concertsEnabled: preferences?.concertsEnabled !== undefined
+          ? Boolean(preferences.concertsEnabled)
+          : Boolean(storedPreferences.concertsEnabled),
       }
       return {
         ok: true,
@@ -771,12 +832,14 @@ function createMockBridge() {
           likedPlaylistDisplayMode: normalizeLikedPlaylistDisplayMode(storedPreferences.likedPlaylistDisplayMode),
           defaultAudioQuality: normalizeAudioQualityPreference(storedPreferences.defaultAudioQuality),
           autoAdjustAudioQuality: storedPreferences.autoAdjustAudioQuality !== false,
+          cacheDirectory: typeof storedPreferences.cacheDirectory === 'string' ? storedPreferences.cacheDirectory : '',
           volumeAssist: normalizeVolumeAssistSettings(storedPreferences.volumeAssist),
           showLyricsButton: storedPreferences.showLyricsButton !== false,
           artistTrackDisplayLimit: normalizeArtistTrackDisplayLimit(storedPreferences.artistTrackDisplayLimit),
           collapsedPlaylistIds: normalizeCollapsedPlaylistIds(storedPreferences.collapsedPlaylistIds),
           ownedPlaylistOrderIds: normalizePlaylistOrderIds(storedPreferences.ownedPlaylistOrderIds),
           uiScale: normalizeUiScale(storedPreferences.uiScale),
+          concertsEnabled: Boolean(storedPreferences.concertsEnabled),
         },
       }
     },
@@ -969,10 +1032,10 @@ function createMockBridge() {
           {
             id: 801001,
             eventId: 'mock-concert-1',
-            title: '\u827a\u4eba 1 \u4e16\u754c\u5de1\u6f14',
-            name: '\u827a\u4eba 1 \u4e16\u754c\u5de1\u6f14',
-            artists: ['\u827a\u4eba 1'],
-            artistEntries: [{ id: 1, name: '\u827a\u4eba 1' }],
+            title: '\u827a\u672f\u5bb6 1 \u4e16\u754c\u5de1\u6f14',
+            name: '\u827a\u672f\u5bb6 1 \u4e16\u754c\u5de1\u6f14',
+            artists: ['\u827a\u672f\u5bb6 1'],
+            artistEntries: [{ id: 1, name: '\u827a\u672f\u5bb6 1' }],
             city: '\u4e0a\u6d77',
             venue: '\u6885\u5954\u4e2d\u5fc3-\u4e3b\u573a\u9986',
             startTime: Date.now() + 14 * 24 * 60 * 60 * 1000,
@@ -985,8 +1048,8 @@ function createMockBridge() {
             eventId: 'mock-concert-2',
             title: '\u590f\u65e5\u97f3\u4e50\u8282',
             name: '\u590f\u65e5\u97f3\u4e50\u8282',
-            artists: ['\u827a\u4eba 2', '\u827a\u4eba 5'],
-            artistEntries: [{ id: 2, name: '\u827a\u4eba 2' }, { id: 5, name: '\u827a\u4eba 5' }],
+            artists: ['\u827a\u672f\u5bb6 2', '\u827a\u672f\u5bb6 5'],
+            artistEntries: [{ id: 2, name: '\u827a\u672f\u5bb6 2' }, { id: 5, name: '\u827a\u672f\u5bb6 5' }],
             city: '\u5317\u4eac',
             venue: '\u51ef\u8fea\u62c9\u514b\u4e2d\u5fc3',
             startTime: Date.now() + 46 * 24 * 60 * 60 * 1000,
@@ -1144,6 +1207,10 @@ function createMockBridge() {
     onSubscribedPlaylistRemovalFailed: (callback) => {
       subscribedPlaylistRemovalFailureListeners.add(callback)
       return () => subscribedPlaylistRemovalFailureListeners.delete(callback)
+    },
+    onVolumeAssistWheel: (callback) => {
+      volumeAssistWheelListeners.add(callback)
+      return () => volumeAssistWheelListeners.delete(callback)
     },
   }
 }
@@ -1955,11 +2022,16 @@ function cacheRefs() {
   refs.likedPlaylistDisplayModeSelect = document.getElementById('liked-playlist-display-mode-select')
   refs.defaultAudioQualitySelect = document.getElementById('default-audio-quality-select')
   refs.autoAdjustAudioQualityToggle = document.getElementById('auto-adjust-audio-quality-toggle')
+  refs.concertsEnabledToggle = document.getElementById('concerts-enabled-toggle')
   refs.volumeAssistToggle = document.getElementById('volume-assist-toggle')
   refs.volumeAssistHotkeyBtn = document.getElementById('volume-assist-hotkey-btn')
   refs.volumeAssistTargetSelect = document.getElementById('volume-assist-target-select')
   refs.volumeAssistStatus = document.getElementById('volume-assist-status')
   refs.lyricsButtonToggle = document.getElementById('lyrics-button-toggle')
+  refs.settingsCacheDirectoryValue = document.getElementById('settings-cache-directory-value')
+  refs.settingsCacheDirectoryStatus = document.getElementById('settings-cache-directory-status')
+  refs.settingsCacheDirectoryChooseBtn = document.getElementById('settings-cache-directory-choose-btn')
+  refs.settingsCacheDirectoryResetBtn = document.getElementById('settings-cache-directory-reset-btn')
   refs.settingsUpdateHint = document.getElementById('settings-update-hint')
   refs.settingsUpdateStatus = document.getElementById('settings-update-status')
   refs.settingsUpdateCheckBtn = document.getElementById('settings-update-check-btn')
@@ -2068,10 +2140,17 @@ function bindEvents() {
   refs.likedPlaylistDisplayModeSelect.addEventListener('change', handleSettingsChange)
   refs.defaultAudioQualitySelect.addEventListener('change', handleSettingsChange)
   refs.autoAdjustAudioQualityToggle.addEventListener('change', handleSettingsChange)
+  refs.concertsEnabledToggle.addEventListener('change', handleSettingsChange)
   refs.volumeAssistToggle.addEventListener('change', handleSettingsChange)
   refs.volumeAssistTargetSelect.addEventListener('change', handleSettingsChange)
   refs.volumeAssistHotkeyBtn.addEventListener('click', startVolumeAssistHotkeyRecording)
   refs.lyricsButtonToggle.addEventListener('change', handleSettingsChange)
+  refs.settingsCacheDirectoryChooseBtn.addEventListener('click', () => {
+    void chooseCacheDirectory()
+  })
+  refs.settingsCacheDirectoryResetBtn.addEventListener('click', () => {
+    void resetCacheDirectory()
+  })
   refs.settingsUpdateCheckBtn.addEventListener('click', () => {
     void refreshAppUpdateStatus({ force: true })
   })
@@ -2240,6 +2319,9 @@ function wireBridge() {
   }
   if (appBridge && typeof appBridge.onSubscribedPlaylistRemovalFailed === 'function') {
     appBridge.onSubscribedPlaylistRemovalFailed((payload) => handleSubscribedPlaylistRemovalFailed(payload))
+  }
+  if (appBridge && typeof appBridge.onVolumeAssistWheel === 'function') {
+    appBridge.onVolumeAssistWheel((payload) => handleGlobalVolumeAssistWheel(payload))
   }
   if (appBridge && typeof appBridge.onLyricsWindowState === 'function') {
     appBridge.onLyricsWindowState((payload) => {
@@ -3161,12 +3243,41 @@ function renderConcertLoadingState() {
   scheduleWallRenderWithOptions({ immediate: true, syncAll: true })
 }
 
+function isConcertsFeatureEnabled() {
+  return Boolean(state.settings.concertsEnabled)
+}
+
 function silentlyPreloadConcertPlaylists() {
-  if (!canUseNeteaseFeatures() || state.activeTab === 'concerts' || state.concertsLoaded || state.concertsLoading) {
+  if (!isConcertsFeatureEnabled() || !canUseNeteaseFeatures() || state.activeTab === 'concerts' || state.concertsLoaded || state.concertsLoading) {
     return
   }
 
   void loadConcertPlaylists()
+}
+
+
+function handleConcertsEnabledChange() {
+  if (!isConcertsFeatureEnabled()) {
+    state.concertCityFilter = ''
+    if (state.activeTab === 'concerts') {
+      void setActiveTab(getOwnedPlaylists().length ? 'owned' : 'subscribed')
+      return
+    }
+    renderTabs()
+    renderHeader()
+    applyFilters({ syncAll: true })
+    return
+  }
+
+  if (state.activeTab === 'concerts') {
+    void loadConcertPlaylists({ force: true })
+    return
+  }
+
+  silentlyPreloadConcertPlaylists()
+  renderTabs()
+  renderHeader()
+  applyFilters({ syncAll: true })
 }
 
 function normalizeConcertArtistEntries(event) {
@@ -3201,6 +3312,104 @@ function normalizeConcertArtistEntries(event) {
   })
 }
 
+
+function normalizeArtistNameForConcertMatch(name = '') {
+  return normalizeQuery(name)
+    .replace(/[\s\u3000??.?'??"??_\-??:?,?;?/\\|??()\[\]??{}<>??]+/g, '')
+}
+
+function getConcertArtistKeys(event) {
+  return normalizeConcertArtistEntries(event)
+    .map((artist) => buildArtistKey(artist.id, artist.name))
+    .filter(Boolean)
+}
+
+function getConcertArtistNameTokens(event) {
+  return normalizeConcertArtistEntries(event)
+    .map((artist) => normalizeArtistNameForConcertMatch(artist.name))
+    .filter((name) => name.length >= CONCERT_ARTIST_TITLE_MATCH_MIN_LENGTH)
+}
+
+function eventTitleMatchesConcertArtist(event, entry) {
+  const titleText = normalizeArtistNameForConcertMatch([
+    event?.title || '',
+    event?.name || '',
+  ].join(' '))
+  const artistName = normalizeArtistNameForConcertMatch(entry?.name || '')
+  return Boolean(
+    titleText
+    && artistName.length >= CONCERT_ARTIST_TITLE_MATCH_MIN_LENGTH
+    && titleText.includes(artistName)
+  )
+}
+
+function getConcertArtistMatchEntries(event) {
+  const artistKeys = new Set(getConcertArtistKeys(event))
+  const artistNameTokens = getConcertArtistNameTokens(event)
+  const matched = []
+  const seen = new Set()
+
+  for (const entry of state.artistPlaylistEntriesByKey.values()) {
+    if (!entry?.trackMap?.size) {
+      continue
+    }
+
+    const entryKey = String(entry.key || '').trim()
+    const entryName = normalizeArtistNameForConcertMatch(entry.name || '')
+    const keyMatched = entryKey && artistKeys.has(entryKey)
+    const nameMatched = entryName
+      && artistNameTokens.some((name) => name === entryName || name.includes(entryName) || entryName.includes(name))
+    const titleMatched = eventTitleMatchesConcertArtist(event, entry)
+
+    if (!keyMatched && !nameMatched && !titleMatched) {
+      continue
+    }
+
+    if (seen.has(entry.key)) {
+      continue
+    }
+
+    seen.add(entry.key)
+    matched.push(entry)
+  }
+
+  return matched
+}
+
+function buildConcertRelatedTracks(event) {
+  const seenTrackIds = new Set()
+  return getConcertArtistMatchEntries(event)
+    .flatMap((entry) => getArtistTrackStats(entry)
+      .sort(compareArtistTracks)
+      .map((track) => ({ track, entry })))
+    .filter(({ track }) => {
+      const trackId = Number(track?.id || 0)
+      if (trackId <= 0 || seenTrackIds.has(trackId)) {
+        return false
+      }
+      seenTrackIds.add(trackId)
+      return true
+    })
+    .map(({ track, entry }, index) => normalizePlaylistTrack({
+      ...toArtistTrackOutput(track, index + 1),
+      concertMatchedArtistName: entry.name || '',
+    }, index))
+}
+
+function rebuildConcertPlaylists() {
+  const events = Array.isArray(state.concertEvents) ? state.concertEvents : []
+  if (!events.length) {
+    state.concertPlaylists = []
+    refreshPlaylistMap()
+    return
+  }
+
+  state.concertPlaylists = events
+    .map((event, index) => buildConcertPlaylistFromEvent(event, index))
+    .filter((playlist) => (playlist.tracks || []).length > 0)
+  refreshPlaylistMap()
+}
+
 function buildConcertPlaylistFromEvent(event, index = 0) {
   const rawId = String(event?.eventId || event?.id || `${event?.title || event?.name || 'concert'}:${event?.startTime || index}`)
   const numericEventId = Number(event?.id || event?.eventId || 0)
@@ -3215,6 +3424,7 @@ function buildConcertPlaylistFromEvent(event, index = 0) {
   const endTime = Number(event?.endTime || 0)
   const title = String(event?.title || event?.name || TEXT.tabConcerts).trim()
     || TEXT.tabConcerts
+  const relatedTracks = buildConcertRelatedTracks(event)
   const metaText = [
     formatConcertDateTime(startTime),
     city,
@@ -3226,7 +3436,7 @@ function buildConcertPlaylistFromEvent(event, index = 0) {
     id: -Math.abs(stableId),
     sourcePlaylistId: stableId,
     name: title,
-    trackCount: 0,
+    trackCount: relatedTracks.length,
     coverUrl: event?.coverUrl || '',
     creatorName: city || TEXT.tabConcerts,
     description: metaText,
@@ -3240,13 +3450,19 @@ function buildConcertPlaylistFromEvent(event, index = 0) {
     concertEndTime: endTime,
     concertArtists: artistNames,
     concertArtistEntries: artistEntries,
-    tracks: [],
+    tracks: relatedTracks,
     hydrated: true,
   })
 }
 
+function setConcertEvents(events) {
+  state.concertEvents = Array.isArray(events) ? events : []
+  rebuildConcertPlaylists()
+  state.concertsLoaded = true
+}
+
 function setConcertPlaylists(playlists) {
-  state.concertPlaylists = playlists
+  state.concertPlaylists = Array.isArray(playlists) ? playlists : []
   state.concertsLoaded = true
   refreshPlaylistMap()
 }
@@ -3255,6 +3471,16 @@ async function loadConcertPlaylists({ force = false } = {}) {
   if (state.concertsLoading && renderRuntime.concertRequestPromise) {
     renderConcertLoadingState()
     await renderRuntime.concertRequestPromise
+    return
+  }
+
+  if (!isConcertsFeatureEnabled()) {
+    state.concertsLoading = false
+    state.concertsError = ''
+    setConcertEvents([])
+    if (state.activeTab === 'concerts') {
+      applyFilters({ syncAll: true })
+    }
     return
   }
 
@@ -3288,7 +3514,7 @@ async function loadConcertPlaylists({ force = false } = {}) {
     state.concertsLoading = false
     if (!result?.ok) {
       state.concertsError = result?.error || TEXT.concertsFailed
-      setConcertPlaylists([])
+      setConcertEvents([])
       renderTabs()
       if (state.activeTab === 'concerts') {
         showToast(state.concertsError, 'error')
@@ -3299,7 +3525,7 @@ async function loadConcertPlaylists({ force = false } = {}) {
 
     state.concertsError = ''
     const events = Array.isArray(result?.events) ? result.events : []
-    setConcertPlaylists(events.map(buildConcertPlaylistFromEvent))
+    setConcertEvents(events)
     renderTabs()
     if (state.activeTab === 'concerts') {
       applyFilters({ syncAll: true })
@@ -3530,6 +3756,7 @@ function resetAppState() {
   state.spotifyPlaylists = []
   state.explorePlaylists = []
   state.artistPlaylists = []
+  state.concertEvents = []
   state.concertPlaylists = []
   state.playlistMap = new Map()
   state.recommendations = new Map()
@@ -4280,6 +4507,7 @@ function setPlaylists(playlists) {
   rebuildTrackPlayTiers()
   rebuildArtistIndex()
   rebuildArtistPlaylists()
+  rebuildConcertPlaylists()
   refreshPlaylistMap()
   silentlyPreloadArtistPlaylists()
   refreshAllRecommendationTracks()
@@ -4488,6 +4716,14 @@ function setConcertCityFilter(city = '', { syncAll = true } = {}) {
   }
   state.concertCityFilter = nextCity
   if (state.activeTab === 'concerts') {
+    if (!isConcertsFeatureEnabled()) {
+      state.visiblePlaylists = []
+      renderConcertLocationFilter()
+      pruneTrackSelection()
+      renderEmptyState([])
+      scheduleWallRenderWithOptions({ immediate: true, syncAll })
+      return
+    }
     renderConcertLocationFilter()
     applyFilters({ syncAll })
   }
@@ -4884,6 +5120,10 @@ function activateTab(tab, { restoreTargetScroll = true } = {}) {
 async function setActiveTab(tab) {
   if (state.activeTab === tab) return
   closeContextMenu()
+  if (tab === 'concerts' && !isConcertsFeatureEnabled()) {
+    showToast(TEXT.concertsFeatureDisabled)
+    return
+  }
   if ((tab === 'explore' || tab === 'concerts') && !canUseNeteaseFeatures()) {
     showToast(tab === 'concerts' ? TEXT.concertsFailed : TEXT.exploreRequiresNetease, 'error')
     return
@@ -4910,7 +5150,7 @@ function renderTabs() {
   refs.tabSpotifyCount.textContent = spotifyCount
   refs.tabSubscribedCount.textContent = subscribedCount
   refs.tabExploreCount.textContent = exploreCount
-  const concertsCount = formatNumber(getConcertPlaylists().length)
+  const concertsCount = formatNumber(isConcertsFeatureEnabled() ? getConcertPlaylists().length : 0)
   refs.tabArtistsCount.textContent = artistsCount
   refs.tabConcertsCount.textContent = concertsCount
   setButtonLabel(refs.tabOwned, `${TEXT.tabOwned} ${ownedCount}`)
@@ -4933,7 +5173,7 @@ function renderTabs() {
   refs.tabConcerts.setAttribute('aria-selected', String(state.activeTab === 'concerts'))
   refs.tabSpotify.classList.toggle('hidden', !state.spotifyImport.connected && !state.spotifyPlaylists.length)
   refs.tabExplore.disabled = !canUseNeteaseFeatures()
-  refs.tabConcerts.disabled = !canUseNeteaseFeatures()
+  refs.tabConcerts.disabled = !canUseNeteaseFeatures() || !isConcertsFeatureEnabled()
 }
 
 function renderConcertLocationFilter() {
@@ -4941,7 +5181,7 @@ function renderConcertLocationFilter() {
     return
   }
 
-  const show = state.activeTab === 'concerts'
+  const show = state.activeTab === 'concerts' && isConcertsFeatureEnabled()
   refs.concertLocationFilter.classList.toggle('hidden', !show)
   if (!show) {
     refs.concertLocationFilter.replaceChildren()
@@ -5062,6 +5302,14 @@ function applyFilters({ syncAll = false } = {}) {
   }
 
   if (state.activeTab === 'concerts') {
+    if (!isConcertsFeatureEnabled()) {
+      state.visiblePlaylists = []
+      renderConcertLocationFilter()
+      pruneTrackSelection()
+      renderEmptyState([])
+      scheduleWallRenderWithOptions({ immediate: true, syncAll })
+      return
+    }
     renderConcertLocationFilter()
     const cityFilter = String(state.concertCityFilter || '').trim()
     const filteredSource = cityFilter
@@ -5194,6 +5442,12 @@ function renderEmptyState(sourcePlaylists) {
   if (state.activeTab === 'explore' && state.exploreLoading) {
     refs.wallEmpty.querySelector('.empty-title').textContent = TEXT.loadingExplore
     refs.wallEmpty.querySelector('.empty-copy').textContent = '\u6b63\u5728\u62c9\u53d6\u6bcf\u65e5\u63a8\u9001\u4e0e\u793e\u533a\u6b4c\u5355\u3002'
+    return
+  }
+
+  if (state.activeTab === 'concerts' && !isConcertsFeatureEnabled()) {
+    refs.wallEmpty.querySelector('.empty-title').textContent = TEXT.tabConcerts
+    refs.wallEmpty.querySelector('.empty-copy').textContent = TEXT.concertsFeatureDisabled
     return
   }
 
@@ -10235,6 +10489,41 @@ function renderVolumeAssistSettings() {
   refs.volumeAssistStatus.textContent = `当前：${settings.hotkey}${TEXT.volumeAssistShortcutSuffix}`
 }
 
+function renderCacheDirectorySettings() {
+  if (!refs.settingsCacheDirectoryValue || !refs.settingsCacheDirectoryStatus) {
+    return
+  }
+
+  const info = state.cacheDirectory || {}
+  const cacheDirectory = String(info.cacheDirectory || info.defaultCacheDirectory || '').trim()
+  const defaultDirectory = String(info.defaultCacheDirectory || '').trim()
+  refs.settingsCacheDirectoryValue.textContent = info.busy
+    ? '正在处理...'
+    : (cacheDirectory || '未设置')
+  refs.settingsCacheDirectoryStatus.textContent = info.error
+    ? `缓存目录设置失败：${info.error}`
+    : info.usesDefault
+      ? `default cache directory: ${defaultDirectory || 'Playlist Wall Cache'}`
+      : `custom cache directory; default: ${defaultDirectory || 'Playlist Wall Cache'}`
+  refs.settingsCacheDirectoryStatus.classList.toggle('is-error', Boolean(info.error))
+  refs.settingsCacheDirectoryStatus.classList.toggle('is-highlight', Boolean(cacheDirectory) && !info.error)
+  if (refs.settingsCacheDirectoryChooseBtn) {
+    refs.settingsCacheDirectoryChooseBtn.disabled = Boolean(info.busy)
+  }
+  if (refs.settingsCacheDirectoryResetBtn) {
+    refs.settingsCacheDirectoryResetBtn.disabled = Boolean(info.busy || info.usesDefault)
+  }
+}
+
+function applyCacheDirectoryInfo(info = {}) {
+  state.cacheDirectory.cacheDirectory = String(info.cacheDirectory || '').trim()
+  state.cacheDirectory.customCacheDirectory = String(info.customCacheDirectory || '').trim()
+  state.cacheDirectory.defaultCacheDirectory = String(info.defaultCacheDirectory || '').trim()
+  state.cacheDirectory.usesDefault = info.usesDefault !== false
+  state.cacheDirectory.error = ''
+  state.settings.cacheDirectory = state.cacheDirectory.customCacheDirectory
+}
+
 function renderSettings() {
   syncSpotifyImportActionLabels()
   applyUiScale(state.settings.uiScale)
@@ -10246,9 +10535,11 @@ function renderSettings() {
     state.settings.defaultAudioQuality
   )
   refs.autoAdjustAudioQualityToggle.checked = state.settings.autoAdjustAudioQuality !== false
+  refs.concertsEnabledToggle.checked = Boolean(state.settings.concertsEnabled)
   renderVolumeAssistSettings()
   refs.lyricsButtonToggle.checked = shouldShowLyricsButton()
   syncLyricsButtonVisibility()
+  renderCacheDirectorySettings()
   const spotifyBusy = Boolean(state.spotifyImport.busy)
   const spotifyConnected = Boolean(state.spotifyImport.connected)
   const spotifySyncBusy = Boolean(state.spotifySync.busy)
@@ -10632,6 +10923,75 @@ async function deleteOwnedPlaylistFromEditor() {
   }
 }
 
+async function refreshCacheDirectoryInfo() {
+  if (!appBridge || typeof appBridge.getCacheDirectoryInfo !== 'function') {
+    renderCacheDirectorySettings()
+    return
+  }
+
+  const result = await appBridge.getCacheDirectoryInfo()
+  if (result?.ok) {
+    applyCacheDirectoryInfo(result)
+  } else {
+    state.cacheDirectory.error = result?.error || '读取缓存目录失败'
+  }
+  renderCacheDirectorySettings()
+}
+
+async function chooseCacheDirectory() {
+  if (!appBridge || typeof appBridge.selectCacheDirectory !== 'function') {
+    state.cacheDirectory.error = '当前环境不支持选择缓存目录'
+    renderCacheDirectorySettings()
+    showToast(state.cacheDirectory.error, 'error')
+    return
+  }
+
+  state.cacheDirectory.busy = true
+  state.cacheDirectory.error = ''
+  renderCacheDirectorySettings()
+
+  const result = await appBridge.selectCacheDirectory()
+  state.cacheDirectory.busy = false
+  if (result?.ok) {
+    applyCacheDirectoryInfo(result)
+    saveSettings()
+    renderSettings()
+    showToast('缓存目录已更新，后续缓存会写入新目录')
+    return
+  }
+
+  state.cacheDirectory.error = result?.error || '选择缓存目录失败'
+  renderCacheDirectorySettings()
+  showToast(state.cacheDirectory.error, 'error')
+}
+
+async function resetCacheDirectory() {
+  if (!appBridge || typeof appBridge.resetCacheDirectory !== 'function') {
+    state.cacheDirectory.error = '当前环境不支持恢复默认缓存目录'
+    renderCacheDirectorySettings()
+    showToast(state.cacheDirectory.error, 'error')
+    return
+  }
+
+  state.cacheDirectory.busy = true
+  state.cacheDirectory.error = ''
+  renderCacheDirectorySettings()
+
+  const result = await appBridge.resetCacheDirectory()
+  state.cacheDirectory.busy = false
+  if (result?.ok) {
+    applyCacheDirectoryInfo(result)
+    saveSettings()
+    renderSettings()
+    showToast('已恢复默认缓存目录')
+    return
+  }
+
+  state.cacheDirectory.error = result?.error || '恢复默认缓存目录失败'
+  renderCacheDirectorySettings()
+  showToast(state.cacheDirectory.error, 'error')
+}
+
 function handleSettingsChange() {
   const nextShowPlaylistRecommendations = refs.playlistRecommendationsToggle.checked
   const nextLikedPlaylistDisplayMode = normalizeLikedPlaylistDisplayMode(
@@ -10641,6 +11001,7 @@ function handleSettingsChange() {
     refs.defaultAudioQualitySelect.value
   )
   const nextAutoAdjustAudioQuality = refs.autoAdjustAudioQualityToggle.checked
+  const nextConcertsEnabled = refs.concertsEnabledToggle.checked
   const nextVolumeAssist = normalizeVolumeAssistSettings({
     enabled: refs.volumeAssistToggle.checked,
     target: refs.volumeAssistTargetSelect.value,
@@ -10651,6 +11012,7 @@ function handleSettingsChange() {
   const audioQualityChanged = nextDefaultAudioQuality !== state.settings.defaultAudioQuality
     || nextAutoAdjustAudioQuality !== state.settings.autoAdjustAudioQuality
   const lyricsButtonChanged = nextShowLyricsButton !== shouldShowLyricsButton()
+  const concertsEnabledChanged = nextConcertsEnabled !== Boolean(state.settings.concertsEnabled)
 
   state.settings.showPlaylistRecommendations = nextShowPlaylistRecommendations
   state.settings.likedPlaylistDisplayMode = nextLikedPlaylistDisplayMode
@@ -10658,6 +11020,7 @@ function handleSettingsChange() {
   state.settings.autoAdjustAudioQuality = nextAutoAdjustAudioQuality
   state.settings.volumeAssist = nextVolumeAssist
   state.settings.showLyricsButton = nextShowLyricsButton
+  state.settings.concertsEnabled = nextConcertsEnabled
 
   if (recommendationsChanged) {
     resetRecommendationRuntime()
@@ -10670,6 +11033,10 @@ function handleSettingsChange() {
   renderVolumeAssistSettings()
   if (audioQualityChanged) {
     scheduleAudioQualityRefresh(AUDIO_QUALITY_REFRESH_REASON_SETTINGS)
+  }
+  if (concertsEnabledChanged) {
+    handleConcertsEnabledChange()
+    return
   }
   applyFilters({ syncAll: true })
 }
@@ -10758,6 +11125,20 @@ function handleVolumeAssistKeyup(event) {
 
 function clearVolumeAssistPressedKeys() {
   state.volumeAssist.pressedKeys.clear()
+}
+
+function handleGlobalVolumeAssistWheel(payload = {}) {
+  const direction = Number(payload?.direction || 0)
+  if (direction === 0) {
+    return
+  }
+
+  const settings = getVolumeAssistSettings()
+  if (!settings.enabled || state.volumeAssist.recording || settings.target !== VOLUME_ASSIST_TARGET_APP) {
+    return
+  }
+
+  adjustAppVolumeByAssist(direction)
 }
 
 function handleVolumeAssistWheel(event) {
@@ -10883,6 +11264,7 @@ function loadStoredSettings() {
       likedPlaylistDisplayMode: normalizeLikedPlaylistDisplayMode(parsed.likedPlaylistDisplayMode),
       defaultAudioQuality: normalizeAudioQualityPreference(parsed.defaultAudioQuality),
       autoAdjustAudioQuality: parsed.autoAdjustAudioQuality !== false,
+      cacheDirectory: typeof parsed.cacheDirectory === 'string' ? parsed.cacheDirectory.trim() : '',
       volumeAssist: normalizeVolumeAssistSettings(parsed.volumeAssist),
       showLyricsButton: Object.prototype.hasOwnProperty.call(parsed, 'showLyricsButton')
         ? parsed.showLyricsButton !== false
@@ -10891,6 +11273,7 @@ function loadStoredSettings() {
       collapsedPlaylistIds: normalizeCollapsedPlaylistIds(parsed.collapsedPlaylistIds),
       ownedPlaylistOrderIds: normalizePlaylistOrderIds(parsed.ownedPlaylistOrderIds),
       uiScale: normalizeUiScale(parsed.uiScale),
+      concertsEnabled: Boolean(parsed.concertsEnabled),
     }
   } catch {
     return {
@@ -10898,12 +11281,14 @@ function loadStoredSettings() {
       likedPlaylistDisplayMode: LIKED_PLAYLIST_DISPLAY_MODE_ALL,
       defaultAudioQuality: AUDIO_QUALITY_BEST,
       autoAdjustAudioQuality: true,
+      cacheDirectory: '',
       volumeAssist: normalizeVolumeAssistSettings(),
       showLyricsButton: true,
       artistTrackDisplayLimit: ARTIST_TRACK_DISPLAY_LIMIT_DEFAULT,
       collapsedPlaylistIds: [],
       ownedPlaylistOrderIds: [],
       uiScale: UI_SCALE_DEFAULT,
+      concertsEnabled: false,
     }
   }
 }
@@ -10929,6 +11314,14 @@ async function hydrateStoredPreferences() {
     result.preferences.defaultAudioQuality
   )
   state.settings.autoAdjustAudioQuality = result.preferences.autoAdjustAudioQuality !== false
+  state.settings.cacheDirectory = typeof result.preferences.cacheDirectory === 'string'
+    ? result.preferences.cacheDirectory.trim()
+    : ''
+  if (result.cacheDirectoryInfo) {
+    applyCacheDirectoryInfo(result.cacheDirectoryInfo)
+  } else {
+    await refreshCacheDirectoryInfo()
+  }
   state.settings.volumeAssist = normalizeVolumeAssistSettings(result.preferences.volumeAssist)
   state.settings.showLyricsButton = result.preferences.showLyricsButton !== false
   state.settings.artistTrackDisplayLimit = normalizeArtistTrackDisplayLimit(
@@ -10941,6 +11334,7 @@ async function hydrateStoredPreferences() {
     result.preferences.ownedPlaylistOrderIds
   )
   state.settings.uiScale = normalizeUiScale(result.preferences.uiScale)
+  state.settings.concertsEnabled = Boolean(result.preferences.concertsEnabled)
 
   try {
     window.localStorage.setItem(THEME_STORAGE_KEY, state.theme)
@@ -10959,12 +11353,16 @@ async function persistPreferences() {
     likedPlaylistDisplayMode: normalizeLikedPlaylistDisplayMode(state.settings.likedPlaylistDisplayMode),
     defaultAudioQuality: normalizeAudioQualityPreference(state.settings.defaultAudioQuality),
     autoAdjustAudioQuality: state.settings.autoAdjustAudioQuality !== false,
+    cacheDirectory: typeof state.settings.cacheDirectory === 'string'
+      ? state.settings.cacheDirectory.trim()
+      : '',
     volumeAssist: normalizeVolumeAssistSettings(state.settings.volumeAssist),
     showLyricsButton: state.settings.showLyricsButton !== false,
     artistTrackDisplayLimit: normalizeArtistTrackDisplayLimit(state.settings.artistTrackDisplayLimit),
     collapsedPlaylistIds: normalizeCollapsedPlaylistIds(state.settings.collapsedPlaylistIds),
     ownedPlaylistOrderIds: normalizePlaylistOrderIds(state.settings.ownedPlaylistOrderIds),
     uiScale: normalizeUiScale(state.settings.uiScale),
+    concertsEnabled: Boolean(state.settings.concertsEnabled),
   })
 }
 

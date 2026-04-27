@@ -1,5 +1,6 @@
 const fs = require('fs')
 
+const { normalizeCacheDirectoryInput } = require('./cache-directory')
 const { getUserDataFilePath } = require('./session-store')
 const { getDefaultWindowState, normalizeWindowState } = require('./window-state')
 
@@ -242,10 +243,12 @@ function normalizePreferences(input = {}) {
   return {
     theme: input?.theme === 'dark' ? 'dark' : 'light',
     showPlaylistRecommendations: Boolean(input?.showPlaylistRecommendations),
+    concertsEnabled: Boolean(input?.concertsEnabled),
     showLyricsButton: hasShowLyricsButton ? input.showLyricsButton !== false : true,
     likedPlaylistDisplayMode: normalizeLikedPlaylistDisplayMode(input?.likedPlaylistDisplayMode),
     defaultAudioQuality: normalizeAudioQualityPreference(input?.defaultAudioQuality),
     autoAdjustAudioQuality: input?.autoAdjustAudioQuality !== false,
+    cacheDirectory: normalizeCacheDirectoryInput(input?.cacheDirectory),
     volumeAssist: normalizeVolumeAssistSettings(input?.volumeAssist),
     artistTrackDisplayLimit: normalizeArtistTrackDisplayLimit(input?.artistTrackDisplayLimit),
     collapsedPlaylistIds: normalizeCollapsedPlaylistIds(input?.collapsedPlaylistIds),
@@ -311,6 +314,7 @@ module.exports = {
   readPreferences,
   writePreferences,
   normalizePreferences,
+  normalizeCacheDirectoryInput,
   normalizeAudioQualityPreference,
   normalizeVolumeAssistSettings,
   normalizeArtistTrackDisplayLimit,

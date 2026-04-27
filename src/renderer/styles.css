@@ -905,6 +905,24 @@ button:focus-visible,
   align-items: center;
 }
 
+.settings-path-control {
+  display: grid;
+  gap: 8px;
+}
+
+.settings-path-value {
+  max-width: 100%;
+  padding: 7px 10px;
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+  background: var(--surface-soft);
+  color: var(--text);
+  font-size: 11px;
+  line-height: 1.45;
+  word-break: break-all;
+  user-select: text;
+}
+
 .settings-hotkey-btn {
   min-width: 112px;
   min-height: 32px;

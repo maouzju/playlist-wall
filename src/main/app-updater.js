@@ -5,6 +5,7 @@ const DEFAULT_CACHE_TTL_MS = 30 * 60 * 1000
 const DEFAULT_REQUEST_TIMEOUT_MS = 20 * 1000
 const DEFAULT_DOWNLOAD_IDLE_TIMEOUT_MS = 60 * 1000
 const DEFAULT_QUIT_GRACE_MS = 2 * 1000
+const DEFAULT_UPDATE_WAIT_TIMEOUT_SECONDS = 30
 const DEFAULT_OWNER = 'maouzju'
 const DEFAULT_REPO = 'playlist-wall'
 const MAX_CAPTURED_PROCESS_OUTPUT = 8 * 1024
@@ -397,6 +398,76 @@ function getPowerShellExecutable() {
   return 'powershell.exe'
 }
 
+function getCmdExecutable() {
+  const comspec = process.env.ComSpec || process.env.COMSPEC
+  if (comspec) {
+    return comspec
+  }
+
+  const systemRoot = process.env.SystemRoot || process.env.WINDIR
+  if (systemRoot) {
+    return path.join(systemRoot, 'System32', 'cmd.exe')
+  }
+
+  return 'cmd.exe'
+}
+
+async function launchDetachedPowerShellScriptFile({ scriptPath, args = [], cwd, spawnImpl = spawn }) {
+  if (typeof spawnImpl !== 'function') {
+    throw new Error('PowerShell launcher is unavailable.')
+  }
+
+  const command = getCmdExecutable()
+  const child = spawnImpl(command, [
+    '/c',
+    'start',
+    '""',
+    '/B',
+    getPowerShellExecutable(),
+    '-NoProfile',
+    '-ExecutionPolicy',
+    'Bypass',
+    '-File',
+    scriptPath,
+    ...args,
+  ], {
+    cwd,
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: true,
+  })
+
+  await new Promise((resolve, reject) => {
+    let settled = false
+    const settle = (handler, value) => {
+      if (settled) {
+        return
+      }
+      settled = true
+      handler(value)
+    }
+
+    if (typeof child?.once !== 'function') {
+      if (typeof child?.unref === 'function') {
+        child.unref()
+      }
+      resolve()
+      return
+    }
+
+    child.once('error', (error) => {
+      settle(reject, error)
+    })
+
+    child.once('spawn', () => {
+      if (typeof child.unref === 'function') {
+        child.unref()
+      }
+      settle(resolve)
+    })
+  })
+}
+
 function appendCapturedProcessOutput(current, chunk) {
   if (!chunk) {
     return current
@@ -617,21 +688,90 @@ function buildUpdaterScript() {
     '  [string]$ZipPath,',
     '  [string]$ExtractRoot,',
     '  [string]$TargetDir,',
-    '  [string]$ExeName',
+    '  [string]$ExeName,',
+    '  [string]$LogPath,',
+    `  [int]$WaitTimeoutSeconds = ${DEFAULT_UPDATE_WAIT_TIMEOUT_SECONDS}`,
     ')',
     '',
     "$ErrorActionPreference = 'Stop'",
+    '$ProgressPreference = \'SilentlyContinue\'',
+    '$OutputEncoding = [System.Text.UTF8Encoding]::new()',
+    '[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()',
     '',
-    'function Wait-ParentExit {',
-    '  param([int]$ProcessId)',
-    '  for ($attempt = 0; $attempt -lt 600; $attempt += 1) {',
-    '    $process = Get-Process -Id $ProcessId -ErrorAction SilentlyContinue',
-    '    if (-not $process) {',
+    'function Write-UpdateLog {',
+    '  param([string]$Message)',
+    '  if (-not $LogPath) {',
+    '    return',
+    '  }',
+    '  try {',
+    "    $stamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss.fff'",
+    '    "[$stamp] $Message" | Out-File -FilePath $LogPath -Append -Encoding utf8',
+    '  } catch {',
+    '  }',
+    '}',
+    '',
+    'function Get-MatchingAppProcessIds {',
+    '  param([int]$ProcessId, [string]$ExecutablePath)',
+    '  $processIds = New-Object \'System.Collections.Generic.HashSet[int]\'',
+    '',
+    '  if ($ProcessId -gt 0 -and (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue)) {',
+    '    [void]$processIds.Add($ProcessId)',
+    '  }',
+    '',
+    '  if (-not $ExecutablePath) {',
+    '    return @($processIds)',
+    '  }',
+    '',
+    '  try {',
+    '    $normalizedExecutablePath = [System.IO.Path]::GetFullPath($ExecutablePath)',
+    '  } catch {',
+    '    return @($processIds)',
+    '  }',
+    '',
+    '  foreach ($proc in @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)) {',
+    '    if (-not $proc.ExecutablePath) {',
+    '      continue',
+    '    }',
+    '',
+    '    try {',
+    '      $candidatePath = [System.IO.Path]::GetFullPath($proc.ExecutablePath)',
+    '    } catch {',
+    '      continue',
+    '    }',
+    '',
+    '    if ([System.StringComparer]::OrdinalIgnoreCase.Equals($candidatePath, $normalizedExecutablePath)) {',
+    '      [void]$processIds.Add([int]$proc.ProcessId)',
+    '    }',
+    '  }',
+    '',
+    '  return @($processIds)',
+    '}',
+    '',
+    'function Wait-AppExit {',
+    '  param([int]$ProcessId, [string]$ExecutablePath, [int]$TimeoutSeconds)',
+    '  $elapsedMilliseconds = 0',
+    '  while ($true) {',
+    '    $matchingProcessIds = @(Get-MatchingAppProcessIds -ProcessId $ProcessId -ExecutablePath $ExecutablePath)',
+    '    if ($matchingProcessIds.Count -eq 0) {',
     '      return',
     '    }',
+    '',
+    '    if ($elapsedMilliseconds -ge ($TimeoutSeconds * 1000)) {',
+    '      Write-UpdateLog "App processes still running after $TimeoutSeconds seconds: $($matchingProcessIds -join \', \'). Force-killing."',
+    '      foreach ($remainingId in $matchingProcessIds) {',
+    '        try {',
+    '          Stop-Process -Id $remainingId -Force -ErrorAction Stop',
+    '        } catch {',
+    '          Write-UpdateLog "Stop-Process $remainingId failed: $($_.Exception.Message)"',
+    '        }',
+    '      }',
+    '      Start-Sleep -Milliseconds 500',
+    '      return',
+    '    }',
+    '',
     '    Start-Sleep -Milliseconds 500',
+    '    $elapsedMilliseconds += 500',
     '  }',
-    '  throw "Timed out waiting for app process to exit."',
     '}',
     '',
     'function Resolve-SourceDir {',
@@ -645,14 +785,19 @@ function buildUpdaterScript() {
     '  }',
     '',
     '  $directChild = Get-ChildItem -LiteralPath $Root -Directory | Where-Object {',
-    '    Test-Path -LiteralPath (Join-Path $_.FullName $ExeName)',
+    '    (Test-Path -LiteralPath (Join-Path $_.FullName $ExeName)) -and (Test-Path -LiteralPath (Join-Path $_.FullName \'resources\'))',
     '  } | Select-Object -First 1',
     '',
     '  if ($directChild) {',
     '    return $directChild.FullName',
     '  }',
     '',
-    '  $nestedExe = Get-ChildItem -LiteralPath $Root -Recurse -File -Filter $ExeName | Select-Object -First 1',
+    '  $nestedExe = Get-ChildItem -LiteralPath $Root -Recurse -File -Filter $ExeName | Where-Object {',
+    '    Test-Path -LiteralPath (Join-Path $_.DirectoryName \'resources\')',
+    '  } | Select-Object -First 1',
+    '  if (-not $nestedExe) {',
+    '    $nestedExe = Get-ChildItem -LiteralPath $Root -Recurse -File -Filter $ExeName | Select-Object -First 1',
+    '  }',
     '  if ($nestedExe) {',
     '    return $nestedExe.Directory.FullName',
     '  }',
@@ -660,70 +805,88 @@ function buildUpdaterScript() {
     '  throw "Could not find the extracted app directory."',
     '}',
     '',
-    'Wait-ParentExit -ProcessId $ParentPid',
-    'Start-Sleep -Milliseconds 300',
-    '',
-    'if (-not (Test-Path -LiteralPath $TargetDir)) {',
-    '  throw "Target directory does not exist: $TargetDir"',
-    '}',
-    '',
-    'if (Test-Path -LiteralPath $ExtractRoot) {',
-    '  Remove-Item -LiteralPath $ExtractRoot -Recurse -Force',
-    '}',
-    '',
-    'New-Item -ItemType Directory -Path $ExtractRoot -Force | Out-Null',
-    'Expand-Archive -LiteralPath $ZipPath -DestinationPath $ExtractRoot -Force',
-    '',
-    '$sourceDir = Resolve-SourceDir -Root $ExtractRoot -ExeName $ExeName',
     '$targetDirResolved = [System.IO.Path]::GetFullPath($TargetDir)',
-    '$targetDirInfo = New-Object System.IO.DirectoryInfo($targetDirResolved)',
-    '$targetParentInfo = $targetDirInfo.Parent',
-    'if (-not $targetParentInfo) {',
-    '  throw "Could not resolve target parent directory: $targetDirResolved"',
-    '}',
-    '$targetParent = $targetParentInfo.FullName',
-    '$targetLeaf = $targetDirInfo.Name',
-    '$pendingLeaf = "$targetLeaf.update-pending"',
-    '$backupLeaf = "$targetLeaf.update-backup"',
-    '$pendingDir = Join-Path $targetParent $pendingLeaf',
-    '$backupDir = Join-Path $targetParent $backupLeaf',
-    '',
-    'if (Test-Path -LiteralPath $pendingDir) {',
-    '  Remove-Item -LiteralPath $pendingDir -Recurse -Force',
-    '}',
-    '',
-    'if (Test-Path -LiteralPath $backupDir) {',
-    '  Remove-Item -LiteralPath $backupDir -Recurse -Force',
-    '}',
-    '',
-    'New-Item -ItemType Directory -Path $pendingDir -Force | Out-Null',
-    'robocopy $sourceDir $pendingDir /MIR /R:2 /W:1 /NFL /NDL /NJH /NJS /NP | Out-Null',
-    'if ($LASTEXITCODE -gt 7) {',
-    '  throw "robocopy failed with exit code $LASTEXITCODE"',
-    '}',
-    '',
-    'Rename-Item -LiteralPath $targetDirResolved -NewName $backupLeaf',
-    'Rename-Item -LiteralPath $pendingDir -NewName $targetLeaf',
-    '$finalDir = Join-Path $targetParent $targetLeaf',
-    '$finalExe = Join-Path $finalDir $ExeName',
-    '',
-    'Start-Process -FilePath $finalExe -WorkingDirectory $finalDir | Out-Null',
-    '',
-    'if (Test-Path -LiteralPath $backupDir) {',
-    '  Remove-Item -LiteralPath $backupDir -Recurse -Force',
-    '}',
-    '',
-    'if (Test-Path -LiteralPath $ZipPath) {',
-    '  Remove-Item -LiteralPath $ZipPath -Force',
-    '}',
-    '',
-    'if (Test-Path -LiteralPath $ExtractRoot) {',
-    '  Remove-Item -LiteralPath $ExtractRoot -Recurse -Force',
-    '}',
+    '$finalExePath = Join-Path $targetDirResolved $ExeName',
     '',
     'try {',
-    '  Remove-Item -LiteralPath $PSCommandPath -Force',
+    '  Write-UpdateLog "Update job started. pid=$ParentPid target=$targetDirResolved zip=$ZipPath"',
+    '  Wait-AppExit -ProcessId $ParentPid -ExecutablePath $finalExePath -TimeoutSeconds $WaitTimeoutSeconds',
+    '  Write-UpdateLog \'App processes exited (or were force-killed); proceeding.\'',
+    '  Start-Sleep -Milliseconds 300',
+    '',
+    '  if (-not (Test-Path -LiteralPath $targetDirResolved)) {',
+    '    throw "Target directory does not exist: $targetDirResolved"',
+    '  }',
+    '',
+    '  if (Test-Path -LiteralPath $ExtractRoot) {',
+    '    Remove-Item -LiteralPath $ExtractRoot -Recurse -Force',
+    '  }',
+    '',
+    '  New-Item -ItemType Directory -Path $ExtractRoot -Force | Out-Null',
+    '  Write-UpdateLog "Begin expand archive -> $ExtractRoot"',
+    '  Expand-Archive -LiteralPath $ZipPath -DestinationPath $ExtractRoot -Force',
+    '  Write-UpdateLog \'Expand archive finished.\'',
+    '',
+    '  $sourceDir = Resolve-SourceDir -Root $ExtractRoot -ExeName $ExeName',
+    '  Write-UpdateLog "Resolved source directory: $sourceDir"',
+    '  $targetDirInfo = New-Object System.IO.DirectoryInfo($targetDirResolved)',
+    '  $targetParentInfo = $targetDirInfo.Parent',
+    '  if (-not $targetParentInfo) {',
+    '    throw "Could not resolve target parent directory: $targetDirResolved"',
+    '  }',
+    '  $targetParent = $targetParentInfo.FullName',
+    '  $targetLeaf = $targetDirInfo.Name',
+    '  $pendingLeaf = "$targetLeaf.update-pending"',
+    '  $backupLeaf = "$targetLeaf.update-backup"',
+    '  $pendingDir = Join-Path $targetParent $pendingLeaf',
+    '  $backupDir = Join-Path $targetParent $backupLeaf',
+    '',
+    '  if (Test-Path -LiteralPath $pendingDir) {',
+    '    Remove-Item -LiteralPath $pendingDir -Recurse -Force',
+    '  }',
+    '',
+    '  if (Test-Path -LiteralPath $backupDir) {',
+    '    Remove-Item -LiteralPath $backupDir -Recurse -Force',
+    '  }',
+    '',
+    '  New-Item -ItemType Directory -Path $pendingDir -Force | Out-Null',
+    '  Write-UpdateLog "Begin mirror copy: $sourceDir -> $pendingDir"',
+    '  robocopy $sourceDir $pendingDir /MIR /R:2 /W:1 /NFL /NDL /NJH /NJS /NP | Out-Null',
+    '  if ($LASTEXITCODE -gt 7) {',
+    '    throw "robocopy failed with exit code $LASTEXITCODE"',
+    '  }',
+    '  Write-UpdateLog \'Mirror copy finished.\'',
+    '',
+    '  Rename-Item -LiteralPath $targetDirResolved -NewName $backupLeaf',
+    '  Rename-Item -LiteralPath $pendingDir -NewName $targetLeaf',
+    '  $finalDir = Join-Path $targetParent $targetLeaf',
+    '  $finalExe = Join-Path $finalDir $ExeName',
+    '',
+    '  Write-UpdateLog "Launch new app: $finalExe"',
+    '  Start-Process -FilePath $finalExe -WorkingDirectory $finalDir | Out-Null',
+    '  Write-UpdateLog \'Launch issued.\'',
+    '',
+    '  if (Test-Path -LiteralPath $backupDir) {',
+    '    Remove-Item -LiteralPath $backupDir -Recurse -Force',
+    '  }',
+    '',
+    '  if (Test-Path -LiteralPath $ZipPath) {',
+    '    Remove-Item -LiteralPath $ZipPath -Force',
+    '  }',
+    '',
+    '  if (Test-Path -LiteralPath $ExtractRoot) {',
+    '    Remove-Item -LiteralPath $ExtractRoot -Recurse -Force',
+    '  }',
+    '  Write-UpdateLog \'Update job done.\'',
     '} catch {',
+    '  Write-UpdateLog "Update job failed: $($_.Exception.Message)"',
+    '  Write-UpdateLog $_.ScriptStackTrace',
+    '  throw',
+    '} finally {',
+    '  try {',
+    '    Remove-Item -LiteralPath $PSCommandPath -Force',
+    '  } catch {',
+    '  }',
     '}',
   ].join('\r\n')
 }
@@ -749,8 +912,13 @@ function createAppUpdater(options = {}) {
     100,
     Number(options.quitGraceMs || DEFAULT_QUIT_GRACE_MS) || DEFAULT_QUIT_GRACE_MS
   )
+  const updateWaitTimeoutSeconds = Math.max(
+    5,
+    Number(options.updateWaitTimeoutSeconds || DEFAULT_UPDATE_WAIT_TIMEOUT_SECONDS) || DEFAULT_UPDATE_WAIT_TIMEOUT_SECONDS
+  )
   const releaseApiUrl = options.releaseApiUrl || `https://api.github.com/repos/${owner}/${repo}/releases/latest`
   const releasePageUrl = options.releasePageUrl || `https://github.com/${owner}/${repo}/releases/latest`
+  const getCacheDirectory = typeof options.getCacheDirectory === 'function' ? options.getCacheDirectory : null
 
   let cachedStatus = null
   let lastCheckedAtMs = 0
@@ -848,14 +1016,22 @@ function createAppUpdater(options = {}) {
 
       const targetDir = path.dirname(execPath)
       const exeName = path.basename(execPath)
+      let updaterBaseDir = ''
+      try {
+        updaterBaseDir = getCacheDirectory ? String(getCacheDirectory() || '').trim() : ''
+      } catch (error) {
+        console.warn('failed to resolve update cache directory', error)
+      }
       const tempRoot = path.join(
-        app?.getPath?.('temp') || path.join(process.cwd(), '.tmp'),
+        updaterBaseDir || app?.getPath?.('temp') || path.join(process.cwd(), '.tmp'),
         'playlist-wall-updater',
         `${status.latestVersion}-${Date.now()}`
       )
       const zipPath = path.join(tempRoot, 'update.zip')
       const extractRoot = path.join(tempRoot, 'extracted')
       const scriptPath = path.join(tempRoot, 'apply-update.ps1')
+      const logPath = path.join(tempRoot, 'apply-update.log')
+      const launcherErrorPath = path.join(tempRoot, 'launcher-error.log')
 
       try {
         await downloadFile(status.downloadUrl, zipPath, fetchImpl, downloadIdleTimeoutMs)
@@ -874,31 +1050,35 @@ function createAppUpdater(options = {}) {
       fs.mkdirSync(tempRoot, { recursive: true })
       fs.writeFileSync(scriptPath, buildUpdaterScript(), 'utf8')
 
-      const child = spawnImpl(getPowerShellExecutable(), [
-        '-NoProfile',
-        '-ExecutionPolicy',
-        'Bypass',
-        '-WindowStyle',
-        'Hidden',
-        '-File',
-        scriptPath,
-        '-ParentPid',
-        String(process.pid),
-        '-ZipPath',
-        zipPath,
-        '-ExtractRoot',
-        extractRoot,
-        '-TargetDir',
-        targetDir,
-        '-ExeName',
-        exeName,
-      ], {
-        detached: true,
-        stdio: 'ignore',
-        windowsHide: true,
-      })
-
-      child.unref()
+      try {
+        fs.writeFileSync(logPath, '', 'utf8')
+        await launchDetachedPowerShellScriptFile({
+          scriptPath,
+          args: [
+            '-ParentPid',
+            String(process.pid),
+            '-ZipPath',
+            zipPath,
+            '-ExtractRoot',
+            extractRoot,
+            '-TargetDir',
+            targetDir,
+            '-ExeName',
+            exeName,
+            '-LogPath',
+            logPath,
+            '-WaitTimeoutSeconds',
+            String(updateWaitTimeoutSeconds),
+          ],
+          cwd: updaterBaseDir || app?.getPath?.('temp') || path.dirname(tempRoot),
+          spawnImpl,
+        })
+      } catch (launchError) {
+        try {
+          fs.appendFileSync(launcherErrorPath, `[launcher] Failed to spawn update PowerShell job: ${launchError?.message || String(launchError)}\n`, 'utf8')
+        } catch {}
+        throw launchError
+      }
 
       setTimeout(() => {
         if (typeof app?.quit === 'function') {
