@@ -34,6 +34,7 @@ const PLAYLIST_UNDO_NOTICE_MS = 20000
 const WINDOW_STATE_SAVE_DELAY_MS = 250
 const LYRICS_BOUNDS_SAVE_DELAY_MS = 300
 const PLAYLIST_TRACK_BATCH_SIZE = 100
+const LIBRARY_REFRESH_HYDRATE_LIMIT = 3
 const WINDOWS_APP_ID = 'com.maouzju.playlistwall'
 const WINDOWS_ICON_PATH = path.join(__dirname, '../../assets/icon.ico')
 
@@ -710,6 +711,8 @@ function normalizePlaylistMeta(playlist) {
     trackCount: Number(playlist?.trackCount || 0),
     coverUrl: playlist?.coverUrl || playlist?.coverImgUrl || '',
     specialType: Number(playlist?.specialType || 0),
+    trackUpdateTime: Number(playlist?.trackUpdateTime || playlist?.trackNumberUpdateTime || 0),
+    updateTime: Number(playlist?.updateTime || 0),
     subscribed: playlist?.subscribed === false ? false : Boolean(playlist?.subscribed),
     creatorId: Number(
       playlist?.creatorId
@@ -1086,11 +1089,52 @@ function saveBootstrapCache(account, playlists) {
       trackCount: playlist.trackCount,
       coverUrl: playlist.coverUrl,
       specialType: playlist.specialType,
+      trackUpdateTime: playlist.trackUpdateTime || 0,
+      updateTime: playlist.updateTime || 0,
       subscribed: playlist.subscribed,
       creatorUserId: playlist.creatorId,
+      creatorId: playlist.creatorId,
+      creatorName: playlist.creatorName || '',
       description: playlist.description || '',
+      sourcePlatform: playlist.sourcePlatform || '',
+      platformPlaylistId: playlist.platformPlaylistId || '',
+      platformOwnerId: playlist.platformOwnerId || '',
+      externalUrl: playlist.externalUrl || '',
+      importReadOnly: Boolean(playlist.importReadOnly),
     })),
   })
+}
+
+function selectNewPlaylistIds(currentPlaylists, nextPlaylists) {
+  const currentIds = new Set((currentPlaylists || [])
+    .map((playlist) => Number(playlist?.id || 0))
+    .filter((playlistId) => playlistId > 0))
+  return (nextPlaylists || [])
+    .map((playlist) => Number(playlist?.id || 0))
+    .filter((playlistId) => playlistId > 0 && !currentIds.has(playlistId))
+}
+
+function shouldRefreshPlaylistTracks(cachedPlaylist, nextPlaylist, cachedTracks = []) {
+  const nextTrackCount = Math.max(Number(nextPlaylist?.trackCount || 0), 0)
+  if (nextTrackCount <= 0) {
+    return false
+  }
+
+  const cachedTrackCount = Array.isArray(cachedTracks) ? cachedTracks.length : 0
+  if (cachedTrackCount < nextTrackCount) {
+    return true
+  }
+
+  const cachedSummaryTrackCount = Math.max(Number(cachedPlaylist?.trackCount || 0), 0)
+  if (cachedSummaryTrackCount !== nextTrackCount) {
+    return true
+  }
+
+  const cachedTrackUpdateTime = Number(cachedPlaylist?.trackUpdateTime || cachedPlaylist?.updateTime || 0)
+  const nextTrackUpdateTime = Number(nextPlaylist?.trackUpdateTime || nextPlaylist?.updateTime || 0)
+  return cachedTrackUpdateTime > 0
+    && nextTrackUpdateTime > 0
+    && cachedTrackUpdateTime !== nextTrackUpdateTime
 }
 
 async function buildPlaybackPayload(userId) {
@@ -1321,9 +1365,18 @@ function upsertPlaylistInCache(playlist) {
     trackCount: normalizedPlaylist.trackCount,
     coverUrl: normalizedPlaylist.coverUrl,
     specialType: normalizedPlaylist.specialType,
+    trackUpdateTime: normalizedPlaylist.trackUpdateTime || 0,
+    updateTime: normalizedPlaylist.updateTime || 0,
     subscribed: normalizedPlaylist.subscribed,
     creatorUserId: normalizedPlaylist.creatorId,
+    creatorId: normalizedPlaylist.creatorId,
+    creatorName: normalizedPlaylist.creatorName || '',
     description: normalizedPlaylist.description || '',
+    sourcePlatform: normalizedPlaylist.sourcePlatform || '',
+    platformPlaylistId: normalizedPlaylist.platformPlaylistId || '',
+    platformOwnerId: normalizedPlaylist.platformOwnerId || '',
+    externalUrl: normalizedPlaylist.externalUrl || '',
+    importReadOnly: Boolean(normalizedPlaylist.importReadOnly),
   }
   const existingIndex = currentPlaylists.findIndex((item) => Number(item?.id || 0) === normalizedPlaylist.id)
 
@@ -1693,6 +1746,91 @@ async function buildBootstrapPayload() {
   }
 }
 
+async function buildLibraryRefreshPayload() {
+  const session = readSession()
+  if (!session?.cookie) {
+    clearPlaylistCaches()
+    svc = null
+    return { ok: true, needsLogin: true }
+  }
+
+  const service = ensureServiceReady()
+  let account = null
+  try {
+    account = normalizeAccount(await service.getAccount())
+  } catch (error) {
+    if (isAuthError(error)) {
+      clearSessionAndCaches()
+      return { ok: true, needsLogin: true }
+    }
+    throw error
+  }
+
+  if (!account?.userId) {
+    clearSessionAndCaches()
+    return { ok: true, needsLogin: true }
+  }
+
+  let bootstrap = loadBootstrapCache()
+  if (bootstrap?.account?.userId && Number(bootstrap.account.userId) !== account.userId) {
+    clearPlaylistCaches()
+    bootstrap = null
+  }
+
+  let livePlaylists = []
+  try {
+    livePlaylists = await service.listPlaylists(account.userId)
+  } catch (error) {
+    if (isAuthError(error)) {
+      clearSessionAndCaches()
+      return { ok: true, needsLogin: true }
+    }
+    throw error
+  }
+
+  const allPlaylists = sortPlaylistsForWall(
+    (livePlaylists || []).map(normalizePlaylistMeta).filter((playlist) => playlist.id > 0)
+  )
+    .filter((playlist) => !pendingSubscribedPlaylistRemovals.has(Number(playlist.id || 0)))
+
+  if (!allPlaylists.length && pendingSubscribedPlaylistRemovals.size === 0) {
+    throw new Error(TEXT.playlistsMissing)
+  }
+
+  const cachedPlaylistsById = new Map((bootstrap?.playlists || [])
+    .map((playlist) => [Number(playlist?.id || 0), playlist])
+    .filter(([playlistId]) => playlistId > 0))
+  const newPlaylistIds = new Set(selectNewPlaylistIds(bootstrap?.playlists || [], allPlaylists))
+  pruneDeletedPlaylistsFromCache(allPlaylists, bootstrap?.playlists || [])
+
+  let refreshedPlaylistHydrateCount = 0
+  const playlists = allPlaylists.map((playlist) => {
+    let cachedTracks = loadPlaylistDetailCache(playlist.id)
+    const cachedPlaylist = cachedPlaylistsById.get(playlist.id) || null
+    const shouldHydrateFreshTracks = (
+      newPlaylistIds.has(playlist.id)
+      || shouldRefreshPlaylistTracks(cachedPlaylist, playlist, cachedTracks)
+    )
+
+    if (shouldHydrateFreshTracks && refreshedPlaylistHydrateCount < LIBRARY_REFRESH_HYDRATE_LIMIT) {
+      cachedTracks = []
+      refreshedPlaylistHydrateCount += 1
+    }
+    return buildPlaylistSnapshot(playlist, cachedTracks)
+  })
+
+  saveBootstrapCache(account, playlists)
+  void hydratePlaylistsInBackground(account, playlists)
+
+  return {
+    ok: true,
+    account,
+    playlists,
+    stats: buildStats(playlists),
+    sessionStorageMode: session.storageMode || '',
+  }
+}
+
 function registerIpc() {
   ipcMain.handle('getPreferences', async () => {
     try {
@@ -1808,6 +1946,15 @@ function registerIpc() {
       return await buildBootstrapPayload()
     } catch (error) {
       console.error('init error:', error)
+      return { ok: false, error: error.message || String(error) }
+    }
+  })
+
+  ipcMain.handle('refreshLibrary', async () => {
+    try {
+      return await buildLibraryRefreshPayload()
+    } catch (error) {
+      console.error('refresh library error:', error)
       return { ok: false, error: error.message || String(error) }
     }
   })

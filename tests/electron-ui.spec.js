@@ -334,6 +334,105 @@ test('renders a dense 7-column wall with top actions', async ({ page }) => {
   await expect(firstRow.locator('.track-tier-mark')).toHaveCount(1)
 })
 
+test('library refresh adds newly subscribed playlists without reloading the wall', async ({ page }) => {
+  await waitForWall(page)
+
+  await page.click('#tab-subscribed')
+  await expect(page.locator('#tab-subscribed')).toHaveClass(/is-active/)
+  await expect(page.locator('.playlist-card[data-playlist-id="301"]')).toHaveCount(0)
+  await page.evaluate(() => {
+    window.__mockNextLibraryPlaylist = {
+      id: 301,
+      sourcePlaylistId: 301,
+      name: '新收藏 Lo-Fi',
+      trackCount: 2,
+      coverUrl: '',
+      subscribed: true,
+      creatorId: 3010,
+      creatorName: '新朋友',
+      hydrated: true,
+      hydrating: false,
+      tracks: [
+        {
+          id: 301001,
+          position: 1,
+          name: '新收藏 Lo-Fi 1',
+          artists: ['艺术家 1'],
+          artistEntries: [{ id: 1, name: '艺术家 1' }],
+          album: '专辑 1',
+          albumId: 1,
+          albumCoverUrl: '',
+          durationMs: 180000,
+        },
+        {
+          id: 301002,
+          position: 2,
+          name: '新收藏 Lo-Fi 2',
+          artists: ['艺术家 2'],
+          artistEntries: [{ id: 2, name: '艺术家 2' }],
+          album: '专辑 2',
+          albumId: 2,
+          albumCoverUrl: '',
+          durationMs: 180000,
+        },
+      ],
+    }
+    return window.refreshLibraryFromServer({ reason: 'manual', silent: false })
+  })
+
+  await expect(page.locator('.playlist-card[data-playlist-id="301"]')).toBeVisible()
+  await expect(page.locator('#tab-subscribed-count')).toHaveText('4')
+  await expect(page.locator('.playlist-card[data-playlist-id="301"] .playlist-title')).toContainText('新收藏 Lo-Fi')
+  await expect.poll(async () => {
+    return page.evaluate(() => window.__mockRefreshLibraryReasons || [])
+  }).toContain('manual')
+})
+
+test('library refresh removes playlists that no longer exist upstream', async ({ page }) => {
+  await waitForWall(page)
+
+  await page.click('#tab-subscribed')
+  await expect(page.locator('#tab-subscribed')).toHaveClass(/is-active/)
+  await expect(page.locator('.playlist-card[data-playlist-id="201"]')).toBeVisible()
+  await page.evaluate(() => {
+    window.__mockRefreshLibraryResult = {
+      ok: true,
+      account: { userId: 1, nickname: 'Mock 用户' },
+      playlists: [
+        {
+          id: 101,
+          sourcePlaylistId: 101,
+          name: '我喜欢的音乐',
+          trackCount: 1,
+          coverUrl: '',
+          specialType: 5,
+          subscribed: false,
+          creatorId: 1,
+          hydrated: true,
+          hydrating: false,
+          tracks: [{
+            id: 101001,
+            position: 1,
+            name: '我喜欢的音乐 1',
+            artists: ['艺术家 1'],
+            artistEntries: [{ id: 1, name: '艺术家 1' }],
+            album: '专辑 1',
+            albumId: 1,
+            albumCoverUrl: '',
+            durationMs: 180000,
+          }],
+        },
+      ],
+      playback: { localPlayCounts: {}, cloudPlayCounts: {} },
+    }
+    return window.refreshLibraryFromServer({ reason: 'manual', silent: true })
+  })
+
+  await expect(page.locator('.playlist-card[data-playlist-id="201"]')).toHaveCount(0)
+  await expect(page.locator('#tab-owned-count')).toHaveText('1')
+  await expect(page.locator('#tab-subscribed-count')).toHaveText('0')
+})
+
 test('explore playlists preload silently after app init', async ({ page }) => {
   await waitForWall(page, EXPLORE_DELAY_PAGE_URL)
 
@@ -972,10 +1071,10 @@ test('volume assist hotkey with mouse wheel adjusts app volume and persists', as
     }))
   })
 
-  await expect(page.locator('#volume-range')).toHaveValue('55')
+  await expect(page.locator('#volume-range')).toHaveValue('50.2')
   await expect.poll(async () => {
     return page.evaluate(() => document.querySelector('audio')?.volume)
-  }).toBe(0.55)
+  }).toBe(0.502)
 
   await page.evaluate(() => window.__mockEmitVolumeAssistWheel?.({ direction: -1 }))
   await expect(page.locator('#volume-range')).toHaveValue('50')
@@ -1070,11 +1169,13 @@ test('audio quality settings affect playback requests and persist across reload'
 test('concerts tab loads event cards and filters by city picker or venue search', async ({ page }) => {
   await waitForWall(page)
 
-  await expect(page.locator('#tab-concerts')).toBeDisabled()
+  await expect(page.locator('#tab-concerts')).toBeHidden()
   await page.click('#settings-btn')
   await setCheckbox(page, '#concerts-enabled-toggle', true)
   await closeSettingsPanel(page)
 
+  await expect(page.locator('#tab-concerts')).toBeVisible()
+  await expect(page.locator('#tab-concerts')).toBeEnabled()
   await page.click('#tab-concerts')
   const concertCards = page.locator('.playlist-card')
   await expect(concertCards).toHaveCount(2)
@@ -2211,7 +2312,7 @@ test('selected tracks drag together within the same playlist', async ({ page }) 
 })
 
 test('tracks can be dragged into another playlist at a chosen position', async ({ page }) => {
-  await waitForWall(page)
+  await waitForWall(page, `${PAGE_URL}&trackMoveDelay=500`)
 
   const sourceCard = page.locator('.playlist-card[data-playlist-id="102"]')
   const targetCard = page.locator('.playlist-card[data-playlist-id="103"]')
@@ -2241,6 +2342,62 @@ test('tracks can be dragged into another playlist at a chosen position', async (
 
   await expect(sourceCard.locator('.playlist-meta')).toContainText(String(sourceCountBefore - 1))
   await expect(targetCard.locator('.playlist-meta')).toContainText(String(targetCountBefore + 1))
+})
+
+test('track drag move applies immediately before async commit finishes', async ({ page }) => {
+  await waitForWall(page, `${PAGE_URL}&trackMoveDelay=800`)
+
+  const sourceCard = page.locator('.playlist-card[data-playlist-id="102"]')
+  const targetCard = page.locator('.playlist-card[data-playlist-id="103"]')
+
+  await dragTrack(
+    page,
+    '.playlist-card[data-playlist-id="102"] .track-row[data-track-id="102001"]',
+    '.playlist-card[data-playlist-id="103"] .track-row[data-track-id="103002"]',
+    'before'
+  )
+
+  await expect(targetCard.locator('.track-row[data-track-id="102001"]')).toHaveCount(1)
+  await expect(sourceCard.locator('.track-row[data-track-id="102001"]')).toHaveCount(0)
+})
+
+test('failed track drag move rolls back without undoing later moves', async ({ page }) => {
+  await waitForWall(page, `${PAGE_URL}&trackMoveDelay=80`)
+
+  const sourceCard = page.locator('.playlist-card[data-playlist-id="102"]')
+  const targetCard = page.locator('.playlist-card[data-playlist-id="103"]')
+
+  await page.evaluate(() => {
+    window.__mockFailNextTrackMove = true
+  })
+
+  await dragTrack(
+    page,
+    '.playlist-card[data-playlist-id="102"] .track-row[data-track-id="102001"]',
+    '.playlist-card[data-playlist-id="103"] .track-row[data-track-id="103002"]',
+    'before'
+  )
+  await dragTrack(
+    page,
+    '.playlist-card[data-playlist-id="102"] .track-row[data-track-id="102002"]',
+    '.playlist-card[data-playlist-id="103"] .track-row[data-track-id="103003"]',
+    'before'
+  )
+
+  await expect.poll(async () => {
+    return sourceCard.locator('.track-row').evaluateAll((nodes) => {
+      return nodes.slice(0, 3).map((node) => node.getAttribute('data-track-id'))
+    })
+  }).toEqual(['102001', '102003', '102004'])
+  await expect(targetCard.locator('.track-row[data-track-id="102001"]')).toHaveCount(0)
+  await expect(targetCard.locator('.track-row[data-track-id="102002"]')).toHaveCount(1)
+  await expect.poll(async () => {
+    return page.evaluate(() => window.__mockTrackMovePayloads?.length || 0)
+  }).toBe(2)
+  await expect.poll(async () => {
+    return page.evaluate(() => window.__mockTrackMovePayloads?.[1]?.sourceTrackIds?.slice(0, 3) || [])
+  }).toEqual(['102001', '102003', '102004'].map(Number))
+  await expect(page.locator('#toast-wrap .toast.error')).toContainText('移动到歌单失败')
 })
 
 test('tracks dropped on another playlist card land below matching artists', async ({ page }) => {

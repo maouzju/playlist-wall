@@ -331,6 +331,8 @@ function normalizePlaylistSummary(playlist, overrides = {}) {
     trackCount: Number(playlist?.trackCount || 0),
     coverUrl: playlist?.coverImgUrl || playlist?.coverUrl || '',
     specialType: Number(playlist?.specialType || 0),
+    trackUpdateTime: Number(playlist?.trackUpdateTime || playlist?.trackNumberUpdateTime || 0),
+    updateTime: Number(playlist?.updateTime || 0),
     subscribed: overrides.subscribed !== undefined
       ? Boolean(overrides.subscribed)
       : Boolean(playlist?.subscribed),

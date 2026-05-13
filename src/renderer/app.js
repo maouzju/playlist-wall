@@ -22,6 +22,9 @@ const RECOMMENDATION_COUNT = 4
 const RECOMMENDATION_FETCH_COUNT = Math.max(RECOMMENDATION_COUNT * 3, 12)
 const RECOMMENDATION_CONCURRENCY = 2
 const QR_LOGIN_POLL_MS = 1400
+const LIBRARY_AUTO_REFRESH_INTERVAL_MS = 90 * 1000
+const LIBRARY_AUTO_REFRESH_MIN_INTERVAL_MS = 30 * 1000
+const LIBRARY_AUTO_REFRESH_FORCE_REASONS = new Set(['manual', 'queued'])
 const PLAYLIST_UNDO_NOTICE_MS = 20000
 const PLAYLIST_DRAG_CLICK_SUPPRESS_MS = 280
 const CONTEXT_MENU_SCROLL_GUARD_MS = 150
@@ -54,7 +57,7 @@ const AUDIO_QUALITY_REFRESH_REASON_NETWORK = 'network'
 const VOLUME_ASSIST_TARGET_APP = 'app'
 const VOLUME_ASSIST_TARGET_SYSTEM = 'system'
 const VOLUME_ASSIST_DEFAULT_HOTKEY = 'Alt'
-const VOLUME_ASSIST_STEP = 5
+const VOLUME_ASSIST_STEP = 0.2
 const VOLUME_ASSIST_SYSTEM_THROTTLE_MS = 80
 const CONCERT_ARTIST_TITLE_MATCH_MIN_LENGTH = 2
 
@@ -398,12 +401,16 @@ const renderRuntime = {
   playlistDragIndicator: null,
   playlistDragSuppressedId: 0,
   playlistDragSuppressUntil: 0,
-  playlistMutationPending: false,
+  trackMoveCommitQueue: Promise.resolve(),
   playlistRemovalPendingIds: new Set(),
   playlistUndoNotice: null,
   playlistUndoTimer: 0,
   focusFlashTrackKey: '',
   focusFlashTimer: 0,
+  libraryRefreshTimer: 0,
+  libraryRefreshInFlight: false,
+  libraryRefreshQueued: false,
+  libraryRefreshLastAt: 0,
   audioQualityRefreshTimer: 0,
   pendingAudioQualityRefreshReason: '',
   playlistEditorState: null,
@@ -475,6 +482,7 @@ function createMockBridge() {
   const params = new URLSearchParams(window.location.search)
   const progressive = params.get('progressive') === '1'
   const huge = params.get('huge') === '1'
+  const mockSpotifyConnected = params.get('spotify') === '1'
   const authRequired = params.get('auth') === '1'
   const authAuto = params.get('authAuto') !== '0'
   const initDelay = Math.max(0, Number(params.get('initDelay') || 0) || 0)
@@ -540,8 +548,11 @@ function createMockBridge() {
   let nextMockPlaylistId = Math.max(0, ...basePlaylists.map((playlist) => Number(playlist.id || 0))) + 1
   let mockAppUpdateCheckCount = 0
   let mockAppUpdateInstallCount = 0
+  let mockRefreshLibraryCount = 0
   window.__mockAppUpdateCheckCount = 0
   window.__mockAppUpdateInstallCount = 0
+  window.__mockRefreshLibraryCount = 0
+  window.__mockRefreshLibraryReasons = []
   const emitProgress = (payload) => progressListeners.forEach((listener) => listener(payload))
   const emitPatch = (payload) => patchListeners.forEach((listener) => listener(payload))
   window.__mockEmitVolumeAssistWheel = (payload) => {
@@ -581,10 +592,15 @@ function createMockBridge() {
   const buildMockPlaylistSummary = (playlist) => ({
     id: Number(playlist?.id || 0),
     sourcePlaylistId: Number(playlist?.sourcePlaylistId || playlist?.id || 0),
+    sourcePlatform: playlist?.sourcePlatform || '',
+    platformPlaylistId: String(playlist?.platformPlaylistId || '').trim(),
+    platformOwnerId: String(playlist?.platformOwnerId || '').trim(),
     name: playlist?.name || '',
     trackCount: Number(playlist?.trackCount || 0),
     coverUrl: playlist?.coverUrl || '',
     specialType: Number(playlist?.specialType || 0),
+    trackUpdateTime: Number(playlist?.trackUpdateTime || 0),
+    updateTime: Number(playlist?.updateTime || 0),
     subscribed: Boolean(playlist?.subscribed),
     creatorId: Number(playlist?.creatorId || 0),
     creatorName: playlist?.creatorName || '',
@@ -592,6 +608,8 @@ function createMockBridge() {
     playCount: Number(playlist?.playCount || 0),
     copywriter: playlist?.copywriter || '',
     exploreSourceLabel: playlist?.exploreSourceLabel || '',
+    externalUrl: String(playlist?.externalUrl || '').trim(),
+    importReadOnly: Boolean(playlist?.importReadOnly),
     isExplore: Boolean(playlist?.isExplore),
   })
   const buildMockAppUpdateResult = () => {
@@ -636,10 +654,10 @@ function createMockBridge() {
   return {
     getSpotifyImportState: async () => ({
       ok: true,
-      connected: false,
-      storageMode: '',
-      updatedAt: '',
-      account: null,
+      connected: mockSpotifyConnected,
+      storageMode: mockSpotifyConnected ? 'mock' : '',
+      updatedAt: mockSpotifyConnected ? new Date().toISOString() : '',
+      account: mockSpotifyConnected ? { id: 'mock-spotify', nickname: 'Mock Spotify' } : null,
     }),
     startSpotifyImportLogin: async () => ({
       ok: false,
@@ -649,13 +667,42 @@ function createMockBridge() {
       playlists: [],
       storageMode: '',
     }),
-    refreshSpotifyImport: async () => ({
-      ok: false,
-      error: 'mock bridge does not implement Spotify import',
-      account: null,
-      playlists: [],
-      storageMode: '',
-    }),
+    refreshSpotifyImport: async () => {
+      if (!mockSpotifyConnected) {
+        return {
+          ok: false,
+          error: 'mock bridge does not implement Spotify import',
+          account: null,
+          playlists: [],
+          storageMode: '',
+        }
+      }
+
+      return {
+        ok: true,
+        account: { userId: 0, nickname: 'Mock Spotify', sourcePlatform: 'spotify', spotifyUserId: 'mock-spotify' },
+        playlists: [
+          buildMockPlaylist(7001, 'Spotify Mock Mix', 6, 0, false, '', {
+            sourcePlatform: 'spotify',
+            platformPlaylistId: 'spotify-mock-mix',
+            platformOwnerId: 'mock-spotify',
+            creatorName: 'Mock Spotify',
+            importReadOnly: true,
+            externalUrl: 'https://open.spotify.com/playlist/mock',
+            tracks: Array.from({ length: 6 }, (_, index) => buildMockTrackFromSeed(
+              7001001 + index,
+              `Spotify Mock Mix ${index + 1}`,
+              {
+                position: index + 1,
+                sourcePlatform: 'spotify',
+                externalUrl: `https://open.spotify.com/track/mock-${index + 1}`,
+              }
+            )),
+          }),
+        ],
+        storageMode: 'mock',
+      }
+    },
     clearSpotifyImport: async () => ({
       ok: true,
     }),
@@ -665,17 +712,33 @@ function createMockBridge() {
       resolvedTracks: [],
       unresolvedTrackIds: [],
     }),
-    syncSpotifyLibraryToNetease: async () => ({
-      ok: true,
-      playlists: [],
-      summary: {
-        processedCount: 0,
-        createdCount: 0,
-        addedTrackCount: 0,
-        resolvedTrackCount: 0,
-        unresolvedTrackCount: 0,
-      },
-    }),
+    syncSpotifyLibraryToNetease: async () => {
+      const now = Date.now()
+      const nextPlaylist = buildMockPlaylist(8101, 'Spotify 合并歌单', 3, account.userId, false, '', {
+        tracks: [
+          buildMockTrackFromSeed(8101001, 'Spotify 合并歌单 1', { position: 1 }),
+          buildMockTrackFromSeed(8101002, 'Spotify 合并歌单 2', { position: 2 }),
+          buildMockTrackFromSeed(8101003, 'Spotify 合并歌单 3', { position: 3 }),
+        ],
+        trackUpdateTime: now,
+        updateTime: now,
+      })
+      if (!basePlaylists.some((playlist) => Number(playlist.id || 0) === nextPlaylist.id)) {
+        basePlaylists.unshift(nextPlaylist)
+      }
+      updateMockStats()
+      return {
+        ok: true,
+        playlists: [nextPlaylist],
+        summary: {
+          processedCount: 1,
+          createdCount: 1,
+          addedTrackCount: nextPlaylist.tracks.length,
+          resolvedTrackCount: nextPlaylist.tracks.length,
+          unresolvedTrackCount: 0,
+        },
+      }
+    },
     syncNeteaseLibraryToSpotify: async () => ({
       ok: true,
       summary: {
@@ -871,6 +934,58 @@ function createMockBridge() {
         playback: {
           localPlayCounts,
           cloudPlayCounts,
+        },
+      }
+    },
+    refreshLibrary: async (options = {}) => {
+      mockRefreshLibraryCount += 1
+      window.__mockRefreshLibraryCount = mockRefreshLibraryCount
+      window.__mockRefreshLibraryReasons = Array.isArray(window.__mockRefreshLibraryReasons)
+        ? [...window.__mockRefreshLibraryReasons, String(options?.reason || '')]
+        : [String(options?.reason || '')]
+
+      if (!loggedIn) {
+        return {
+          ok: true,
+          needsLogin: true,
+        }
+      }
+
+      if (window.__mockRefreshLibraryResult) {
+        return typeof window.__mockRefreshLibraryResult === 'function'
+          ? window.__mockRefreshLibraryResult(options)
+          : window.__mockRefreshLibraryResult
+      }
+
+      const nextPlaylist = window.__mockNextLibraryPlaylist || null
+      if (nextPlaylist) {
+        const normalizedNextPlaylist = {
+          ...nextPlaylist,
+          id: Number(nextPlaylist.id || nextPlaylist.sourcePlaylistId || 0),
+          sourcePlaylistId: Number(nextPlaylist.sourcePlaylistId || nextPlaylist.id || 0),
+          subscribed: nextPlaylist.subscribed !== false,
+          isExplore: false,
+        }
+        if (normalizedNextPlaylist.id > 0 && !basePlaylists.some((playlist) => Number(playlist.id || 0) === normalizedNextPlaylist.id)) {
+          basePlaylists.push(normalizedNextPlaylist)
+        }
+      }
+
+      updateMockStats()
+      return {
+        ok: true,
+        account,
+        playlists: basePlaylists,
+        playback: {
+          localPlayCounts,
+          cloudPlayCounts,
+        },
+        stats: {
+          playlistCount: basePlaylists.length,
+          trackCount: basePlaylists.reduce((sum, playlist) => sum + Math.max(Number(playlist.trackCount || 0), playlist.tracks?.length || 0), 0),
+          expandedTrackCount: basePlaylists.reduce((sum, playlist) => sum + (playlist.tracks?.length || 0), 0),
+          hydratedPlaylistCount: basePlaylists.filter((playlist) => !playlist.hydrating).length,
+          hydratingPlaylistCount: basePlaylists.filter((playlist) => playlist.hydrating).length,
         },
       }
     },
@@ -1144,7 +1259,25 @@ function createMockBridge() {
     },
     addTrackToPlaylist: async () => ({ ok: true }),
     removeTrackFromPlaylist: async () => ({ ok: true }),
-    commitPlaylistTrackMove: async () => ({ ok: true }),
+    commitPlaylistTrackMove: async (payload = {}) => {
+      window.__mockTrackMovePayloads = window.__mockTrackMovePayloads || []
+      window.__mockTrackMovePayloads.push({
+        sourcePlaylistId: Number(payload?.sourcePlaylistId || 0),
+        targetPlaylistId: Number(payload?.targetPlaylistId || 0),
+        trackIds: (payload?.trackIds || []).map((trackId) => Number(trackId)),
+        sourceTrackIds: (payload?.sourceTracks || []).map((track) => Number(track?.id || 0)),
+        targetTrackIds: (payload?.targetTracks || []).map((track) => Number(track?.id || 0)),
+      })
+      const delay = Math.max(0, Number(params.get('trackMoveDelay') || 0) || 0)
+      if (delay > 0) {
+        await new Promise((resolve) => window.setTimeout(resolve, delay))
+      }
+      if (params.get('trackMoveFail') === '1' || window.__mockFailNextTrackMove) {
+        window.__mockFailNextTrackMove = false
+        return { ok: false, error: TEXT.moveToPlaylistFailed }
+      }
+      return { ok: true }
+    },
     removeSubscribedPlaylist: async (playlist) => {
       const normalizedPlaylistId = Number(playlist?.sourcePlaylistId || playlist?.id || 0)
       const index = basePlaylists.findIndex((playlist) => playlist.id === normalizedPlaylistId)
@@ -1355,6 +1488,8 @@ function buildMockPlaylist(id, name, trackCount, creatorId, subscribed, trackErr
     trackCount,
     coverUrl: options.coverUrl || buildMockCover(id),
     specialType: Number(options.specialType || 0),
+    trackUpdateTime: Number(options.trackUpdateTime || 0),
+    updateTime: Number(options.updateTime || 0),
     subscribed,
     creatorId,
     creatorName: options.creatorName || '',
@@ -1362,11 +1497,37 @@ function buildMockPlaylist(id, name, trackCount, creatorId, subscribed, trackErr
     playCount: Number(options.playCount || 0),
     copywriter: options.copywriter || '',
     exploreSourceLabel: options.exploreSourceLabel || '',
+    sourcePlatform: options.sourcePlatform || '',
+    platformPlaylistId: String(options.platformPlaylistId || '').trim(),
+    platformOwnerId: String(options.platformOwnerId || '').trim(),
+    externalUrl: String(options.externalUrl || '').trim(),
+    importReadOnly: Boolean(options.importReadOnly),
     isExplore: Boolean(options.isExplore),
     tracks,
     tracksError: trackError,
     hydrated: options.hydrated !== undefined ? Boolean(options.hydrated) : !options.hydrating,
     hydrating: Boolean(options.hydrating),
+  }
+}
+
+function buildMockTrackFromSeed(id, name, options = {}) {
+  const normalizedId = Number(id || 0)
+  const artistId = Number(options.artistId || ((Math.abs(normalizedId) % 5) + 1))
+  const albumId = Number(options.albumId || ((Math.abs(normalizedId) % 9) + 1))
+  const artistName = options.artistName || `艺术家 ${artistId}`
+
+  return {
+    id: normalizedId,
+    position: Number(options.position || 1),
+    name: String(name || `歌曲 ${normalizedId}`),
+    artists: [artistName],
+    artistEntries: [{ id: artistId, name: artistName }],
+    album: options.album || `专辑 ${albumId}`,
+    albumId,
+    albumCoverUrl: options.albumCoverUrl || buildMockCover(albumId),
+    durationMs: Number(options.durationMs || 180000),
+    sourcePlatform: String(options.sourcePlatform || '').trim(),
+    externalUrl: String(options.externalUrl || '').trim(),
   }
 }
 
@@ -2338,6 +2499,35 @@ function wireBridge() {
   }
 }
 
+function hasExternalLibraryRefreshSupport() {
+  return Boolean(appBridge && typeof appBridge.refreshLibrary === 'function')
+}
+
+function clearLibraryRefreshTimer() {
+  if (renderRuntime.libraryRefreshTimer) {
+    window.clearTimeout(renderRuntime.libraryRefreshTimer)
+    renderRuntime.libraryRefreshTimer = 0
+  }
+}
+
+function startLibraryAutoRefresh() {
+  if (!canUseNeteaseFeatures() || !hasExternalLibraryRefreshSupport() || document.hidden) {
+    clearLibraryRefreshTimer()
+    return
+  }
+
+  clearLibraryRefreshTimer()
+  renderRuntime.libraryRefreshTimer = window.setTimeout(() => {
+    renderRuntime.libraryRefreshTimer = 0
+    void refreshLibraryFromServer({ reason: 'interval', silent: true })
+  }, LIBRARY_AUTO_REFRESH_INTERVAL_MS)
+}
+
+function stopLibraryAutoRefresh() {
+  clearLibraryRefreshTimer()
+  renderRuntime.libraryRefreshQueued = false
+}
+
 async function handleLyricsButtonClick() {
   if (!shouldShowLyricsButton()) return
   closeLyricsMenu()
@@ -3022,6 +3212,134 @@ function applySyncedNeteasePlaylists(playlists) {
   applyFilters({ syncAll: true })
 }
 
+function countNewLibraryPlaylists(currentPlaylists, nextPlaylists) {
+  const currentIds = new Set((currentPlaylists || [])
+    .map((playlist) => Number(playlist?.id || 0))
+    .filter((playlistId) => playlistId > 0))
+  return (nextPlaylists || []).filter((playlist) => {
+    const playlistId = Number(playlist?.id || 0)
+    return playlistId > 0 && !currentIds.has(playlistId)
+  }).length
+}
+
+function countRemovedLibraryPlaylists(currentPlaylists, nextPlaylists) {
+  const nextIds = new Set((nextPlaylists || [])
+    .map((playlist) => Number(playlist?.id || 0))
+    .filter((playlistId) => playlistId > 0))
+  return (currentPlaylists || []).filter((playlist) => {
+    const playlistId = Number(playlist?.id || 0)
+    return playlistId > 0 && !nextIds.has(playlistId)
+  }).length
+}
+
+function applyLibraryRefreshResult(result, { silent = true } = {}) {
+  if (!result?.ok) {
+    return false
+  }
+
+  if (result.needsLogin) {
+    stopLibraryAutoRefresh()
+    resetAppState()
+    state.neteaseAuthenticated = false
+    showAuthScreen()
+    void startQrLoginFlow()
+    return false
+  }
+
+  const refreshedPlaylists = Array.isArray(result.playlists)
+    ? result.playlists.map(normalizePlaylist)
+    : []
+  let nextPlaylists = state.playlists.slice()
+  for (const playlist of refreshedPlaylists) {
+    nextPlaylists = upsertPlaylistIntoLibrary(nextPlaylists, playlist)
+  }
+
+  if (Array.isArray(result.playlists)) {
+    const refreshedIds = new Set(refreshedPlaylists
+      .map((playlist) => Number(playlist?.id || 0))
+      .filter((playlistId) => playlistId > 0))
+    nextPlaylists = nextPlaylists.filter((playlist) => refreshedIds.has(Number(playlist.id || 0)))
+  }
+  nextPlaylists = sortWallPlaylists(nextPlaylists)
+  const addedCount = countNewLibraryPlaylists(state.playlists, nextPlaylists)
+  const removedCount = countRemovedLibraryPlaylists(state.playlists, nextPlaylists)
+
+  if (result.account) {
+    state.account = result.account
+  }
+  if (result.playback) {
+    hydratePlaybackStats(result.playback)
+  }
+
+  setPlaylists(nextPlaylists)
+  if (!(state.queuePlaylistId === null && state.currentTrackId === null)) {
+    syncQueueWithPlaylists()
+  }
+  renderTabs()
+  renderHeader()
+  renderPlayer()
+  applyFilters({ syncAll: addedCount > 0 || removedCount > 0 })
+
+  if (!silent && addedCount > 0) {
+    showToast(`\u5df2\u540c\u6b65 ${addedCount} \u5f20\u65b0\u6536\u85cf\u6b4c\u5355`)
+  }
+
+  return true
+}
+
+async function refreshLibraryFromServer({ reason = 'manual', silent = true, force = false } = {}) {
+  if (!canUseNeteaseFeatures() || !hasExternalLibraryRefreshSupport()) {
+    return false
+  }
+
+  const now = Date.now()
+  if (
+    !force
+    && renderRuntime.libraryRefreshLastAt > 0
+    && now - renderRuntime.libraryRefreshLastAt < LIBRARY_AUTO_REFRESH_MIN_INTERVAL_MS
+  ) {
+    if (!LIBRARY_AUTO_REFRESH_FORCE_REASONS.has(reason)) {
+      startLibraryAutoRefresh()
+      return false
+    }
+  }
+
+  if (renderRuntime.libraryRefreshInFlight) {
+    renderRuntime.libraryRefreshQueued = true
+    return false
+  }
+
+  renderRuntime.libraryRefreshInFlight = true
+  renderRuntime.libraryRefreshLastAt = now
+
+  let result = null
+  try {
+    result = await appBridge.refreshLibrary({ reason })
+  } catch (error) {
+    result = {
+      ok: false,
+      error: error?.message || String(error),
+    }
+  } finally {
+    renderRuntime.libraryRefreshInFlight = false
+  }
+
+  if (result?.ok) {
+    applyLibraryRefreshResult(result, { silent })
+  } else if (!silent) {
+    showToast(result?.error || TEXT.initFailed, 'error')
+  }
+
+  if (renderRuntime.libraryRefreshQueued) {
+    renderRuntime.libraryRefreshQueued = false
+    void refreshLibraryFromServer({ reason: 'queued', silent: true })
+  } else {
+    startLibraryAutoRefresh()
+  }
+
+  return Boolean(result?.ok)
+}
+
 async function handleSpotifySyncToNetease() {
   if (!canUseNeteaseFeatures() || !appBridge || typeof appBridge.syncSpotifyLibraryToNetease !== 'function') {
     showToast(TEXT.exploreRequiresNetease, 'error')
@@ -3095,6 +3413,7 @@ async function init() {
   if (result.needsLogin) {
     resetAppState()
     state.neteaseAuthenticated = false
+    stopLibraryAutoRefresh()
     const restoredSpotify = await refreshSpotifyImportLibrary({ replaceApp: true, silent: true })
     if (restoredSpotify) {
       return
@@ -3125,6 +3444,7 @@ async function init() {
   }
 
   await refreshSpotifyImportLibrary({ silent: true })
+  startLibraryAutoRefresh()
 }
 
 function renderExploreLoadingState() {
@@ -3745,6 +4065,7 @@ async function checkQrLoginStatus() {
 }
 
 function resetAppState() {
+  stopLibraryAutoRefresh()
   stopAuthPolling()
   closeContextMenu()
   hideAlbumHoverPreview()
@@ -3815,6 +4136,9 @@ function resetAppState() {
   renderRuntime.subscribingPlaylistIds = new Set()
   renderRuntime.playlistRemovalPendingIds = new Set()
   renderRuntime.playlistUndoNotice = null
+  renderRuntime.libraryRefreshInFlight = false
+  renderRuntime.libraryRefreshQueued = false
+  renderRuntime.libraryRefreshLastAt = 0
   renderRuntime.playlistDragState = null
   renderRuntime.playlistDragSourceCard = null
   renderRuntime.playlistDragIndicator = null
@@ -4363,6 +4687,8 @@ function normalizePlaylist(playlist) {
     coverUrl: playlist.coverUrl || '',
     dominantAlbumCoverUrl: resolveDominantAlbumCover(tracks, playlist.coverUrl || ''),
     specialType: Number(playlist.specialType || 0),
+    trackUpdateTime: Number(playlist.trackUpdateTime || 0),
+    updateTime: Number(playlist.updateTime || 0),
     creatorId: Number(playlist.creatorId || 0),
     creatorName: playlist.creatorName || '',
     description: String(playlist.description || ''),
@@ -5171,9 +5497,11 @@ function renderTabs() {
   refs.tabExplore.setAttribute('aria-selected', String(state.activeTab === 'explore'))
   refs.tabArtists.setAttribute('aria-selected', String(state.activeTab === 'artists'))
   refs.tabConcerts.setAttribute('aria-selected', String(state.activeTab === 'concerts'))
+  const concertsEnabled = isConcertsFeatureEnabled()
   refs.tabSpotify.classList.toggle('hidden', !state.spotifyImport.connected && !state.spotifyPlaylists.length)
+  refs.tabConcerts.classList.toggle('hidden', !concertsEnabled)
   refs.tabExplore.disabled = !canUseNeteaseFeatures()
-  refs.tabConcerts.disabled = !canUseNeteaseFeatures() || !isConcertsFeatureEnabled()
+  refs.tabConcerts.disabled = !canUseNeteaseFeatures() || !concertsEnabled
 }
 
 function renderConcertLocationFilter() {
@@ -8749,47 +9077,211 @@ function applyTrackMovePlan(plan) {
   applyFilters({ syncAll: true })
 }
 
+function removeTracksById(tracks, trackIds) {
+  const removedTrackIdSet = new Set((trackIds || []).map((id) => Number(id)).filter((id) => id > 0))
+  return normalizeTrackPositions((tracks || []).filter((track) => !removedTrackIdSet.has(Number(track.id))))
+}
+
+function mergeTracksBackAtOriginalPositions(currentTracks, originalTracks, trackIds) {
+  const restoredTrackIdSet = new Set((trackIds || []).map((id) => Number(id)).filter((id) => id > 0))
+  if (!restoredTrackIdSet.size) {
+    return normalizeTrackPositions(currentTracks)
+  }
+
+  const tracksToRestore = (originalTracks || []).filter((track) => restoredTrackIdSet.has(Number(track.id)))
+  if (!tracksToRestore.length) {
+    return normalizeTrackPositions(currentTracks)
+  }
+
+  const nextTracks = (currentTracks || []).filter((track) => !restoredTrackIdSet.has(Number(track.id)))
+  const findNextExistingIndex = (originalIndex) => {
+    for (let index = originalIndex + 1; index < (originalTracks || []).length; index += 1) {
+      const nextOriginalTrackId = Number(originalTracks[index]?.id || 0)
+      const nextIndex = nextTracks.findIndex((track) => Number(track.id) === nextOriginalTrackId)
+      if (nextIndex >= 0) {
+        return nextIndex
+      }
+    }
+    return -1
+  }
+  const findPreviousExistingIndex = (originalIndex) => {
+    for (let index = originalIndex - 1; index >= 0; index -= 1) {
+      const previousOriginalTrackId = Number(originalTracks[index]?.id || 0)
+      const previousIndex = nextTracks.findIndex((track) => Number(track.id) === previousOriginalTrackId)
+      if (previousIndex >= 0) {
+        return previousIndex
+      }
+    }
+    return -1
+  }
+
+  for (const trackToRestore of tracksToRestore) {
+    const originalIndex = (originalTracks || []).findIndex((track) => Number(track.id) === Number(trackToRestore.id))
+    const nextIndex = findNextExistingIndex(originalIndex)
+    if (nextIndex >= 0) {
+      nextTracks.splice(nextIndex, 0, trackToRestore)
+      continue
+    }
+
+    const previousIndex = findPreviousExistingIndex(originalIndex)
+    nextTracks.splice(previousIndex >= 0 ? previousIndex + 1 : nextTracks.length, 0, trackToRestore)
+  }
+
+  return normalizeTrackPositions(nextTracks)
+}
+
+function rollbackTrackMovePlan(plan) {
+  const movedTrackIds = plan.trackIds || []
+  const nextPlaylists = state.playlists.map((playlist) => {
+    if (playlist.id === plan.targetPlaylist.id) {
+      const targetTracks = plan.samePlaylist
+        ? mergeTracksBackAtOriginalPositions(playlist.tracks, plan.targetPlaylist.tracks, movedTrackIds)
+        : removeTracksById(playlist.tracks, movedTrackIds)
+      return buildPlaylistWithTracks(playlist, targetTracks)
+    }
+
+    if (!plan.samePlaylist && !plan.keepSource && playlist.id === plan.sourcePlaylist.id) {
+      return buildPlaylistWithTracks(
+        playlist,
+        mergeTracksBackAtOriginalPositions(playlist.tracks, plan.sourcePlaylist.tracks, movedTrackIds)
+      )
+    }
+
+    return playlist
+  })
+
+  setPlaylists(sortWallPlaylists(nextPlaylists))
+  syncQueueWithPlaylists()
+  renderTabs()
+  renderHeader()
+  renderPlayer()
+  applyFilters({ syncAll: true })
+}
+
+function mergePlannedTracksIntoCurrent(currentTracks, plannedTracks, trackIds, fallbackTracks = []) {
+  const movedTrackIdSet = new Set((trackIds || []).map((id) => Number(id)).filter((id) => id > 0))
+  if (!movedTrackIdSet.size) {
+    return normalizeTrackPositions(currentTracks)
+  }
+
+  const tracksToInsert = (plannedTracks || []).filter((track) => movedTrackIdSet.has(Number(track.id)))
+  if (!tracksToInsert.length) {
+    tracksToInsert.push(...(fallbackTracks || []).filter((track) => movedTrackIdSet.has(Number(track.id))))
+  }
+  if (!tracksToInsert.length) {
+    return normalizeTrackPositions(currentTracks)
+  }
+
+  const nextTracks = (currentTracks || []).filter((track) => !movedTrackIdSet.has(Number(track.id)))
+  const findNextExistingIndex = (plannedIndex) => {
+    for (let index = plannedIndex + 1; index < (plannedTracks || []).length; index += 1) {
+      const nextPlannedTrackId = Number(plannedTracks[index]?.id || 0)
+      if (movedTrackIdSet.has(nextPlannedTrackId)) {
+        continue
+      }
+      const nextIndex = nextTracks.findIndex((track) => Number(track.id) === nextPlannedTrackId)
+      if (nextIndex >= 0) {
+        return nextIndex
+      }
+    }
+    return -1
+  }
+  const findPreviousExistingIndex = (plannedIndex) => {
+    for (let index = plannedIndex - 1; index >= 0; index -= 1) {
+      const previousPlannedTrackId = Number(plannedTracks[index]?.id || 0)
+      if (movedTrackIdSet.has(previousPlannedTrackId)) {
+        continue
+      }
+      const previousIndex = nextTracks.findIndex((track) => Number(track.id) === previousPlannedTrackId)
+      if (previousIndex >= 0) {
+        return previousIndex
+      }
+    }
+    return -1
+  }
+
+  for (const trackToInsert of tracksToInsert) {
+    const plannedIndex = (plannedTracks || []).findIndex((track) => Number(track.id) === Number(trackToInsert.id))
+    const nextIndex = findNextExistingIndex(plannedIndex)
+    if (nextIndex >= 0) {
+      nextTracks.splice(nextIndex, 0, trackToInsert)
+      continue
+    }
+
+    const previousIndex = findPreviousExistingIndex(plannedIndex)
+    nextTracks.splice(previousIndex >= 0 ? previousIndex + 1 : nextTracks.length, 0, trackToInsert)
+  }
+
+  return normalizeTrackPositions(nextTracks)
+}
+
+function buildTrackMoveCommitPayload(plan) {
+  const currentSourcePlaylist = getPlaylistById(plan.sourcePlaylist.id) || plan.sourcePlaylist
+  const currentTargetPlaylist = getPlaylistById(plan.targetPlaylist.id) || plan.targetPlaylist
+  const trackIds = plan.trackIds || []
+  const targetTracks = mergePlannedTracksIntoCurrent(
+    currentTargetPlaylist.tracks,
+    plan.targetTracks,
+    trackIds,
+    plan.tracks
+  )
+  const sourceTracks = plan.samePlaylist
+    ? targetTracks
+    : plan.keepSource
+      ? null
+      : removeTracksById(currentSourcePlaylist.tracks, trackIds)
+
+  return {
+    sourcePlaylistId: plan.sourcePlaylist.id,
+    targetPlaylistId: plan.targetPlaylist.id,
+    track: plan.track,
+    tracks: plan.tracks,
+    trackIds,
+    keepSource: plan.keepSource,
+    sourceTracks,
+    targetTracks,
+  }
+}
+
+function enqueueTrackMoveCommit(task) {
+  const runTask = renderRuntime.trackMoveCommitQueue.then(task, task)
+  renderRuntime.trackMoveCommitQueue = runTask.catch(() => {})
+  return runTask
+}
+
 async function commitTrackMovePlan(plan) {
   if (!appBridge || typeof appBridge.commitPlaylistTrackMove !== 'function') {
     showToast(plan.samePlaylist ? TEXT.reorderPlaylistFailed : TEXT.moveToPlaylistFailed, 'error')
     return false
   }
 
-  renderRuntime.playlistMutationPending = true
-  let result = null
-
-  try {
-    result = await appBridge.commitPlaylistTrackMove({
-      sourcePlaylistId: plan.sourcePlaylist.id,
-      targetPlaylistId: plan.targetPlaylist.id,
-      track: plan.track,
-      tracks: plan.tracks,
-      trackIds: plan.trackIds,
-      keepSource: plan.keepSource,
-      sourceTracks: plan.keepSource ? null : plan.sourceTracks,
-      targetTracks: plan.targetTracks,
-    })
-  } finally {
-    renderRuntime.playlistMutationPending = false
-  }
-
-  if (!result?.ok) {
-    showToast(
-      result?.error || (plan.samePlaylist ? TEXT.reorderPlaylistFailed : TEXT.moveToPlaylistFailed),
-      'error'
-    )
-    return false
-  }
-
   applyTrackMovePlan(plan)
 
-  if (plan.samePlaylist) {
-    showToast(TEXT.reorderPlaylistDone)
-    return true
-  }
+  return enqueueTrackMoveCommit(async () => {
+    let result = null
+    try {
+      result = await appBridge.commitPlaylistTrackMove(buildTrackMoveCommitPayload(plan))
+    } catch (error) {
+      result = { ok: false, error: error?.message || String(error) }
+    }
 
-  showToast(`${plan.keepSource ? TEXT.copyToPlaylistDone : TEXT.moveToPlaylistDone}\uff1a${plan.targetPlaylist.name}`)
-  return true
+    if (!result?.ok) {
+      rollbackTrackMovePlan(plan)
+      showToast(
+        result?.error || (plan.samePlaylist ? TEXT.reorderPlaylistFailed : TEXT.moveToPlaylistFailed),
+        'error'
+      )
+      return false
+    }
+
+    if (plan.samePlaylist) {
+      showToast(TEXT.reorderPlaylistDone)
+      return true
+    }
+
+    showToast(`${plan.keepSource ? TEXT.copyToPlaylistDone : TEXT.moveToPlaylistDone}\uff1a${plan.targetPlaylist.name}`)
+    return true
+  })
 }
 
 function reorderPlaylistCollection(playlists, sourcePlaylistId, targetPlaylistId, position) {
@@ -9075,6 +9567,12 @@ function handleDocumentVisibilityChange() {
   if (document.hidden) {
     clearPlaylistDragState()
     clearTrackDragState()
+    clearLibraryRefreshTimer()
+    return
+  }
+
+  if (canUseNeteaseFeatures()) {
+    void refreshLibraryFromServer({ reason: 'focus', silent: true })
   }
 }
 
@@ -9504,7 +10002,7 @@ function handleWallDragStart(event) {
 
   const row = target?.closest('.track-row[data-play-track]')
 
-  if (!row || renderRuntime.playlistMutationPending) {
+  if (!row) {
     event.preventDefault()
     return
   }
@@ -9561,7 +10059,7 @@ function handleWallDragOver(event) {
     return
   }
 
-  if (!renderRuntime.dragState || renderRuntime.playlistMutationPending) {
+  if (!renderRuntime.dragState) {
     return
   }
 
@@ -9592,7 +10090,7 @@ function handleWallDrop(event) {
     return
   }
 
-  if (!renderRuntime.dragState || renderRuntime.playlistMutationPending) {
+  if (!renderRuntime.dragState) {
     return
   }
 
@@ -11167,11 +11665,16 @@ function handleVolumeAssistWheel(event) {
 
 function adjustAppVolumeByAssist(direction) {
   const current = Number(refs.volumeRange.value || 0)
-  const next = clamp(current + (direction > 0 ? VOLUME_ASSIST_STEP : -VOLUME_ASSIST_STEP), 0, 100)
+  const next = clamp(
+    Math.round((current + (direction > 0 ? VOLUME_ASSIST_STEP : -VOLUME_ASSIST_STEP)) * 10) / 10,
+    0,
+    100
+  )
   if (next === current) {
     return
   }
 
+  refs.volumeRange.step = String(VOLUME_ASSIST_STEP)
   refs.volumeRange.value = String(next)
   refs.audio.volume = next / 100
   refs.volumeRange.dispatchEvent(new Event('input', { bubbles: true }))

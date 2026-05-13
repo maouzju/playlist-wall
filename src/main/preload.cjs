@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld('bridge', {
   checkAppUpdate: (options) => ipcRenderer.invoke('checkAppUpdate', options),
   installAppUpdate: () => ipcRenderer.invoke('installAppUpdate'),
   init: () => ipcRenderer.invoke('init'),
+  refreshLibrary: (options) => ipcRenderer.invoke('refreshLibrary', options),
   startQrLogin: () => ipcRenderer.invoke('startQrLogin'),
   checkQrLogin: (key) => ipcRenderer.invoke('checkQrLogin', key),
   logout: () => ipcRenderer.invoke('logout'),

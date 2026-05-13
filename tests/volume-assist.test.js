@@ -2,12 +2,14 @@ const test = require('node:test')
 const assert = require('node:assert/strict')
 
 const {
+  VOLUME_ASSIST_STEP,
   getWheelDirection,
   isHotkeyPressed,
   normalizeVolumeAssistSettings,
   parseHotkeyParts,
   parseVolumeAssistWheelLine,
   parseWindowsHookHotkey,
+  buildWindowsVolumeAssistHookScript,
 } = require('../src/main/volume-assist')
 
 test('normalizeVolumeAssistSettings defaults to app volume with Alt hotkey', () => {
@@ -16,6 +18,7 @@ test('normalizeVolumeAssistSettings defaults to app volume with Alt hotkey', () 
     target: 'app',
     hotkey: 'Alt',
   })
+  assert.equal(VOLUME_ASSIST_STEP, 0.2)
 })
 
 test('normalizeVolumeAssistSettings normalizes target and hotkey', () => {
@@ -78,4 +81,15 @@ test('parseVolumeAssistWheelLine extracts global wheel directions', () => {
   assert.equal(parseVolumeAssistWheelLine('{"direction":-1}'), -1)
   assert.equal(parseVolumeAssistWheelLine('{"direction":0}'), 0)
   assert.equal(parseVolumeAssistWheelLine('not json'), 0)
+})
+
+test('buildWindowsVolumeAssistHookScript keeps the 0.2 step as a floating point value', () => {
+  const script = buildWindowsVolumeAssistHookScript({
+    hotkey: 'Alt',
+    target: 'system',
+    step: 0.2,
+  })
+
+  assert.match(script, /\[VolumeAssistWheelHook\]::Step = \[double\]\$assistConfig\.step/)
+  assert.match(script, /Math\.Round\(Step \/ 0\.2, MidpointRounding\.AwayFromZero\)/)
 })

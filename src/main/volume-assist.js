@@ -3,7 +3,7 @@ const { execFileSync, spawn } = require('child_process')
 const VOLUME_ASSIST_TARGET_APP = 'app'
 const VOLUME_ASSIST_TARGET_SYSTEM = 'system'
 const VOLUME_ASSIST_DEFAULT_HOTKEY = 'Alt'
-const VOLUME_ASSIST_STEP = 5
+const VOLUME_ASSIST_STEP = 0.2
 const WINDOWS_WHEEL_LISTENER_STDERR_LIMIT = 4096
 
 function clamp(value, min, max) {
@@ -193,7 +193,7 @@ function buildWindowsVolumeAssistHookScript(hookHotkey) {
     meta: Boolean(hookHotkey?.meta),
     keyVk: Math.max(0, Math.trunc(Number(hookHotkey?.keyVk || 0))),
     targetSystem: hookHotkey?.target === VOLUME_ASSIST_TARGET_SYSTEM,
-    step: clamp(Math.round(Number(hookHotkey?.step) || VOLUME_ASSIST_STEP), 1, 20),
+    step: clamp(Number(hookHotkey?.step) || VOLUME_ASSIST_STEP, 0.05, 20),
   }
   const configJson = JSON.stringify(config).replace(/'/g, "''")
 
@@ -229,7 +229,7 @@ public static class VolumeAssistWheelHook {
   public static bool RequireMeta;
   public static int MainKeyVk;
   public static bool TargetSystem;
-  public static int Step;
+  public static double Step;
 
   [StructLayout(LayoutKind.Sequential)]
   private struct POINT {
@@ -298,7 +298,7 @@ public static class VolumeAssistWheelHook {
 
   private static void AdjustSystemVolume(int direction) {
     byte virtualKey = direction > 0 ? VK_VOLUME_UP : VK_VOLUME_DOWN;
-    int repeat = Math.Max(1, Math.Min(20, Step));
+    int repeat = Math.Max(1, Math.Min(20, (int)Math.Round(Step / 0.2, MidpointRounding.AwayFromZero)));
     for (int index = 0; index < repeat; index++) {
       keybd_event(virtualKey, 0, 0, UIntPtr.Zero);
       keybd_event(virtualKey, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
@@ -359,7 +359,7 @@ public static class VolumeAssistWheelHook {
 [VolumeAssistWheelHook]::RequireMeta = [bool]$assistConfig.meta
 [VolumeAssistWheelHook]::MainKeyVk = [int]$assistConfig.keyVk
 [VolumeAssistWheelHook]::TargetSystem = [bool]$assistConfig.targetSystem
-[VolumeAssistWheelHook]::Step = [int]$assistConfig.step
+[VolumeAssistWheelHook]::Step = [double]$assistConfig.step
 exit [VolumeAssistWheelHook]::Run()
 `.trim()
 }
@@ -474,9 +474,9 @@ function adjustWindowsSystemVolume(direction, step = VOLUME_ASSIST_STEP) {
   }
 
   const normalizedDirection = direction > 0 ? 1 : -1
-  const safeStep = clamp(Math.round(Number(step) || VOLUME_ASSIST_STEP), 1, 20)
+  const safeStep = clamp(Number(step) || VOLUME_ASSIST_STEP, 0.05, 20)
   const virtualKey = normalizedDirection > 0 ? '0xAF' : '0xAE'
-  const repeatCount = Math.max(1, safeStep)
+  const repeatCount = Math.max(1, Math.round(safeStep / 0.2))
   const script = [
     'Add-Type -TypeDefinition \'using System; using System.Runtime.InteropServices; public static class VolumeKeys { [DllImport("user32.dll")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo); }\'',
     `$vk = [byte]${virtualKey}`,
