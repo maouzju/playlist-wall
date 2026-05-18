@@ -465,6 +465,34 @@ test('explore preload starts before app init finishes', async ({ page }) => {
   await expect(page.locator('#tab-explore-count')).not.toHaveText('0')
 })
 
+test('closed quick add layer does not steal search input focus', async ({ page }) => {
+  await waitForWall(page)
+
+  await page.locator('#search-input').click()
+  await expect(page.locator('#search-input')).toBeFocused()
+
+  await page.locator('#search-input').fill('Jazz')
+  await expect(page.locator('#search-input')).toBeFocused()
+  await expect(page.locator('#search-input')).toHaveValue('Jazz')
+})
+
+test('library refresh keeps search input focused while typing', async ({ page }) => {
+  await waitForWall(page)
+
+  await page.locator('#search-input').click()
+  await page.locator('#search-input').fill('Jazz')
+  await page.evaluate(() => {
+    applyLibraryRefreshResult({
+      ok: true,
+      playlists: state.playlists,
+      account: state.account,
+    }, { silent: true })
+  })
+
+  await expect(page.locator('#search-input')).toBeFocused()
+  await expect(page.locator('#search-input')).toHaveValue('Jazz')
+})
+
 test('artist playlists preload silently after app init', async ({ page }) => {
   await waitForWall(page)
 
@@ -1179,6 +1207,8 @@ test('concerts tab loads event cards and filters by city picker or venue search'
   await page.click('#tab-concerts')
   const concertCards = page.locator('.playlist-card')
   await expect(concertCards).toHaveCount(2)
+  await expect(concertCards.filter({ hasText: '夏日音乐节' })).toBeVisible()
+  await expect(concertCards.filter({ hasText: '源' })).toHaveCount(2)
   await expect(page.locator('#tab-concerts')).toHaveClass(/is-active/)
   await expect(page.locator('#search-input')).toHaveAttribute('placeholder', /\u6f14\u51fa/)
   await expect(page.locator('#concert-location-filter')).toBeVisible()

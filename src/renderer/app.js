@@ -60,6 +60,7 @@ const VOLUME_ASSIST_DEFAULT_HOTKEY = 'Alt'
 const VOLUME_ASSIST_STEP = 0.2
 const VOLUME_ASSIST_SYSTEM_THROTTLE_MS = 80
 const CONCERT_ARTIST_TITLE_MATCH_MIN_LENGTH = 2
+const QUICK_ADD_SEARCH_LIMIT = 10
 
 const TEXT = {
   tabOwned: '\u81ea\u5df1\u521b\u5efa',
@@ -82,6 +83,8 @@ const TEXT = {
   concertsFailed: '\u52a0\u8f7d\u6f14\u51fa\u65e5\u5386\u5931\u8d25',
   openConcertDetail: '\u6253\u5f00\u6f14\u51fa\u8be6\u60c5',
   openConcertDetailFailed: '\u6253\u5f00\u6f14\u51fa\u8be6\u60c5\u5931\u8d25',
+  concertTicketSourcesLabel: '\u7968\u52a1\u6765\u6e90',
+  concertSourceFallback: '\u6f14\u51fa\u6765\u6e90',
   searchConcertsPlaceholder: '\u641c\u7d22\u6f14\u51fa\u3001\u827a\u4eba\u3001\u57ce\u5e02\u6216\u573a\u9986',
   concertsFeatureDisabled: '\u6f14\u51fa\u529f\u80fd\u9ed8\u8ba4\u5173\u95ed\uff0c\u8bf7\u5728\u8bbe\u7f6e\u91cc\u5f00\u542f\u3002',
   concertRelatedSongsLabel: '\u76f8\u5173\u6b4c\u66f2',
@@ -127,6 +130,12 @@ const TEXT = {
   addedToPlaylist: '\u5df2\u6536',
   addToPlaylistDone: '\u5df2\u52a0\u5165\u6b4c\u5355',
   addToPlaylistFailed: '\u52a0\u5165\u6b4c\u5355\u5931\u8d25',
+  quickAddEmptyClipboard: '\u526a\u5207\u677f\u91cc\u6ca1\u6709\u53ef\u641c\u7d22\u7684\u6587\u5b57',
+  quickAddClipboardReadFailed: '\u8bfb\u53d6\u526a\u5207\u677f\u5931\u8d25',
+  quickAddSearchLoading: '\u6b63\u5728\u641c\u7d22...',
+  quickAddSearchEmpty: '\u6ca1\u641c\u5230\u76f8\u8fd1\u7684\u6b4c',
+  quickAddSearchFailed: '\u641c\u7d22\u6b4c\u66f2\u5931\u8d25',
+  quickAddNoTargetPlaylist: '\u6682\u65f6\u6ca1\u6709\u53ef\u6dfb\u52a0\u7684\u81ea\u5efa\u6b4c\u5355',
   removeFromPlaylist: '\u79fb\u51fa\u6b4c\u5355',
   removeFromPlaylistDone: '\u5df2\u4ece\u6b4c\u5355\u79fb\u51fa',
   removeFromPlaylistFailed: '\u79fb\u51fa\u6b4c\u5355\u5931\u8d25',
@@ -414,6 +423,8 @@ const renderRuntime = {
   audioQualityRefreshTimer: 0,
   pendingAudioQualityRefreshReason: '',
   playlistEditorState: null,
+  quickAddState: null,
+  quickAddSearchToken: 0,
 }
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -766,6 +777,10 @@ function createMockBridge() {
 
       return { ok: true }
     },
+    readClipboardText: async () => ({
+      ok: true,
+      text: String(window.__mockClipboardText || '').trim(),
+    }),
     checkAppUpdate: async () => {
       mockAppUpdateCheckCount += 1
       window.__mockAppUpdateCheckCount = mockAppUpdateCheckCount
@@ -1068,6 +1083,28 @@ function createMockBridge() {
         tracks: normalizedLimit > 0 ? sourceTracks.slice(0, normalizedLimit) : sourceTracks.slice(),
       }
     },
+    searchSongs: async (query, options = {}) => {
+      const normalizedQuery = normalizeQuery(query)
+      const limit = Math.max(1, Math.min(50, Number(options?.limit || QUICK_ADD_SEARCH_LIMIT) || QUICK_ADD_SEARCH_LIMIT))
+      const tracks = basePlaylists
+        .flatMap((playlist) => playlist.tracks || [])
+        .filter((track) => !normalizedQuery || normalizeQuery([
+          track?.name || '',
+          track?.album || '',
+          (track?.artists || []).join(' '),
+        ].join(' ')).includes(normalizedQuery))
+      const seen = new Set()
+      const uniqueTracks = []
+      for (const track of tracks) {
+        const trackId = Number(track?.id || 0)
+        if (trackId <= 0 || seen.has(trackId)) {
+          continue
+        }
+        seen.add(trackId)
+        uniqueTracks.push(track)
+      }
+      return { ok: true, tracks: uniqueTracks.slice(0, limit) }
+    },
     getOwnedPlaylistSummary: async (playlistId) => {
       const normalizedPlaylistId = Number(playlistId || 0)
       const playlist = basePlaylists.find((item) => Number(item.id || 0) === normalizedPlaylistId) || null
@@ -1157,6 +1194,12 @@ function createMockBridge() {
             endTime: Date.now() + 14 * 24 * 60 * 60 * 1000 + 2 * 60 * 60 * 1000,
             coverUrl: buildMockCover(801001),
             externalUrl: 'https://music.163.com/',
+            source: 'netease-calendar',
+            sourceLabel: '\u7f51\u6613\u4e91',
+            ticketSources: [
+              { id: 'damai', name: '\u5927\u9ea6', url: 'https://search.damai.cn/search.html?keyword=%E8%89%BA%E6%9C%AF%E5%AE%B6%201%20%E4%B8%8A%E6%B5%B7' },
+              { id: 'showstart', name: '\u79c0\u52a8', url: 'https://www.showstart.com/event/list?keyword=%E8%89%BA%E6%9C%AF%E5%AE%B6%201' },
+            ],
           },
           {
             id: 801002,
@@ -1170,6 +1213,11 @@ function createMockBridge() {
             startTime: Date.now() + 46 * 24 * 60 * 60 * 1000,
             coverUrl: buildMockCover(801002),
             externalUrl: 'https://music.163.com/',
+            source: 'showstart',
+            sourceLabel: '\u79c0\u52a8',
+            ticketSources: [
+              { id: 'showstart', name: '\u79c0\u52a8', url: 'https://www.showstart.com/event/list?keyword=%E5%A4%8F%E6%97%A5%E9%9F%B3%E4%B9%90%E8%8A%82' },
+            ],
           },
         ],
       }
@@ -2177,6 +2225,13 @@ function cacheRefs() {
   refs.playlistEditorDeleteBtn = document.getElementById('playlist-editor-delete-btn')
   refs.playlistEditorCancelBtn = document.getElementById('playlist-editor-cancel-btn')
   refs.playlistEditorSaveBtn = document.getElementById('playlist-editor-save-btn')
+  refs.quickAddBackdrop = document.getElementById('quick-add-backdrop')
+  refs.quickAddModal = document.getElementById('quick-add-modal')
+  refs.quickAddCloseBtn = document.getElementById('quick-add-close-btn')
+  refs.quickAddQuery = document.getElementById('quick-add-query')
+  refs.quickAddStatus = document.getElementById('quick-add-status')
+  refs.quickAddTrackList = document.getElementById('quick-add-track-list')
+  refs.quickAddTargetList = document.getElementById('quick-add-target-list')
   refs.uiScaleRange = document.getElementById('ui-scale-range')
   refs.uiScaleValue = document.getElementById('ui-scale-value')
   refs.playlistRecommendationsToggle = document.getElementById('playlist-recommendations-toggle')
@@ -2294,6 +2349,12 @@ function bindEvents() {
   refs.playlistEditorCoverResetBtn.addEventListener('click', resetPlaylistEditorCoverSelection)
   refs.playlistEditorDeleteBtn.addEventListener('click', () => {
     void deleteOwnedPlaylistFromEditor()
+  })
+  refs.quickAddBackdrop.addEventListener('click', closeQuickAddModal)
+  refs.quickAddCloseBtn.addEventListener('click', closeQuickAddModal)
+  refs.quickAddTrackList.addEventListener('click', handleQuickAddTrackListClick)
+  refs.quickAddTargetList.addEventListener('click', (event) => {
+    void handleQuickAddTargetListClick(event)
   })
   refs.uiScaleRange.addEventListener('input', handleUiScaleInput)
   refs.uiScaleRange.addEventListener('change', handleUiScaleCommit)
@@ -3271,6 +3332,9 @@ function applyLibraryRefreshResult(result, { silent = true } = {}) {
     hydratePlaybackStats(result.playback)
   }
 
+  const focusedElementId = document.activeElement instanceof HTMLElement
+    ? document.activeElement.id
+    : ''
   setPlaylists(nextPlaylists)
   if (!(state.queuePlaylistId === null && state.currentTrackId === null)) {
     syncQueueWithPlaylists()
@@ -3279,6 +3343,7 @@ function applyLibraryRefreshResult(result, { silent = true } = {}) {
   renderHeader()
   renderPlayer()
   applyFilters({ syncAll: addedCount > 0 || removedCount > 0 })
+  restoreStableFocusById(focusedElementId)
 
   if (!silent && addedCount > 0) {
     showToast(`\u5df2\u540c\u6b65 ${addedCount} \u5f20\u65b0\u6536\u85cf\u6b4c\u5355`)
@@ -3632,6 +3697,26 @@ function normalizeConcertArtistEntries(event) {
   })
 }
 
+function normalizeConcertTicketSources(event) {
+  const sources = Array.isArray(event?.ticketSources || event?.concertTicketSources)
+    ? (event.ticketSources || event.concertTicketSources)
+    : []
+  const seen = new Set()
+  return sources.map((source) => ({
+    id: String(source?.id || source?.name || '').trim(),
+    name: String(source?.name || source?.id || TEXT.concertSourceFallback).trim(),
+    url: String(source?.url || '').trim(),
+    keyword: String(source?.keyword || '').trim(),
+  })).filter((source) => {
+    const key = source.id || source.url
+    if (!source.url || seen.has(key)) {
+      return false
+    }
+    seen.add(key)
+    return true
+  })
+}
+
 
 function normalizeArtistNameForConcertMatch(name = '') {
   return normalizeQuery(name)
@@ -3726,7 +3811,6 @@ function rebuildConcertPlaylists() {
 
   state.concertPlaylists = events
     .map((event, index) => buildConcertPlaylistFromEvent(event, index))
-    .filter((playlist) => (playlist.tracks || []).length > 0)
   refreshPlaylistMap()
 }
 
@@ -3740,6 +3824,8 @@ function buildConcertPlaylistFromEvent(event, index = 0) {
   const artistNames = artistEntries.map((artist) => artist.name)
   const city = String(event?.city || '').trim()
   const venue = String(event?.venue || '').trim()
+  const ticketSources = normalizeConcertTicketSources(event)
+  const sourceLabel = String(event?.sourceLabel || event?.concertSourceLabel || '').trim()
   const startTime = Number(event?.startTime || 0)
   const endTime = Number(event?.endTime || 0)
   const title = String(event?.title || event?.name || TEXT.tabConcerts).trim()
@@ -3763,6 +3849,10 @@ function buildConcertPlaylistFromEvent(event, index = 0) {
     exploreSourceLabel: TEXT.tabConcerts,
     externalUrl: String(event?.externalUrl || '').trim(),
     isConcert: true,
+    concertSource: String(event?.source || event?.concertSource || '').trim(),
+    concertSourceLabel: sourceLabel,
+    concertTicketSources: ticketSources,
+    concertTicketSourceCount: Number(event?.ticketSourceCount || ticketSources.length || 0),
     concertEventId: rawId,
     concertCity: city,
     concertVenue: venue,
@@ -4701,6 +4791,10 @@ function normalizePlaylist(playlist) {
     isExplore,
     isArtist,
     isConcert: Boolean(playlist.isConcert),
+    concertSource: String(playlist.concertSource || playlist.source || '').trim(),
+    concertSourceLabel: String(playlist.concertSourceLabel || playlist.sourceLabel || '').trim(),
+    concertTicketSourceCount: Number(playlist.concertTicketSourceCount || playlist.ticketSourceCount || 0),
+    concertTicketSources: normalizeConcertTicketSources(playlist),
     concertEventId: String(playlist.concertEventId || playlist.eventId || '').trim(),
     concertCity: String(playlist.concertCity || playlist.city || '').trim(),
     concertVenue: String(playlist.concertVenue || playlist.venue || '').trim(),
@@ -5700,6 +5794,21 @@ function applyFilters({ syncAll = false } = {}) {
   scheduleWallRenderWithOptions({ immediate: true, syncAll })
 }
 
+function restoreStableFocusById(elementId) {
+  if (!elementId || !(document.activeElement instanceof HTMLBodyElement)) {
+    return
+  }
+
+  const element = document.getElementById(elementId)
+  if (
+    element instanceof HTMLInputElement
+    || element instanceof HTMLTextAreaElement
+    || element instanceof HTMLSelectElement
+  ) {
+    element.focus()
+  }
+}
+
 function buildCollectedTrackIdSetForLikedPlaylist(playlists) {
   const collectedTrackIds = new Set()
 
@@ -6242,12 +6351,15 @@ function renderPlaylistHeader(playlist, totalCount) {
 
 function renderPlaylistHeaderAction(playlist) {
   if (playlist?.isConcert) {
-    if (!String(playlist.externalUrl || '').trim()) {
+    const ticketSources = Array.isArray(playlist.concertTicketSources) ? playlist.concertTicketSources : []
+    if (!String(playlist.externalUrl || '').trim() && !ticketSources.length) {
       return ''
     }
     const label = TEXT.openConcertDetail
+    const sourceCount = Math.max(Number(playlist.concertTicketSourceCount || 0), ticketSources.length)
     return `
       <div class="playlist-header-actions">
+        ${sourceCount ? `<span class="playlist-header-action-note" title="${escapeHtml(TEXT.concertTicketSourcesLabel)}">${escapeHtml(sourceCount)} \u6e90</span>` : ''}
         <button
           class="playlist-header-action"
           type="button"
@@ -6438,6 +6550,8 @@ function describePlaylistMeta(playlist, totalCount) {
       playlist.concertCity || '',
       playlist.concertVenue || '',
       (playlist.concertArtists || []).join('\u3001'),
+      playlist.concertSourceLabel || '',
+      playlist.concertTicketSourceCount ? `${formatNumber(playlist.concertTicketSourceCount)} \u4e2a\u7968\u52a1\u6e90` : '',
     ].filter(Boolean)
     return parts.join(' \u00b7 ')
   }
@@ -6470,6 +6584,8 @@ function renderPlaylistRows(placement, rowWindow) {
         playlist.concertCity || '',
         playlist.concertVenue || '',
         (playlist.concertArtists || []).join('\u3001'),
+        playlist.concertSourceLabel || '',
+        playlist.concertTicketSourceCount ? `${formatNumber(playlist.concertTicketSourceCount)} \u4e2a\u7968\u52a1\u6e90` : '',
       ].filter(Boolean).join(' \u00b7 ')
       return `<div class="playlist-placeholder playlist-placeholder--concert">${escapeHtml(details || TEXT.emptyPlaylist)}</div>`
     }
@@ -7256,8 +7372,6 @@ async function addRecommendedTrackToPlaylist(playlistId, trackId) {
   renderHeader()
   renderPlayer()
   applyFilters({ syncAll: true })
-  showToast(`${context.keepSource ? TEXT.copyToPlaylistDone : TEXT.moveToPlaylistDone}\uff1a${targetPlaylist.name}`)
-  return
   showToast(TEXT.addToPlaylistDone)
 }
 
@@ -8379,7 +8493,8 @@ async function openSpotifyPlaylistFromCard(playlistId) {
 
 async function openConcertDetailFromCard(playlistId) {
   const playlist = getPlaylistById(playlistId)
-  const targetUrl = String(playlist?.externalUrl || '').trim()
+  const ticketSources = Array.isArray(playlist?.concertTicketSources) ? playlist.concertTicketSources : []
+  const targetUrl = String(playlist?.externalUrl || ticketSources[0]?.url || '').trim()
   if (!playlist?.isConcert || !targetUrl) {
     showToast(TEXT.openConcertDetailFailed, 'error')
     return
@@ -12117,7 +12232,25 @@ function cancelWallRenderWork() {
 
 function handleKeydown(event) {
   const target = event.target
-  const editing = target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement
+  const editing = target instanceof HTMLInputElement
+    || target instanceof HTMLTextAreaElement
+    || target instanceof HTMLSelectElement
+    || Boolean(target?.isContentEditable)
+  const quickAddShortcut = (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'v'
+
+  if (
+    quickAddShortcut
+    && document.hasFocus()
+    && !editing
+    && refs.app
+    && !refs.app.classList.contains('hidden')
+    && refs.playlistEditor.classList.contains('hidden')
+    && !refs.settingsPanel.classList.contains('is-open')
+  ) {
+    event.preventDefault()
+    void openQuickAddFromClipboard()
+    return
+  }
 
   if (event.key === 'Escape' && !refs.contextMenu.classList.contains('hidden')) {
     closeContextMenu()
@@ -12136,6 +12269,11 @@ function handleKeydown(event) {
 
   if (event.key === 'Escape' && !refs.playlistEditor.classList.contains('hidden')) {
     closePlaylistEditor()
+    return
+  }
+
+  if (event.key === 'Escape' && isQuickAddModalOpen()) {
+    closeQuickAddModal()
     return
   }
 
@@ -12229,4 +12367,234 @@ function showToast(message, type = 'success') {
   toast.textContent = message
   refs.toastWrap.appendChild(toast)
   window.setTimeout(() => toast.remove(), 2800)
+}
+
+function getQuickAddTargetPlaylists() {
+  return state.playlists.filter((playlist) =>
+    canEditOwnedPlaylist(playlist)
+    && !playlist.tracksError
+    && !playlist.hydrating
+    && playlist.tracks.length >= Math.max(Number(playlist.trackCount || 0), 0)
+    && !isImportedReadOnlyPlaylist(playlist)
+  )
+}
+
+function formatQuickAddTrackMeta(track) {
+  return [
+    Array.isArray(track?.artists) ? track.artists.join(' / ') : '',
+    track?.album || '',
+  ].filter(Boolean).join(' · ')
+}
+
+function sanitizeClipboardSongQuery(text) {
+  return String(text || '')
+    .replace(/https?:\/\/\S+/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 200)
+}
+
+function isQuickAddModalOpen() {
+  return Boolean(refs.quickAddModal && !refs.quickAddModal.classList.contains('hidden'))
+}
+
+function closeQuickAddModal() {
+  renderRuntime.quickAddSearchToken += 1
+  renderRuntime.quickAddState = null
+  refs.quickAddBackdrop.classList.add('hidden')
+  refs.quickAddModal.classList.add('hidden')
+}
+
+function renderQuickAddModal() {
+  const quickAddState = renderRuntime.quickAddState
+  if (!quickAddState) {
+    return
+  }
+
+  refs.quickAddQuery.textContent = quickAddState.query ? `“${quickAddState.query}”` : ''
+  refs.quickAddStatus.textContent = quickAddState.statusMessage || ''
+  refs.quickAddStatus.classList.toggle('hidden', !quickAddState.statusMessage)
+  refs.quickAddTrackList.innerHTML = renderQuickAddTrackList(quickAddState)
+  refs.quickAddTargetList.innerHTML = renderQuickAddTargetList(quickAddState)
+}
+
+function renderQuickAddTrackList(quickAddState) {
+  if (!quickAddState.tracks.length) {
+    return ''
+  }
+
+  return quickAddState.tracks.map((track, index) => {
+    const selected = Number(track.id || 0) === Number(quickAddState.selectedTrackId || 0)
+    const title = track.name || '\u672a\u547d\u540d'
+    const meta = formatQuickAddTrackMeta(track)
+    const cover = track.albumCoverUrl
+      ? `<img class="quick-add-track-cover" src="${escapeHtml(track.albumCoverUrl)}" alt="">`
+      : '<div class="quick-add-track-cover quick-add-track-cover--empty"></div>'
+    return `
+      <button class="quick-add-track${selected ? ' is-selected' : ''}${index === 0 ? ' is-best' : ''}" type="button" data-quick-add-track-id="${track.id}">
+        ${cover}
+        <span class="quick-add-track-copy">
+          <span class="quick-add-track-title">${index === 0 ? '<b>最相近</b> ' : ''}${escapeHtml(title)}</span>
+          <span class="quick-add-track-meta">${escapeHtml(meta)}</span>
+        </span>
+      </button>
+    `
+  }).join('')
+}
+
+function renderQuickAddTargetList(quickAddState) {
+  if (quickAddState.status === 'loading') {
+    return ''
+  }
+
+  const targets = getQuickAddTargetPlaylists()
+  if (!targets.length) {
+    return `<div class="quick-add-empty">${TEXT.quickAddNoTargetPlaylist}</div>`
+  }
+
+  const selectedTrack = quickAddState.tracks.find((track) => Number(track.id || 0) === Number(quickAddState.selectedTrackId || 0))
+  const disabled = !selectedTrack || quickAddState.status !== 'ready'
+
+  return targets.map((playlist) => {
+    const playlistId = Number(playlist.id || 0)
+    const containsTrack = selectedTrack
+      ? playlist.tracks.some((track) => Number(track.id || 0) === Number(selectedTrack.id || 0))
+      : false
+    const busy = quickAddState.addingPlaylistId === playlistId
+    const buttonText = busy
+      ? '\u6dfb\u52a0\u4e2d...'
+      : containsTrack
+        ? TEXT.addedToPlaylist
+        : TEXT.addToPlaylist
+    return `
+      <button class="quick-add-target" type="button" data-quick-add-playlist-id="${playlistId}" ${disabled || containsTrack || busy ? 'disabled' : ''}>
+        <span class="quick-add-target-copy">
+          <span class="quick-add-target-title">${escapeHtml(playlist.name)}</span>
+          <span class="quick-add-target-meta">${formatNumber(Math.max(Number(playlist.trackCount || 0), playlist.tracks.length))} 首</span>
+        </span>
+        <span class="quick-add-target-action">${buttonText}</span>
+      </button>
+    `
+  }).join('')
+}
+
+function handleQuickAddTrackListClick(event) {
+  const button = event.target instanceof Element
+    ? event.target.closest('[data-quick-add-track-id]')
+    : null
+  if (!button || !renderRuntime.quickAddState) {
+    return
+  }
+
+  const trackId = Number(button.getAttribute('data-quick-add-track-id') || 0)
+  if (trackId <= 0) {
+    return
+  }
+
+  renderRuntime.quickAddState.selectedTrackId = trackId
+  renderQuickAddModal()
+}
+
+async function handleQuickAddTargetListClick(event) {
+  const button = event.target instanceof Element
+    ? event.target.closest('[data-quick-add-playlist-id]')
+    : null
+  const quickAddState = renderRuntime.quickAddState
+  if (!button || !quickAddState || quickAddState.addingPlaylistId) {
+    return
+  }
+
+  const playlistId = Number(button.getAttribute('data-quick-add-playlist-id') || 0)
+  const playlist = getPlaylistById(playlistId)
+  const track = quickAddState.tracks.find((item) => Number(item.id || 0) === Number(quickAddState.selectedTrackId || 0))
+  if (!playlist || !track) {
+    return
+  }
+
+  if (playlist.tracks.some((item) => Number(item.id || 0) === Number(track.id || 0))) {
+    showToast(TEXT.addedToPlaylist)
+    renderQuickAddModal()
+    return
+  }
+
+  quickAddState.addingPlaylistId = playlistId
+  renderQuickAddModal()
+
+  const result = await appBridge.addTrackToPlaylist(playlistId, track)
+  if (!renderRuntime.quickAddState) {
+    return
+  }
+
+  quickAddState.addingPlaylistId = 0
+  if (!result?.ok) {
+    showToast(result?.error || TEXT.addToPlaylistFailed, 'error')
+    renderQuickAddModal()
+    return
+  }
+
+  const nextPlaylist = buildPlaylistWithTrackAdded(playlist, track)
+  setPlaylists(sortWallPlaylists(state.playlists.map((item) => item.id === playlist.id ? nextPlaylist : item)))
+  syncQueueWithPlaylists()
+  renderTabs()
+  renderHeader()
+  renderPlayer()
+  applyFilters({ syncAll: true })
+  showToast(`${TEXT.addToPlaylistDone}\uff1a${playlist.name}`)
+  renderQuickAddModal()
+}
+
+async function openQuickAddFromClipboard() {
+  if (!appBridge || typeof appBridge.readClipboardText !== 'function' || typeof appBridge.searchSongs !== 'function') {
+    showToast(TEXT.quickAddClipboardReadFailed, 'error')
+    return
+  }
+
+  const clipboardResult = await appBridge.readClipboardText()
+  if (!clipboardResult?.ok) {
+    showToast(clipboardResult?.error || TEXT.quickAddClipboardReadFailed, 'error')
+    return
+  }
+
+  const query = sanitizeClipboardSongQuery(clipboardResult.text)
+  if (!query) {
+    showToast(TEXT.quickAddEmptyClipboard, 'error')
+    return
+  }
+
+  const token = renderRuntime.quickAddSearchToken + 1
+  renderRuntime.quickAddSearchToken = token
+  renderRuntime.quickAddState = {
+    query,
+    status: 'loading',
+    statusMessage: TEXT.quickAddSearchLoading,
+    tracks: [],
+    selectedTrackId: 0,
+    addingPlaylistId: 0,
+  }
+
+  refs.quickAddBackdrop.classList.remove('hidden')
+  refs.quickAddModal.classList.remove('hidden')
+  renderQuickAddModal()
+
+  const result = await appBridge.searchSongs(query, { limit: QUICK_ADD_SEARCH_LIMIT })
+  if (token !== renderRuntime.quickAddSearchToken || !renderRuntime.quickAddState) {
+    return
+  }
+
+  if (!result?.ok) {
+    renderRuntime.quickAddState.status = 'error'
+    renderRuntime.quickAddState.statusMessage = result?.error || TEXT.quickAddSearchFailed
+    renderRuntime.quickAddState.tracks = []
+    renderRuntime.quickAddState.selectedTrackId = 0
+    renderQuickAddModal()
+    return
+  }
+
+  const tracks = (result.tracks || []).map((track, index) => normalizePlaylistTrack(track, index))
+    .filter((track) => track.id > 0)
+  renderRuntime.quickAddState.status = tracks.length ? 'ready' : 'empty'
+  renderRuntime.quickAddState.statusMessage = tracks.length ? '' : TEXT.quickAddSearchEmpty
+  renderRuntime.quickAddState.tracks = tracks
+  renderRuntime.quickAddState.selectedTrackId = Number(tracks[0]?.id || 0)
+  renderQuickAddModal()
 }

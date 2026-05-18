@@ -23,6 +23,8 @@ contextBridge.exposeInMainWorld('bridge', {
   logout: () => ipcRenderer.invoke('logout'),
   getSongUrl: (songId, options) => ipcRenderer.invoke('getSongUrl', songId, options),
   getArtistSongs: (artistId, maxCount, options) => ipcRenderer.invoke('getArtistSongs', artistId, maxCount, options),
+  searchSongs: (query, options) => ipcRenderer.invoke('searchSongs', query, options),
+  readClipboardText: () => ipcRenderer.invoke('readClipboardText'),
   getOwnedPlaylistSummary: (playlistId) => ipcRenderer.invoke('getOwnedPlaylistSummary', playlistId),
   recordTrackPlay: (userId, payload, options) => ipcRenderer.invoke('recordTrackPlay', userId, payload, options),
   getPlaylistRecommendations: (playlistId, seedTrackIds, count) => ipcRenderer.invoke('getPlaylistRecommendations', playlistId, seedTrackIds, count),

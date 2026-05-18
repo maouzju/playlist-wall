@@ -4,7 +4,7 @@ installSafeConsole()
 
 const fs = require('fs')
 const path = require('path')
-const { app, BrowserWindow, dialog, ipcMain, screen, shell } = require('electron')
+const { app, BrowserWindow, clipboard, dialog, ipcMain, screen, shell } = require('electron')
 
 const { getCacheDirectoryInfo } = require('./cache-directory')
 const { createAppUpdater } = require('./app-updater')
@@ -729,6 +729,17 @@ function normalizePlaylistMeta(playlist) {
     importReadOnly: Boolean(playlist?.importReadOnly),
     isExplore: Boolean(playlist?.isExplore),
     isConcert: Boolean(playlist?.isConcert),
+    concertSource: String(playlist?.concertSource || playlist?.source || '').trim(),
+    concertSourceLabel: String(playlist?.concertSourceLabel || playlist?.sourceLabel || '').trim(),
+    concertTicketSourceCount: Number(playlist?.concertTicketSourceCount || playlist?.ticketSourceCount || 0),
+    concertTicketSources: Array.isArray(playlist?.concertTicketSources || playlist?.ticketSources)
+      ? (playlist.concertTicketSources || playlist.ticketSources).map((source) => ({
+        id: String(source?.id || source?.name || '').trim(),
+        name: String(source?.name || source?.id || '').trim(),
+        url: String(source?.url || '').trim(),
+        keyword: String(source?.keyword || '').trim(),
+      })).filter((source) => source.id && source.url)
+      : [],
     concertEventId: String(playlist?.concertEventId || playlist?.eventId || '').trim(),
     concertCity: String(playlist?.concertCity || playlist?.city || '').trim(),
     concertVenue: String(playlist?.concertVenue || playlist?.venue || '').trim(),
@@ -1907,6 +1918,14 @@ function registerIpc() {
     }
   })
 
+  ipcMain.handle('readClipboardText', async () => {
+    try {
+      return { ok: true, text: clipboard.readText() || '' }
+    } catch (error) {
+      return { ok: false, error: error?.message || String(error), text: '' }
+    }
+  })
+
   ipcMain.handle('checkAppUpdate', async (_event, options = {}) => {
     try {
       return await appUpdater.checkForUpdates({
@@ -2046,6 +2065,22 @@ function registerIpc() {
       }
     } catch (error) {
       return { ok: false, error: error.message || String(error), artistId: 0, tracks: [] }
+    }
+  })
+
+  ipcMain.handle('searchSongs', async (_event, query, options = {}) => {
+    try {
+      if (!svc) {
+        throw new Error(TEXT.serviceNotReady)
+      }
+
+      const tracks = await svc.searchSongs(query, options)
+      return {
+        ok: true,
+        tracks: normalizeTracks(tracks),
+      }
+    } catch (error) {
+      return { ok: false, error: error.message || String(error), tracks: [] }
     }
   })
 

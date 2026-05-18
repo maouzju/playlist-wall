@@ -862,6 +862,105 @@ test('normalizeConcertEvents extracts and sorts concert calendar entries', () =>
   assert.equal(events[1].coverUrl, 'cover-b')
 })
 
+test('normalizeConcertEvents keeps concert resource entries without keyword in title and nested venue objects', () => {
+  const events = __testing.normalizeConcertEvents({
+    data: {
+      result: {
+        modules: [
+          {
+            resources: [
+              {
+                id: 'calendar-plain-title',
+                resourceType: 'CONCERT',
+                resourceId: 7788,
+                resource: {
+                  title: 'Artist C 2026',
+                  showStartTime: 1700700000000,
+                  cityName: 'Shenzhen',
+                  venue: { name: 'Bay Arena' },
+                  artistInfoList: [{ artistId: 7, name: 'Artist C' }],
+                  posterUrl: 'poster-c',
+                },
+              },
+            ],
+          },
+        ],
+      },
+    },
+  }, {
+    startTime: 1700600000000,
+    endTime: 1700800000000,
+  })
+
+  assert.equal(events.length, 1)
+  assert.equal(events[0].concertId, 7788)
+  assert.equal(events[0].title, 'Artist C 2026')
+  assert.equal(events[0].city, 'Shenzhen')
+  assert.equal(events[0].venue, 'Bay Arena')
+  assert.deepEqual(events[0].artists, ['Artist C'])
+  assert.equal(events[0].coverUrl, 'poster-c')
+})
+
+test('adds external ticket source search links to concert events', () => {
+  const events = __testing.addTicketSourcesToConcertEvents([
+    {
+      eventId: 'one',
+      title: 'Artist C 2026',
+      city: 'Shenzhen',
+      venue: 'Bay Arena',
+      artists: ['Artist C'],
+      startTime: 1700700000000,
+    },
+  ])
+
+  assert.equal(events.length, 1)
+  assert.ok(events[0].ticketSources.length >= 4)
+  assert.ok(events[0].ticketSources.some((source) => source.id === 'damai' && source.url.includes('search.damai.cn')))
+  assert.ok(events[0].ticketSources.some((source) => source.id === 'showstart' && source.url.includes('showstart.com')))
+  assert.equal(events[0].ticketSourceCount, events[0].ticketSources.length)
+})
+
+test('normalizes external ticket events and merges duplicates by event identity', () => {
+  const ticketSource = {
+    id: 'showstart',
+    name: '秀动',
+    baseUrl: 'https://www.showstart.com',
+    keyword: '王子乐队',
+  }
+  const externalEvents = __testing.normalizeExternalTicketEvents([
+    {
+      activityId: 290154,
+      title: '王子乐队“焕然亦新”演唱会',
+      poster: 'poster-url',
+      performers: '王子乐队',
+      showTime: '2026/03/07 20:00',
+      siteName: '亦花园剧场',
+      cityName: '北京',
+    },
+  ], ticketSource)
+
+  assert.equal(externalEvents.length, 1)
+  assert.equal(externalEvents[0].source, 'showstart')
+  assert.equal(externalEvents[0].city, '北京')
+  assert.equal(externalEvents[0].venue, '亦花园剧场')
+  assert.deepEqual(externalEvents[0].artists, ['王子乐队'])
+  assert.equal(externalEvents[0].externalUrl, 'https://www.showstart.com/event/290154')
+
+  const merged = __testing.mergeConcertEventLists([
+    { ...externalEvents[0], externalUrl: 'https://www.showstart.com/event/290154' },
+  ], [
+    {
+      ...externalEvents[0],
+      eventId: 'duplicate',
+      externalUrl: '',
+      ticketSources: [{ id: 'damai', name: '大麦', url: 'https://search.damai.cn/search.html?keyword=x' }],
+    },
+  ])
+
+  assert.equal(merged.length, 1)
+  assert.equal(merged[0].ticketSources.length, 2)
+})
+
 test('getConcertEvents calls calendar and detail APIs then returns hydrated concert results', async () => {
   const originals = {
     calendar: api.calendar,

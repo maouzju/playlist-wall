@@ -495,6 +495,39 @@
     </form>
   </section>
 
+  <div id="quick-add-backdrop" class="hidden"></div>
+  <section id="quick-add-modal" class="hidden" role="dialog" aria-modal="true" aria-labelledby="quick-add-title">
+    <div class="quick-add-card">
+      <div class="quick-add-header">
+        <div>
+          <div class="quick-add-kicker">从剪切板添加歌曲</div>
+          <h2 class="quick-add-title" id="quick-add-title">选择最相近的歌</h2>
+          <div class="quick-add-query" id="quick-add-query"></div>
+        </div>
+        <button class="quick-add-close" id="quick-add-close-btn" type="button" aria-label="关闭" title="关闭">
+          <svg class="icon-stroke" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M6 6l12 12"></path>
+            <path d="M18 6 6 18"></path>
+          </svg>
+        </button>
+      </div>
+
+      <div class="quick-add-body">
+        <div class="quick-add-status" id="quick-add-status">正在搜索...</div>
+        <div class="quick-add-layout">
+          <div class="quick-add-section">
+            <div class="quick-add-section-title">搜索结果</div>
+            <div class="quick-add-track-list" id="quick-add-track-list"></div>
+          </div>
+          <div class="quick-add-section quick-add-section--targets">
+            <div class="quick-add-section-title">添加到...</div>
+            <div class="quick-add-target-list" id="quick-add-target-list"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
   <div id="context-menu" class="hidden">
     <button class="context-menu-item" id="context-remove-track-btn" type="button">移出歌单</button>
   </div>
