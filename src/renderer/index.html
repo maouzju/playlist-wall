@@ -114,6 +114,7 @@
           <label class="search-shell__field" for="search-input">
             <input id="search-input" type="text" placeholder="搜索歌单、歌曲、专辑、歌手">
           </label>
+          <button class="search-direct-btn hidden" id="search-direct-btn" type="button">直接查找歌曲</button>
           <button class="search-clear-btn hidden" id="search-clear-btn" type="button" aria-label="清空搜索" title="清空搜索">
             <svg class="icon-stroke" viewBox="0 0 24 24" aria-hidden="true">
               <path d="M9 9l6 6"></path>
@@ -176,6 +177,21 @@
         </div>
       </section>
     </main>
+
+    <section id="direct-song-panel" class="hidden" role="dialog" aria-modal="false" aria-labelledby="direct-song-title">
+      <div class="direct-song-panel__header" id="direct-song-drag-handle">
+        <div class="direct-song-panel__copy">
+          <div class="direct-song-panel__kicker">网易云歌曲搜索</div>
+          <h2 class="direct-song-panel__title" id="direct-song-title">临时歌单</h2>
+          <div class="direct-song-panel__meta" id="direct-song-meta">输入关键词后点击“直接查找歌曲”</div>
+        </div>
+        <button class="direct-song-panel__close" id="direct-song-close-btn" type="button" aria-label="关闭" title="关闭">&times;</button>
+      </div>
+      <div class="direct-song-panel__body" id="direct-song-body">
+        <div class="direct-song-panel__status" id="direct-song-status">输入关键词后点击“直接查找歌曲”</div>
+        <div class="direct-song-list" id="direct-song-list"></div>
+      </div>
+    </section>
 
     <footer id="player-bar">
       <div class="player-track">

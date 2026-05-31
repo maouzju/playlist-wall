@@ -4,6 +4,7 @@ const WALL_GAP = 6
 const WALL_ROW_HEIGHT = 22
 const WALL_ROW_OVERSCAN = 12
 const WALL_ROW_WINDOW_STEP = 6
+const LIKED_PLAYLIST_LAYOUT_TRACK_ESTIMATE_LIMIT = 48
 const PLAYLIST_HEADER_HEIGHT = 40
 const PLAYLIST_FOOTER_HEIGHT = 0
 const PLAYLIST_PLACEHOLDER_HEIGHT = 34
@@ -261,6 +262,13 @@ const state = {
   activeTab: 'owned',
   visiblePlaylists: [],
   search: '',
+  directSongSearch: {
+    open: false,
+    query: '',
+    tracks: [],
+    status: 'idle',
+    message: '输入关键词后点击“直接查找歌曲”',
+  },
   exploreLoaded: false,
   exploreLoading: false,
   exploreQuery: '',
@@ -362,6 +370,8 @@ const renderRuntime = {
   wallRenderFrame: 0,
   wallViewportFrame: 0,
   searchTimer: 0,
+  directSongSearchToken: 0,
+  directSongDragState: null,
   patchFlushTimer: 0,
   wallColumns: [],
   wallNodeMaps: [],
@@ -2201,7 +2211,16 @@ function cacheRefs() {
   refs.tabArtistsCount = document.getElementById('tab-artists-count')
   refs.tabConcertsCount = document.getElementById('tab-concerts-count')
   refs.searchInput = document.getElementById('search-input')
+  refs.searchDirectBtn = document.getElementById('search-direct-btn')
   refs.searchClearBtn = document.getElementById('search-clear-btn')
+  refs.directSongPanel = document.getElementById('direct-song-panel')
+  refs.directSongDragHandle = document.getElementById('direct-song-drag-handle')
+  refs.directSongCloseBtn = document.getElementById('direct-song-close-btn')
+  refs.directSongTitle = document.getElementById('direct-song-title')
+  refs.directSongMeta = document.getElementById('direct-song-meta')
+  refs.directSongBody = document.getElementById('direct-song-body')
+  refs.directSongStatus = document.getElementById('direct-song-status')
+  refs.directSongList = document.getElementById('direct-song-list')
   refs.concertLocationFilter = document.getElementById('concert-location-filter')
   refs.createOwnedPlaylistBtn = document.getElementById('create-owned-playlist-btn')
   refs.themeToggleBtn = document.getElementById('theme-toggle-btn')
@@ -2403,6 +2422,15 @@ function bindEvents() {
   refs.searchClearBtn.addEventListener('click', () => {
     void clearSearch({ focus: true })
   })
+  refs.searchDirectBtn.addEventListener('click', () => {
+    void openDirectSongSearchFromInput()
+  })
+  refs.directSongCloseBtn.addEventListener('click', closeDirectSongSearchPanel)
+  refs.directSongList.addEventListener('click', handleDirectSongListClick)
+  refs.directSongList.addEventListener('contextmenu', handleDirectSongContextMenu)
+  refs.directSongDragHandle.addEventListener('pointerdown', handleDirectSongPanelPointerDown)
+  window.addEventListener('pointermove', handleDirectSongPanelPointerMove)
+  window.addEventListener('pointerup', handleDirectSongPanelPointerUp)
   if (refs.concertLocationFilter) {
     refs.concertLocationFilter.addEventListener('click', (event) => {
       const button = event.target ? event.target.closest('[data-concert-city-filter]') : null
@@ -4173,6 +4201,7 @@ function resetAppState() {
   state.recommendations = new Map()
   state.activeTab = 'owned'
   state.visiblePlaylists = []
+  closeDirectSongSearchPanel({ reset: true })
   setSearchState('')
   state.exploreLoaded = false
   state.exploreLoading = false
@@ -4865,6 +4894,7 @@ function refreshPlaylistMap() {
     ...state.artistPlaylists.map((playlist) => [playlist.id, playlist]),
     ...state.concertPlaylists.map((playlist) => [playlist.id, playlist]),
   ])
+  syncDirectSongPlaylistMap()
 }
 
 function replaceArtistPlaylistByKey(artistKey, nextPlaylist) {
@@ -5048,7 +5078,7 @@ function syncQueueWithPlaylists() {
     return
   }
   if (!playlist.tracks.length) return
-  const queueTracks = (playlist.tracks || []).filter((track) => String(track?.sourcePlatform || '').trim() !== 'spotify')
+  const queueTracks = (playlist.tracks || []).map((track) => normalizePlaylistTrack(track))
   const currentTrackId = state.currentTrackId
   state.queue = queueTracks
   if (currentTrackId) {
@@ -5650,6 +5680,10 @@ function renderSearchInput() {
           : TEXT.searchLibraryPlaceholder
 
   const hasSearchValue = Boolean(refs.searchInput.value || state.search)
+  refs.searchDirectBtn.classList.toggle('hidden', !hasSearchValue)
+  refs.searchDirectBtn.disabled = !hasSearchValue || state.directSongSearch.status === 'loading' || !canUseNeteaseFeatures()
+  refs.searchDirectBtn.textContent = state.directSongSearch.status === 'loading' ? '查找中...' : '直接查找歌曲'
+  refs.searchDirectBtn.title = canUseNeteaseFeatures() ? '通过网易云直接搜索歌曲' : '需要先登录网易云'
   refs.searchClearBtn.classList.toggle('hidden', !hasSearchValue)
   refs.searchClearBtn.disabled = !hasSearchValue
   refs.searchClearBtn.setAttribute('aria-label', TEXT.clearSearch)
@@ -5690,6 +5724,273 @@ async function clearSearch({ focus = false, syncAll = true } = {}) {
   if (focus) {
     refs.searchInput.focus()
   }
+}
+
+
+function isDirectSongSearchPanelOpen() {
+  return Boolean(refs.directSongPanel && !refs.directSongPanel.classList.contains('hidden'))
+}
+
+function getDirectSongPlaylistId() {
+  return -900000001
+}
+
+function getDirectSongPlaylist() {
+  const tracks = state.directSongSearch.tracks || []
+  return normalizePlaylist({
+    id: getDirectSongPlaylistId(),
+    sourcePlatform: 'netease',
+    name: state.directSongSearch.query ? `直接查找：${state.directSongSearch.query}` : '直接查找歌曲',
+    creatorName: '网易云',
+    trackCount: tracks.length,
+    tracks,
+    hydrated: true,
+  })
+}
+
+function syncDirectSongPlaylistMap() {
+  if (!state.playlistMap || !(state.playlistMap instanceof Map)) {
+    state.playlistMap = new Map()
+  }
+
+  const playlistId = getDirectSongPlaylistId()
+  if (state.directSongSearch.open && state.directSongSearch.tracks.length) {
+    state.playlistMap.set(playlistId, getDirectSongPlaylist())
+  } else {
+    state.playlistMap.delete(playlistId)
+  }
+}
+
+function renderDirectSongSearchPanel() {
+  if (!refs.directSongPanel) {
+    return
+  }
+
+  const panelState = state.directSongSearch
+  refs.directSongPanel.classList.toggle('hidden', !panelState.open)
+  refs.directSongTitle.textContent = panelState.query ? `直接查找：${panelState.query}` : '临时歌单'
+  refs.directSongMeta.textContent = panelState.status === 'ready'
+    ? `${formatNumber(panelState.tracks.length)} 首 · 点击歌曲即可播放`
+    : (panelState.message || '输入关键词后点击“直接查找歌曲”')
+  refs.directSongStatus.textContent = panelState.message || ''
+  refs.directSongStatus.classList.toggle('hidden', panelState.status === 'ready' && panelState.tracks.length)
+  refs.directSongStatus.classList.toggle('is-error', panelState.status === 'error')
+  refs.directSongList.innerHTML = panelState.status === 'ready' ? renderDirectSongRows(panelState.tracks) : ''
+  syncDirectSongPlaylistMap()
+  renderSearchInput()
+}
+
+function renderDirectSongRows(tracks) {
+  if (!tracks.length) {
+    return ''
+  }
+
+  const playlistId = getDirectSongPlaylistId()
+  return tracks.map((track) => {
+    const artists = Array.isArray(track.artists) ? track.artists.join(' / ') : ''
+    const meta = [artists, track.album || ''].filter(Boolean).join(' · ')
+    const durationSeconds = Math.round(Number(track.durationMs || 0) / 1000)
+    const isPlaying = state.queueMode === 'playlist'
+      && Number(state.queuePlaylistId || 0) === playlistId
+      && Number(state.currentTrackId || 0) === Number(track.id || 0)
+    const cover = track.albumCoverUrl
+      ? `<img class="direct-song-row__cover" src="${escapeHtml(track.albumCoverUrl)}" alt="">`
+      : '<span class="direct-song-row__cover direct-song-row__cover--empty"></span>'
+    return `
+      <button class="direct-song-row${isPlaying ? ' is-playing' : ''}" type="button" data-direct-song-track-id="${track.id}">
+        ${cover}
+        <span class="direct-song-row__copy">
+          <span class="direct-song-row__title" title="${escapeHtml(track.name)}">${escapeHtml(track.name)}</span>
+          <span class="direct-song-row__meta" title="${escapeHtml(meta)}">${escapeHtml(meta || '未知艺人')}</span>
+        </span>
+        <span class="direct-song-row__duration">${durationSeconds > 0 ? formatTime(durationSeconds) : ''}</span>
+      </button>
+    `
+  }).join('')
+}
+
+function closeDirectSongSearchPanel({ reset = false } = {}) {
+  renderRuntime.directSongSearchToken += 1
+  state.directSongSearch.open = false
+  state.directSongSearch.status = 'idle'
+  state.directSongSearch.message = '输入关键词后点击“直接查找歌曲”'
+  if (reset) {
+    state.directSongSearch.query = ''
+    state.directSongSearch.tracks = []
+  }
+  syncDirectSongPlaylistMap()
+  if (refs.directSongPanel) {
+    refs.directSongPanel.classList.add('hidden')
+  }
+  renderSearchInput()
+}
+
+async function openDirectSongSearchFromInput() {
+  const query = String(refs.searchInput?.value || state.search || '').trim()
+  if (!query) {
+    refs.searchInput?.focus()
+    return
+  }
+
+  if (!canUseNeteaseFeatures()) {
+    showToast('需要先登录网易云，才能直接查找歌曲。', 'error')
+    return
+  }
+
+  if (!appBridge || typeof appBridge.searchSongs !== 'function') {
+    showToast('当前环境不支持网易云歌曲搜索。', 'error')
+    return
+  }
+
+  const token = renderRuntime.directSongSearchToken + 1
+  renderRuntime.directSongSearchToken = token
+  state.directSongSearch.open = true
+  state.directSongSearch.query = query
+  state.directSongSearch.status = 'loading'
+  state.directSongSearch.message = '正在通过网易云查找歌曲...'
+  state.directSongSearch.tracks = []
+  renderDirectSongSearchPanel()
+
+  try {
+    const result = await appBridge.searchSongs(query, { limit: 50 })
+    if (token !== renderRuntime.directSongSearchToken) {
+      return
+    }
+
+    if (!result?.ok) {
+      state.directSongSearch.status = 'error'
+      state.directSongSearch.message = result?.error || '查找歌曲失败'
+      state.directSongSearch.tracks = []
+      renderDirectSongSearchPanel()
+      return
+    }
+
+    const tracks = (result.tracks || [])
+      .map((track, index) => normalizePlaylistTrack(track, index))
+      .filter((track) => track.id > 0)
+    state.directSongSearch.status = tracks.length ? 'ready' : 'empty'
+    state.directSongSearch.message = tracks.length ? '' : '没有找到歌曲，换个关键词试试。'
+    state.directSongSearch.tracks = tracks
+    renderDirectSongSearchPanel()
+  } catch (error) {
+    if (token !== renderRuntime.directSongSearchToken) {
+      return
+    }
+    state.directSongSearch.status = 'error'
+    state.directSongSearch.message = error?.message || '查找歌曲失败'
+    state.directSongSearch.tracks = []
+    renderDirectSongSearchPanel()
+  }
+}
+
+function handleDirectSongListClick(event) {
+  const button = event.target instanceof Element
+    ? event.target.closest('[data-direct-song-track-id]')
+    : null
+  if (!button) {
+    return
+  }
+
+  const trackId = Number(button.getAttribute('data-direct-song-track-id') || 0)
+  if (trackId <= 0) {
+    return
+  }
+
+  syncDirectSongPlaylistMap()
+  void playFromPlaylist(getDirectSongPlaylistId(), trackId)
+}
+
+function handleDirectSongContextMenu(event) {
+  const button = event.target instanceof Element
+    ? event.target.closest('[data-direct-song-track-id]')
+    : null
+  if (!button) {
+    closeContextMenu()
+    return
+  }
+
+  const trackId = Number(button.getAttribute('data-direct-song-track-id') || 0)
+  const track = (state.directSongSearch.tracks || []).find((item) => Number(item.id || 0) === trackId)
+  if (!track) {
+    closeContextMenu()
+    return
+  }
+
+  event.preventDefault()
+  clearTrackSelection()
+  syncDirectSongPlaylistMap()
+  renderRuntime.contextMenuTrack = {
+    canRemove: false,
+    artistExploreTargets: getArtistExploreContextTargets(track),
+    artistTargets: getArtistContextTargets(track),
+    keepSource: true,
+    playlistId: getDirectSongPlaylistId(),
+    sourceType: 'direct-song-search',
+    track,
+    trackId,
+    tracks: [track],
+    transferLabel: '\u52a0\u5165\u5230',
+    transferTargets: getRecommendedTransferTargets(track),
+  }
+  openContextMenu(event.clientX, event.clientY)
+}
+
+function clampDirectSongPanelPosition(left, top) {
+  const panel = refs.directSongPanel
+  if (!panel) {
+    return { left, top }
+  }
+
+  const width = panel.offsetWidth || 520
+  const height = panel.offsetHeight || 360
+  const padding = 8
+  return {
+    left: clamp(Math.round(left), padding, Math.max(padding, window.innerWidth - width - padding)),
+    top: clamp(Math.round(top), padding, Math.max(padding, window.innerHeight - height - padding)),
+  }
+}
+
+function handleDirectSongPanelPointerDown(event) {
+  if (event.button !== 0 || !refs.directSongPanel || event.target?.closest?.('.direct-song-panel__close')) {
+    return
+  }
+
+  const rect = refs.directSongPanel.getBoundingClientRect()
+  renderRuntime.directSongDragState = {
+    pointerId: event.pointerId,
+    offsetX: event.clientX - rect.left,
+    offsetY: event.clientY - rect.top,
+  }
+  refs.directSongDragHandle.classList.add('is-dragging')
+  refs.directSongDragHandle.setPointerCapture?.(event.pointerId)
+  event.preventDefault()
+}
+
+function handleDirectSongPanelPointerMove(event) {
+  const dragState = renderRuntime.directSongDragState
+  if (!dragState || dragState.pointerId !== event.pointerId || !refs.directSongPanel) {
+    return
+  }
+
+  const nextPosition = clampDirectSongPanelPosition(
+    event.clientX - dragState.offsetX,
+    event.clientY - dragState.offsetY
+  )
+  refs.directSongPanel.style.left = `${nextPosition.left}px`
+  refs.directSongPanel.style.top = `${nextPosition.top}px`
+  refs.directSongPanel.style.right = 'auto'
+  event.preventDefault()
+}
+
+function handleDirectSongPanelPointerUp(event) {
+  const dragState = renderRuntime.directSongDragState
+  if (!dragState || dragState.pointerId !== event.pointerId) {
+    return
+  }
+
+  renderRuntime.directSongDragState = null
+  refs.directSongDragHandle?.classList.remove('is-dragging')
+  refs.directSongDragHandle?.releasePointerCapture?.(event.pointerId)
 }
 
 function renderHeader() {
@@ -5998,8 +6299,10 @@ function placeWallItem({
   placementsByColumn,
   columnHeights,
   trackAnchors,
+  balanceColumnHeights = columnHeights,
 }) {
   const height = estimateCardHeight(item)
+  const layoutHeight = estimateCardLayoutHeight(item)
   const top = columnHeights[columnIndex]
   const placement = {
     key: String(item.playlist.id),
@@ -6007,6 +6310,7 @@ function placeWallItem({
     item,
     top,
     height,
+    layoutHeight,
     bottom: top + height,
   }
 
@@ -6021,22 +6325,25 @@ function placeWallItem({
   }
 
   columnHeights[columnIndex] = placement.bottom + metrics.gap
+  balanceColumnHeights[columnIndex] += layoutHeight + metrics.gap
 }
 
 function buildBalancedWallPlan(playlists, columns) {
   const metrics = getLayoutMetrics()
   const columnHeights = new Array(columns).fill(0)
+  const balanceColumnHeights = new Array(columns).fill(0)
   const placementsByColumn = Array.from({ length: columns }, () => [])
   const trackAnchors = new Map()
 
   for (const item of playlists) {
     placeWallItem({
       item,
-      columnIndex: indexOfSmallest(columnHeights),
+      columnIndex: indexOfSmallest(balanceColumnHeights),
       metrics,
       placementsByColumn,
       columnHeights,
       trackAnchors,
+      balanceColumnHeights,
     })
   }
 
@@ -6051,6 +6358,7 @@ function buildWallPlanFromColumnLayout(playlists, columns, columnLayout) {
   const normalizedLayout = normalizePlaylistWallLayout(columnLayout)
   const metrics = getLayoutMetrics()
   const columnHeights = new Array(columns).fill(0)
+  const balanceColumnHeights = new Array(columns).fill(0)
   const placementsByColumn = Array.from({ length: columns }, () => [])
   const trackAnchors = new Map()
   const itemByPlaylistId = new Map(
@@ -6072,6 +6380,7 @@ function buildWallPlanFromColumnLayout(playlists, columns, columnLayout) {
         placementsByColumn,
         columnHeights,
         trackAnchors,
+        balanceColumnHeights,
       })
       usedPlaylistIds.add(playlistId)
     }
@@ -6085,11 +6394,12 @@ function buildWallPlanFromColumnLayout(playlists, columns, columnLayout) {
 
     placeWallItem({
       item,
-      columnIndex: indexOfSmallest(columnHeights),
+      columnIndex: indexOfSmallest(balanceColumnHeights),
       metrics,
       placementsByColumn,
       columnHeights,
       trackAnchors,
+      balanceColumnHeights,
     })
   }
 
@@ -8551,7 +8861,7 @@ function handleContextMenuClick(event) {
   }
 
   if (action === 'transfer-track') {
-    void transferTrackFromContextMenu(Number(target.dataset.targetPlaylistId))
+    void addOrTransferTrackFromContextMenu(Number(target.dataset.targetPlaylistId))
     return
   }
 
@@ -10243,6 +10553,56 @@ function clearCurrentPlayback() {
   state.currentPlaybackResolvedLevel = ''
 }
 
+async function addDirectSongTrackFromContextMenu(targetPlaylistId) {
+  const context = renderRuntime.contextMenuTrack
+  closeContextMenu()
+
+  if (!context || Number(targetPlaylistId || 0) <= 0) {
+    return
+  }
+
+  const targetPlaylist = getPlaylistById(targetPlaylistId)
+  const track = context.track || (context.tracks || [])[0] || null
+  if (!targetPlaylist || !track || Number(track.id || 0) <= 0 || !canMutatePlaylistOrder(targetPlaylist)) {
+    return
+  }
+
+  if (targetPlaylist.tracks.some((item) => Number(item.id || 0) === Number(track.id || 0))) {
+    showToast(TEXT.addedToPlaylist)
+    return
+  }
+
+  if (!appBridge || typeof appBridge.addTrackToPlaylist !== 'function') {
+    showToast(TEXT.addToPlaylistFailed, 'error')
+    return
+  }
+
+  const result = await appBridge.addTrackToPlaylist(targetPlaylistId, track)
+  if (!result?.ok) {
+    showToast(result?.error || TEXT.addToPlaylistFailed, 'error')
+    return
+  }
+
+  const nextPlaylist = buildPlaylistWithTrackAdded(targetPlaylist, track)
+  setPlaylists(sortWallPlaylists(state.playlists.map((item) => item.id === targetPlaylist.id ? nextPlaylist : item)))
+  syncQueueWithPlaylists()
+  renderTabs()
+  renderHeader()
+  renderPlayer()
+  applyFilters({ syncAll: true })
+  showToast(`${TEXT.addToPlaylistDone}\uff1a${targetPlaylist.name}`)
+}
+
+async function addOrTransferTrackFromContextMenu(targetPlaylistId) {
+  const context = renderRuntime.contextMenuTrack
+  if (context?.sourceType === 'direct-song-search') {
+    await addDirectSongTrackFromContextMenu(targetPlaylistId)
+    return
+  }
+
+  await transferTrackFromContextMenu(targetPlaylistId)
+}
+
 async function transferTrackFromContextMenu(targetPlaylistId) {
   const context = renderRuntime.contextMenuTrack
   closeContextMenu()
@@ -10417,6 +10777,7 @@ function syncWallPlaybackState() {
   renderRuntime.renderedTrackKey = nextTrackKey
   renderRuntime.renderedRecommendationKey = nextRecommendationKey
   renderRuntime.renderedPlaylistId = state.queuePlaylistId || null
+  renderDirectSongSearchPanel()
 }
 
 function updateTrackRowState(trackKey, isPlaying) {
@@ -10458,28 +10819,156 @@ function isLikedPlaylist(playlist) {
   return Number(playlist?.specialType || 0) === 5
 }
 
+function normalizeSpotifyPlaybackLookupText(input) {
+  return String(input || '')
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function buildSpotifyPlaybackSearchQuery(track) {
+  return [
+    track?.name || '',
+    Array.isArray(track?.artists) ? track.artists.slice(0, 2).join(' ') : '',
+  ].filter(Boolean).join(' ').trim()
+}
+
+function scoreSpotifyPlaybackCandidate(sourceTrack, candidate) {
+  const sourceName = normalizeSpotifyPlaybackLookupText(sourceTrack?.name)
+  const candidateName = normalizeSpotifyPlaybackLookupText(candidate?.name)
+  const sourceAlbum = normalizeSpotifyPlaybackLookupText(sourceTrack?.album)
+  const candidateAlbum = normalizeSpotifyPlaybackLookupText(candidate?.album)
+  const sourceArtists = new Set((sourceTrack?.artists || []).map(normalizeSpotifyPlaybackLookupText).filter(Boolean))
+  const candidateArtists = new Set((candidate?.artists || []).map(normalizeSpotifyPlaybackLookupText).filter(Boolean))
+  let score = 0
+
+  if (sourceName && candidateName) {
+    if (sourceName === candidateName) {
+      score += 80
+    } else if (sourceName.includes(candidateName) || candidateName.includes(sourceName)) {
+      score += 45
+    }
+  }
+
+  for (const artist of sourceArtists) {
+    if (candidateArtists.has(artist)) {
+      score += 35
+    }
+  }
+
+  if (sourceAlbum && candidateAlbum && sourceAlbum === candidateAlbum) {
+    score += 15
+  }
+
+  const sourceDuration = Number(sourceTrack?.durationMs || 0)
+  const candidateDuration = Number(candidate?.durationMs || 0)
+  if (sourceDuration > 0 && candidateDuration > 0) {
+    const diffSeconds = Math.abs(sourceDuration - candidateDuration) / 1000
+    if (diffSeconds <= 3) {
+      score += 25
+    } else if (diffSeconds <= 10) {
+      score += 12
+    } else if (diffSeconds > 30) {
+      score -= 20
+    }
+  }
+
+  return score
+}
+
+function pickSpotifyPlaybackCandidate(sourceTrack, candidates) {
+  return (candidates || [])
+    .map((track) => ({
+      track: normalizePlaylistTrack(track),
+      score: scoreSpotifyPlaybackCandidate(sourceTrack, track),
+    }))
+    .filter((entry) => entry.track.id > 0)
+    .sort((left, right) => right.score - left.score)[0]?.track || null
+}
+
+async function resolveSpotifyTrackForPlayback(track) {
+  if (!track || getTrackSourcePlatform(track) !== 'spotify') {
+    return track
+  }
+
+  const currentPlaybackTrackId = Number(track.playbackTrackId || track.resolvedTrackId || 0)
+  if (currentPlaybackTrackId > 0) {
+    return {
+      ...track,
+      playbackTrackId: currentPlaybackTrackId,
+      playbackSourcePlatform: track.playbackSourcePlatform || 'netease',
+    }
+  }
+
+  if (!appBridge || typeof appBridge.searchSongs !== 'function') {
+    if (track.externalUrl) {
+      await openExternalUrl(track.externalUrl, TEXT.spotifyOpenFailed)
+    } else {
+      showToast(TEXT.spotifyPlaybackUnmatched, 'error')
+    }
+    return null
+  }
+
+  const query = buildSpotifyPlaybackSearchQuery(track)
+  if (!query) {
+    showToast(TEXT.spotifyPlaybackUnmatched, 'error')
+    return null
+  }
+
+  const result = await appBridge.searchSongs(query, { limit: 12 })
+  if (!result?.ok) {
+    showToast(result?.error || TEXT.spotifyPlaybackUnmatched, 'error')
+    return null
+  }
+
+  const matchedTrack = pickSpotifyPlaybackCandidate(track, result.tracks || [])
+  if (!matchedTrack) {
+    showToast(TEXT.spotifyPlaybackUnmatched, 'error')
+    return null
+  }
+
+  return {
+    ...track,
+    playbackTrackId: matchedTrack.id,
+    playbackSourcePlatform: 'netease',
+    resolvedTrackId: matchedTrack.id,
+    albumCoverUrl: track.albumCoverUrl || matchedTrack.albumCoverUrl,
+    durationMs: Number(track.durationMs || 0) || matchedTrack.durationMs,
+  }
+}
+
+function replaceQueueTrackAt(index, track) {
+  if (index < 0 || index >= state.queue.length || !track) {
+    return
+  }
+
+  state.queue = state.queue.map((item, itemIndex) => itemIndex === index ? track : item)
+}
+
 async function playSpotifyPlaylist(playlist, trackId) {
   if (!playlist || !playlist.tracks.length) {
     return
   }
 
-  if (!appBridge || typeof appBridge.resolveSpotifyPlayback !== 'function') {
-    showToast(TEXT.spotifyImportReadonlyTrack, 'error')
-    return
-  }
-
-  showToast(TEXT.spotifyPlaybackResolving)
-  const result = await appBridge.resolveSpotifyPlayback(playlist)
-  if (!result?.ok) {
-    showToast(result?.error || TEXT.spotifyImportReadonlyTrack, 'error')
-    return
-  }
-
-  const queueTracks = (result.resolvedTracks || []).map((track) => normalizePlaylistTrack(track))
-  const queueIndex = queueTracks.findIndex((track) => Number(track.id || 0) === Number(trackId || 0))
+  let queueTracks = (playlist.tracks || []).map((track) => normalizePlaylistTrack(track))
+  let queueIndex = queueTracks.findIndex((track) => Number(track.id || 0) === Number(trackId || 0))
   if (queueIndex === -1 || !queueTracks.length) {
-    showToast(TEXT.spotifyPlaybackUnmatched, 'error')
     return
+  }
+
+  if (appBridge && typeof appBridge.resolveSpotifyPlayback === 'function') {
+    const result = await appBridge.resolveSpotifyPlayback(playlist)
+    if (result?.ok && Array.isArray(result.resolvedTracks) && result.resolvedTracks.length) {
+      const resolvedTracks = result.resolvedTracks.map((track) => normalizePlaylistTrack(track))
+      const resolvedQueueIndex = resolvedTracks.findIndex((track) => Number(track.id || 0) === Number(trackId || 0))
+      if (resolvedQueueIndex >= 0) {
+        queueTracks = resolvedTracks
+        queueIndex = resolvedQueueIndex
+      }
+    }
   }
 
   state.queue = queueTracks
@@ -10496,10 +10985,9 @@ async function playFromPlaylist(playlistId, trackId) {
     await playSpotifyPlaylist(playlist, trackId)
     return
   }
-  const queueTracks = (playlist.tracks || []).filter((track) => String(track?.sourcePlatform || '').trim() !== 'spotify')
   const selectedTrack = (playlist.tracks || []).find((track) => track.id === trackId)
-  if (!selectedTrack || String(selectedTrack?.sourcePlatform || '').trim() === 'spotify' || !queueTracks.length) {
-    showToast(TEXT.spotifyImportReadonlyTrack, 'error')
+  const queueTracks = (playlist.tracks || []).map((track) => normalizePlaylistTrack(track))
+  if (!selectedTrack || !queueTracks.length) {
     return
   }
   const queueIndex = queueTracks.findIndex((track) => track.id === trackId)
@@ -10764,7 +11252,18 @@ async function refreshCurrentTrackAudioQuality(reason = AUDIO_QUALITY_REFRESH_RE
 async function playQueueIndex(index) {
   if (!state.queue.length || index < 0 || index >= state.queue.length) return
   state.queueIndex = index
-  const track = state.queue[index]
+  let track = state.queue[index]
+  if (getTrackSourcePlatform(track) === 'spotify') {
+    showToast(TEXT.spotifyPlaybackResolving)
+    const resolvedTrack = await resolveSpotifyTrackForPlayback(track)
+    if (!resolvedTrack) {
+      return
+    }
+
+    replaceQueueTrackAt(index, resolvedTrack)
+    track = resolvedTrack
+  }
+
   await resolveQueueTrackSource(track, { recordPlay: true })
 }
 
@@ -12116,6 +12615,25 @@ function estimateCardHeight(item) {
   return metrics.headerHeight + bodyHeight + recommendationHeight + metrics.footerHeight + 2
 }
 
+function estimateCardLayoutHeight(item) {
+  const metrics = getLayoutMetrics()
+  const playlist = item?.playlist || {}
+  const collapsed = isPlaylistCollapsed(playlist)
+  const visibleRowCount = playlist.wallTracks?.length || 0
+  const rowCount = collapsed
+    ? 0
+    : isLikedPlaylist(playlist)
+      ? Math.min(visibleRowCount, LIKED_PLAYLIST_LAYOUT_TRACK_ESTIMATE_LIMIT)
+      : visibleRowCount
+  const bodyHeight = collapsed
+    ? 0
+    : rowCount
+      ? rowCount * metrics.rowHeight
+      : metrics.placeholderHeight
+  const recommendationHeight = shouldRenderPlaylistRecommendations(item) ? metrics.recommendationHeight : 0
+  return metrics.headerHeight + bodyHeight + recommendationHeight + metrics.footerHeight + 2
+}
+
 function setPlaylistCollapsed(playlistId, collapsed, options = {}) {
   const normalizedPlaylistId = getPlaylistCollapseId(playlistId)
   if (!Number.isSafeInteger(normalizedPlaylistId) || normalizedPlaylistId === 0) {
@@ -12269,6 +12787,11 @@ function handleKeydown(event) {
 
   if (event.key === 'Escape' && !refs.playlistEditor.classList.contains('hidden')) {
     closePlaylistEditor()
+    return
+  }
+
+  if (event.key === 'Escape' && isDirectSongSearchPanelOpen()) {
+    closeDirectSongSearchPanel()
     return
   }
 
