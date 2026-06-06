@@ -36,6 +36,45 @@ async function setCheckbox(page, selector, checked) {
   }, checked)
 }
 
+async function mockPlayableSongUrl(page, durationSeconds = 160) {
+  await page.evaluate((mockDurationSeconds) => {
+    function createSilentWavUrl(durationSeconds = 4, sampleRate = 8000) {
+      const sampleCount = Math.max(1, Math.round(durationSeconds * sampleRate))
+      const dataLength = sampleCount * 2
+      const buffer = new ArrayBuffer(44 + dataLength)
+      const view = new DataView(buffer)
+      const writeString = (offset, value) => {
+        for (let index = 0; index < value.length; index += 1) {
+          view.setUint8(offset + index, value.charCodeAt(index))
+        }
+      }
+
+      writeString(0, 'RIFF')
+      view.setUint32(4, 36 + dataLength, true)
+      writeString(8, 'WAVE')
+      writeString(12, 'fmt ')
+      view.setUint32(16, 16, true)
+      view.setUint16(20, 1, true)
+      view.setUint16(22, 1, true)
+      view.setUint32(24, sampleRate, true)
+      view.setUint32(28, sampleRate * 2, true)
+      view.setUint16(32, 2, true)
+      view.setUint16(34, 16, true)
+      writeString(36, 'data')
+      view.setUint32(40, dataLength, true)
+
+      return URL.createObjectURL(new Blob([buffer], { type: 'audio/wav' }))
+    }
+
+    window.__mockSongUrlResult = {
+      ok: true,
+      url: createSilentWavUrl(mockDurationSeconds),
+      level: 'standard',
+      streamDurationMs: Math.round(mockDurationSeconds * 1000),
+    }
+  }, durationSeconds)
+}
+
 async function dragTrack(page, sourceSelector, targetSelector, placement = 'after') {
   await page.evaluate(({ sourceSelector, targetSelector, placement }) => {
     const source = document.querySelector(sourceSelector)
@@ -431,6 +470,26 @@ test('library refresh removes playlists that no longer exist upstream', async ({
   await expect(page.locator('.playlist-card[data-playlist-id="201"]')).toHaveCount(0)
   await expect(page.locator('#tab-owned-count')).toHaveText('1')
   await expect(page.locator('#tab-subscribed-count')).toHaveText('0')
+})
+
+test('refocusing the window delays background library refresh so controls stay responsive', async ({ page }) => {
+  await waitForWall(page)
+
+  await page.evaluate(() => {
+    window.__mockRefreshLibraryReasons = []
+    window.dispatchEvent(new Event('blur'))
+    window.dispatchEvent(new Event('focus'))
+  })
+
+  await page.click('#settings-btn')
+  await expect(page.locator('#settings-panel')).toHaveClass(/is-open/)
+  await page.fill('#search-input', 'abc')
+  await expect(page.locator('#search-input')).toHaveValue('abc')
+
+  await page.waitForTimeout(900)
+  await expect.poll(async () => {
+    return page.evaluate(() => window.__mockRefreshLibraryReasons || [])
+  }).toEqual([])
 })
 
 test('explore playlists preload silently after app init', async ({ page }) => {
@@ -1237,42 +1296,9 @@ test('concerts tab loads event cards and filters by city picker or venue search'
 test('playback reports listened tracks with NetEase source and listened seconds', async ({ page }) => {
   await waitForWall(page)
 
+  await mockPlayableSongUrl(page, 160)
   await page.evaluate(() => {
-    function createSilentWavUrl(durationSeconds = 4, sampleRate = 8000) {
-      const sampleCount = Math.max(1, Math.round(durationSeconds * sampleRate))
-      const dataLength = sampleCount * 2
-      const buffer = new ArrayBuffer(44 + dataLength)
-      const view = new DataView(buffer)
-      const writeString = (offset, value) => {
-        for (let index = 0; index < value.length; index += 1) {
-          view.setUint8(offset + index, value.charCodeAt(index))
-        }
-      }
-
-      writeString(0, 'RIFF')
-      view.setUint32(4, 36 + dataLength, true)
-      writeString(8, 'WAVE')
-      writeString(12, 'fmt ')
-      view.setUint32(16, 16, true)
-      view.setUint16(20, 1, true)
-      view.setUint16(22, 1, true)
-      view.setUint32(24, sampleRate, true)
-      view.setUint32(28, sampleRate * 2, true)
-      view.setUint16(32, 2, true)
-      view.setUint16(34, 16, true)
-      writeString(36, 'data')
-      view.setUint32(40, dataLength, true)
-
-      return URL.createObjectURL(new Blob([buffer], { type: 'audio/wav' }))
-    }
-
     window.__mockRecordTrackPlayCalls = []
-    window.__mockSongUrlResult = {
-      ok: true,
-      url: createSilentWavUrl(160),
-      level: 'standard',
-      streamDurationMs: 160000,
-    }
   })
 
   await page.locator('.playlist-card[data-playlist-id="101"] .track-row[data-track-id="101001"]').click()
@@ -1298,6 +1324,66 @@ test('playback reports listened tracks with NetEase source and listened seconds'
   expect(call.payload.sourceId).toBe(101)
   expect(call.payload.listenedSeconds).toBeGreaterThanOrEqual(30)
   expect(call.payload.syncCloud).toBe(true)
+})
+
+test('pause button responds immediately during playback', async ({ page }) => {
+  await waitForWall(page)
+  await mockPlayableSongUrl(page, 160)
+
+  await page.locator('.playlist-card[data-playlist-id="101"] .track-row[data-track-id="101001"]').click()
+  await expect.poll(async () => {
+    return page.evaluate(() => document.getElementById('play-btn')?.dataset.state || '')
+  }).toBe('playing')
+
+  const stateAfterClick = await page.evaluate(() => {
+    const button = document.getElementById('play-btn')
+    button?.click()
+    return button?.dataset.state || ''
+  })
+  expect(stateAfterClick).toBe('paused')
+  await expect(page.locator('#play-btn')).toHaveAttribute('data-state', 'paused')
+})
+
+test('progress seeking is not overwritten by playback timeupdate', async ({ page }) => {
+  await waitForWall(page)
+  await mockPlayableSongUrl(page, 160)
+
+  await page.locator('.playlist-card[data-playlist-id="101"] .track-row[data-track-id="101001"]').click()
+  await expect.poll(async () => {
+    return page.evaluate(() => Number(document.getElementById('audio')?.duration || 0))
+  }).toBeGreaterThan(0)
+
+  const valueWhileSeeking = await page.evaluate(() => {
+    const audio = document.getElementById('audio')
+    const range = document.getElementById('progress-range')
+    if (!(audio instanceof HTMLAudioElement) || !(range instanceof HTMLInputElement)) {
+      throw new Error('player controls missing')
+    }
+
+    audio.currentTime = 20
+    audio.dispatchEvent(new Event('timeupdate'))
+    range.value = '750'
+    range.dispatchEvent(new Event('input', { bubbles: true }))
+    audio.currentTime = 21
+    audio.dispatchEvent(new Event('timeupdate'))
+    return range.value
+  })
+
+  expect(valueWhileSeeking).toBe('750')
+
+  const seekResult = await page.evaluate(() => {
+    const audio = document.getElementById('audio')
+    const range = document.getElementById('progress-range')
+    range.dispatchEvent(new Event('change', { bubbles: true }))
+    return {
+      rangeValue: range.value,
+      currentTime: audio.currentTime,
+      duration: audio.duration,
+    }
+  })
+
+  expect(seekResult.rangeValue).toBe('750')
+  expect(seekResult.currentTime).toBeGreaterThan(seekResult.duration * 0.72)
 })
 
 test('timed out song resolution does not leave playback stuck in resolving state', async ({ page }) => {
@@ -2619,6 +2705,7 @@ test('compact single-line labels keep enough line height for descenders', async 
   await closeSettingsPanel(page)
 
   await expect(page.locator('.playlist-recommendations').first()).toBeVisible()
+  await expect(page.locator('.playlist-recommendations .recommendation-text').first()).toBeVisible()
 
   const metrics = await page.evaluate(() => {
     const readMetrics = (selector) => {

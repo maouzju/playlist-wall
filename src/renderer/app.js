@@ -19,6 +19,7 @@ const THEME_STORAGE_KEY = 'playlist-wall-theme'
 const SETTINGS_STORAGE_KEY = 'playlist-wall-settings'
 const SESSION_LAYOUT_STORAGE_KEY = 'playlist-wall-session-layout'
 const PATCH_COALESCE_MS = 300
+const PATCH_PLAYBACK_DEFER_MS = 1200
 const RECOMMENDATION_COUNT = 4
 const RECOMMENDATION_FETCH_COUNT = Math.max(RECOMMENDATION_COUNT * 3, 12)
 const RECOMMENDATION_CONCURRENCY = 2
@@ -45,6 +46,7 @@ const ARTIST_TRACK_DISPLAY_LIMIT_MIN = 20
 const ARTIST_TRACK_DISPLAY_LIMIT_MAX = 1000
 const ARTIST_TRACK_DISPLAY_LIMIT_DEFAULT = 100
 const ARTIST_TRACK_HYDRATION_CONCURRENCY = 2
+const ARTIST_SILENT_PRELOAD_LIMIT = 12
 const ARTIST_PLAYLIST_ID_OFFSET = 1000000000000
 const ARTIST_SUMMARY_TRACK_COUNT_MIN = 3
 const ARTIST_SUMMARY_TRACK_COUNT_MAX = 20
@@ -53,6 +55,16 @@ const PLAYBACK_RESOLVE_TIMEOUT_MS = 10000
 const AUDIO_QUALITY_SWITCH_DEBOUNCE_MS = 180
 const PLAY_RECORD_MIN_SECONDS = 30
 const PLAY_RECORD_MIN_PROGRESS_RATIO = 0.5
+const PLAY_RECORD_PAUSE_DEFER_MS = 250
+const PLAYBACK_STATS_UI_REFRESH_DEFER_MS = 800
+const ARTIST_PRELOAD_IDLE_DELAY_MS = 350
+const ARTIST_PRELOAD_PLAYING_DELAY_MS = 1600
+const BACKGROUND_UI_DEFER_MS = 1200
+const BACKGROUND_UI_RESUME_FLUSH_MS = 120
+const LYRICS_TIME_PUSH_INTERVAL_MS = 250
+const WINDOW_RESUME_INTERACTION_GRACE_MS = 3000
+const WINDOW_FOCUS_REFRESH_DELAY_MS = 4500
+const USER_INTERACTION_BACKGROUND_GRACE_MS = 900
 const AUDIO_QUALITY_REFRESH_REASON_SETTINGS = 'settings'
 const AUDIO_QUALITY_REFRESH_REASON_NETWORK = 'network'
 const VOLUME_ASSIST_TARGET_APP = 'app'
@@ -373,6 +385,7 @@ const renderRuntime = {
   directSongSearchToken: 0,
   directSongDragState: null,
   patchFlushTimer: 0,
+  patchDeferredForPlayback: false,
   wallColumns: [],
   wallNodeMaps: [],
   wallPlacementsByColumn: [],
@@ -388,14 +401,31 @@ const renderRuntime = {
   recommendationGlobalError: '',
   recommendationQueue: [],
   recommendationInFlight: 0,
+  recommendationPrimePending: false,
   expandedArtistTrackKeys: new Set(),
   artistHydrationSessionId: 0,
   artistHydrationQueue: [],
   artistHydrationInFlight: 0,
   artistHydrationRerenderPending: false,
+  artistSilentPreloadTimer: 0,
   renderedTrackKey: '',
   renderedRecommendationKey: '',
   renderedPlaylistId: null,
+  progressUiFrame: 0,
+  progressUiLastSecond: -1,
+  progressUiLastTotalSecond: -1,
+  progressUserSeeking: false,
+  playRecordPauseTimer: 0,
+  playbackStatsUiRefreshTimer: 0,
+  backgroundUiDirty: false,
+  backgroundUiResumeTimer: 0,
+  foregroundedAt: 0,
+  focusRefreshTimer: 0,
+  windowWasBackgrounded: false,
+  lastUserInteractionAt: 0,
+  lyricsLastTimePushAt: 0,
+  lyricsLastTimePushTrackId: null,
+  lyricsLastTimePushPlaying: false,
   authPollTimer: 0,
   authLoginKey: '',
   contextMenuTrack: null,
@@ -2486,34 +2516,50 @@ function bindEvents() {
     refs.lyricsMenuClose.addEventListener('click', handleLyricsMenuClose)
   }
   document.addEventListener('click', handleLyricsMenuOutsideClick, true)
+  document.addEventListener('pointerdown', markUserInteraction, true)
+  document.addEventListener('input', markUserInteraction, true)
   document.addEventListener('keydown', handleLyricsMenuEsc)
+  document.addEventListener('keydown', markUserInteraction, true)
   refs.progressRange.addEventListener('input', () => {
+    renderRuntime.progressUserSeeking = true
     if (!Number.isFinite(refs.audio.duration) || refs.audio.duration <= 0) return
     refs.currentTime.textContent = formatTime((Number(refs.progressRange.value) / 1000) * refs.audio.duration)
   })
   refs.progressRange.addEventListener('change', () => {
-    if (!Number.isFinite(refs.audio.duration) || refs.audio.duration <= 0) return
-    refs.audio.currentTime = (Number(refs.progressRange.value) / 1000) * refs.audio.duration
+    renderRuntime.progressUserSeeking = false
+    if (!Number.isFinite(refs.audio.duration) || refs.audio.duration <= 0) {
+      updateProgressUI({ force: true })
+      return
+    }
+    const nextTime = (Number(refs.progressRange.value) / 1000) * refs.audio.duration
+    refs.audio.currentTime = nextTime
+    updateProgressUI({ force: true })
+    pushLyricsPlaybackTime({ force: true })
   })
   refs.volumeRange.addEventListener('input', () => {
     refs.audio.volume = Number(refs.volumeRange.value) / 100
   })
   refs.audio.addEventListener('play', () => {
     state.isPlaying = true
-    renderPlayer()
+    cancelDeferredPauseRecord()
+    syncPlayerButtonState(Boolean(getCurrentTrack()))
+    updateProgressUI({ force: true })
+    pushLyricsPlaybackTime({ force: true })
   })
   refs.audio.addEventListener('pause', () => {
     state.isPlaying = false
-    maybeRecordCurrentTrackPlay()
-    renderPlayer()
+    syncPlayerButtonState(Boolean(getCurrentTrack()))
+    updateProgressUI({ force: true })
+    pushLyricsPlaybackTime({ force: true })
+    schedulePausePlayRecord()
   })
   refs.audio.addEventListener('loadedmetadata', () => {
     updatePreviewState()
-    updateProgressUI()
+    updateProgressUI({ force: true })
     renderPlayer()
   })
   refs.audio.addEventListener('timeupdate', () => {
-    updateProgressUI()
+    scheduleProgressUIUpdate()
     pushLyricsPlaybackTime()
     maybeRecordCurrentTrackPlay()
   })
@@ -2543,6 +2589,9 @@ function bindEvents() {
   window.addEventListener('blur', clearPlaylistDragState)
   window.addEventListener('blur', clearTrackDragState)
   window.addEventListener('blur', clearVolumeAssistPressedKeys)
+  window.addEventListener('blur', cancelFocusRefresh)
+  window.addEventListener('blur', markWindowBackgrounded)
+  window.addEventListener('focus', handleWindowForegrounded)
   document.addEventListener('keydown', handleKeydown)
   document.addEventListener('keydown', handleVolumeAssistKeydown, true)
   document.addEventListener('keyup', handleVolumeAssistKeyup, true)
@@ -2669,6 +2718,7 @@ async function handleLyricsButtonContextMenu(event) {
 function closeLyricsMenu() {
   if (refs.lyricsMenu && !refs.lyricsMenu.classList.contains('hidden')) {
     refs.lyricsMenu.classList.add('hidden')
+    scheduleDeferredPlaybackWorkFlush()
   }
 }
 
@@ -2713,15 +2763,172 @@ async function handleLyricsMenuClose() {
   }
 }
 
-function pushLyricsPlaybackTime() {
+function pushLyricsPlaybackTime({ force = false } = {}) {
   if (!state.lyrics.windowOpen) return
   if (!appBridge || typeof appBridge.pushLyricsPlaybackTime !== 'function') return
+  const now = window.performance?.now ? window.performance.now() : Date.now()
+  const trackId = state.currentTrackId
+  const isPlaying = Boolean(state.isPlaying)
+  if (
+    !force
+    && now - renderRuntime.lyricsLastTimePushAt < LYRICS_TIME_PUSH_INTERVAL_MS
+    && renderRuntime.lyricsLastTimePushTrackId === trackId
+    && renderRuntime.lyricsLastTimePushPlaying === isPlaying
+  ) {
+    return
+  }
+
+  renderRuntime.lyricsLastTimePushAt = now
+  renderRuntime.lyricsLastTimePushTrackId = trackId
+  renderRuntime.lyricsLastTimePushPlaying = isPlaying
   const currentTime = Number(refs.audio?.currentTime) || 0
   appBridge.pushLyricsPlaybackTime({
     currentTime,
-    trackId: state.currentTrackId,
-    isPlaying: Boolean(state.isPlaying),
+    trackId,
+    isPlaying,
   })
+}
+
+function isPlaybackActiveForBackgroundWork() {
+  return Boolean(state.isResolving || state.isPlaying || (refs.audio && !refs.audio.paused))
+}
+
+function getRuntimeNow() {
+  return window.performance?.now ? window.performance.now() : Date.now()
+}
+
+function markUserInteraction() {
+  renderRuntime.lastUserInteractionAt = getRuntimeNow()
+}
+
+function isWindowResumeGraceActive(now = getRuntimeNow()) {
+  return renderRuntime.foregroundedAt > 0
+    && now - renderRuntime.foregroundedAt < WINDOW_RESUME_INTERACTION_GRACE_MS
+}
+
+function isRecentUserInteractionActive(now = getRuntimeNow()) {
+  return renderRuntime.lastUserInteractionAt > 0
+    && now - renderRuntime.lastUserInteractionAt < USER_INTERACTION_BACKGROUND_GRACE_MS
+}
+
+function isInteractiveOverlayOpen() {
+  return Boolean(
+    renderRuntime.playlistEditorState
+    || (refs.settingsPanel && refs.settingsPanel.classList.contains('is-open'))
+    || (refs.quickAddModal && !refs.quickAddModal.classList.contains('hidden'))
+    || (refs.directSongPanel && !refs.directSongPanel.classList.contains('hidden'))
+    || (refs.contextMenu && !refs.contextMenu.classList.contains('hidden'))
+    || (refs.lyricsMenu && !refs.lyricsMenu.classList.contains('hidden'))
+  )
+}
+
+function shouldDeferBackgroundWorkForInteraction() {
+  const now = getRuntimeNow()
+  return document.hidden
+    || isPlaybackActiveForBackgroundWork()
+    || isWindowResumeGraceActive(now)
+    || isRecentUserInteractionActive(now)
+    || isInteractiveOverlayOpen()
+}
+
+function markBackgroundUiDirty() {
+  if (!shouldDeferBackgroundWorkForInteraction()) {
+    return false
+  }
+
+  renderRuntime.backgroundUiDirty = true
+  if (!renderRuntime.backgroundUiResumeTimer) {
+    renderRuntime.backgroundUiResumeTimer = window.setTimeout(() => {
+      renderRuntime.backgroundUiResumeTimer = 0
+      flushDeferredPlaybackWork({ force: false })
+    }, BACKGROUND_UI_DEFER_MS)
+  }
+  return true
+}
+
+function flushDeferredBackgroundUi({ force = false } = {}) {
+  if (!renderRuntime.backgroundUiDirty) {
+    return false
+  }
+
+  if (!force && shouldDeferBackgroundWorkForInteraction()) {
+    if (!renderRuntime.backgroundUiResumeTimer) {
+      renderRuntime.backgroundUiResumeTimer = window.setTimeout(() => {
+        renderRuntime.backgroundUiResumeTimer = 0
+        flushDeferredPlaybackWork({ force: false })
+      }, BACKGROUND_UI_DEFER_MS)
+    }
+    return false
+  }
+
+  if (renderRuntime.backgroundUiResumeTimer) {
+    window.clearTimeout(renderRuntime.backgroundUiResumeTimer)
+    renderRuntime.backgroundUiResumeTimer = 0
+  }
+
+  renderRuntime.backgroundUiDirty = false
+  rebuildTrackPlayTiers()
+  renderWallViewport({ force: true })
+  updatePlaylistRecommendationNodesForVisible()
+  return true
+}
+
+function hasDeferredPlaybackWork() {
+  return Boolean(
+    renderRuntime.backgroundUiDirty
+    || renderRuntime.patchDeferredForPlayback
+    || renderRuntime.pendingPlaylistPatches.length
+    || renderRuntime.libraryRefreshQueued
+    || renderRuntime.recommendationPrimePending
+  )
+}
+
+function flushDeferredPlaybackWork({ force = false } = {}) {
+  if (!force && shouldDeferBackgroundWorkForInteraction()) {
+    if (!renderRuntime.backgroundUiResumeTimer) {
+      renderRuntime.backgroundUiResumeTimer = window.setTimeout(() => {
+        renderRuntime.backgroundUiResumeTimer = 0
+        flushDeferredPlaybackWork({ force: false })
+      }, BACKGROUND_UI_DEFER_MS)
+    }
+    return false
+  }
+
+  let flushed = false
+  if (renderRuntime.patchDeferredForPlayback || renderRuntime.pendingPlaylistPatches.length) {
+    flushPlaylistPatches()
+    flushed = true
+  }
+  if (renderRuntime.backgroundUiDirty) {
+    flushed = flushDeferredBackgroundUi({ force: true }) || flushed
+  }
+  if (renderRuntime.libraryRefreshQueued) {
+    renderRuntime.libraryRefreshQueued = false
+    void refreshLibraryFromServer({ reason: 'queued', silent: true })
+    flushed = true
+  }
+  if (renderRuntime.recommendationPrimePending) {
+    renderRuntime.recommendationPrimePending = false
+    primeVisibleRecommendations()
+    flushed = true
+  }
+  return flushed
+}
+
+function scheduleDeferredPlaybackWorkFlush(delayMs = BACKGROUND_UI_RESUME_FLUSH_MS) {
+  if (!hasDeferredPlaybackWork()) {
+    return
+  }
+
+  if (renderRuntime.backgroundUiResumeTimer) {
+    window.clearTimeout(renderRuntime.backgroundUiResumeTimer)
+    renderRuntime.backgroundUiResumeTimer = 0
+  }
+
+  renderRuntime.backgroundUiResumeTimer = window.setTimeout(() => {
+    renderRuntime.backgroundUiResumeTimer = 0
+    flushDeferredPlaybackWork({ force: false })
+  }, Math.max(0, delayMs))
 }
 
 async function pushLyricsForCurrentTrack() {
@@ -3385,6 +3592,13 @@ async function refreshLibraryFromServer({ reason = 'manual', silent = true, forc
     return false
   }
 
+  if (reason !== 'manual' && shouldDeferBackgroundWorkForInteraction()) {
+    renderRuntime.libraryRefreshQueued = true
+    scheduleDeferredPlaybackWorkFlush(WINDOW_RESUME_INTERACTION_GRACE_MS + BACKGROUND_UI_RESUME_FLUSH_MS)
+    startLibraryAutoRefresh()
+    return false
+  }
+
   const now = Date.now()
   if (
     !force
@@ -3415,6 +3629,13 @@ async function refreshLibraryFromServer({ reason = 'manual', silent = true, forc
     }
   } finally {
     renderRuntime.libraryRefreshInFlight = false
+  }
+
+  if (result?.ok && reason !== 'manual' && shouldDeferBackgroundWorkForInteraction()) {
+    renderRuntime.libraryRefreshQueued = true
+    scheduleDeferredPlaybackWorkFlush(WINDOW_RESUME_INTERACTION_GRACE_MS + BACKGROUND_UI_RESUME_FLUSH_MS)
+    startLibraryAutoRefresh()
+    return false
   }
 
   if (result?.ok) {
@@ -3589,9 +3810,34 @@ function silentlyPreloadArtistPlaylists() {
     return
   }
 
-  for (const playlist of state.artistPlaylists) {
-    queueArtistPlaylistHydration(playlist.id, { includeCollapsed: true })
+  if (renderRuntime.artistSilentPreloadTimer) {
+    window.clearTimeout(renderRuntime.artistSilentPreloadTimer)
   }
+
+  const delay = shouldDeferBackgroundWorkForInteraction()
+    ? ARTIST_PRELOAD_PLAYING_DELAY_MS
+    : ARTIST_PRELOAD_IDLE_DELAY_MS
+
+  renderRuntime.artistSilentPreloadTimer = window.setTimeout(() => {
+    renderRuntime.artistSilentPreloadTimer = 0
+
+    if (!canUseNeteaseFeatures() || state.activeTab === 'artists') {
+      return
+    }
+
+    const preloaded = state.artistPlaylists
+      .slice(0, ARTIST_SILENT_PRELOAD_LIMIT)
+      .filter((playlist) => {
+        const remoteState = state.artistRemoteTracksByKey.get(playlist.artistKey || '')
+        return !remoteState?.loading
+          && !remoteState?.error
+          && !(Array.isArray(remoteState?.tracks) && remoteState.tracks.length)
+      })
+
+    for (const playlist of preloaded) {
+      queueArtistPlaylistHydration(playlist.id, { includeCollapsed: true, silent: true })
+    }
+  }, delay)
 }
 
 
@@ -4223,6 +4469,12 @@ function resetAppState() {
   state.isResolving = false
   state.isPreview = false
   state.playRecord = null
+  cancelDeferredPauseRecord()
+  window.clearTimeout(renderRuntime.patchFlushTimer)
+  renderRuntime.patchFlushTimer = 0
+  renderRuntime.patchDeferredForPlayback = false
+  renderRuntime.pendingPlaylistPatches = []
+  renderRuntime.pendingPatchDone = false
   state.localPlayCounts = new Map()
   state.cloudPlayCounts = new Map()
   state.combinedPlayCounts = new Map()
@@ -4237,6 +4489,34 @@ function resetAppState() {
   renderRuntime.artistHydrationQueue = []
   renderRuntime.artistHydrationInFlight = 0
   renderRuntime.artistHydrationRerenderPending = false
+  renderRuntime.recommendationPrimePending = false
+  if (renderRuntime.artistSilentPreloadTimer) {
+    window.clearTimeout(renderRuntime.artistSilentPreloadTimer)
+    renderRuntime.artistSilentPreloadTimer = 0
+  }
+  if (renderRuntime.progressUiFrame) {
+    window.cancelAnimationFrame(renderRuntime.progressUiFrame)
+    renderRuntime.progressUiFrame = 0
+  }
+  renderRuntime.progressUiLastSecond = -1
+  renderRuntime.progressUiLastTotalSecond = -1
+  renderRuntime.progressUserSeeking = false
+  renderRuntime.lyricsLastTimePushAt = 0
+  renderRuntime.lyricsLastTimePushTrackId = null
+  renderRuntime.lyricsLastTimePushPlaying = false
+  if (renderRuntime.playbackStatsUiRefreshTimer) {
+    window.clearTimeout(renderRuntime.playbackStatsUiRefreshTimer)
+    renderRuntime.playbackStatsUiRefreshTimer = 0
+  }
+  if (renderRuntime.backgroundUiResumeTimer) {
+    window.clearTimeout(renderRuntime.backgroundUiResumeTimer)
+    renderRuntime.backgroundUiResumeTimer = 0
+  }
+  cancelFocusRefresh()
+  renderRuntime.foregroundedAt = 0
+  renderRuntime.windowWasBackgrounded = false
+  renderRuntime.lastUserInteractionAt = 0
+  renderRuntime.backgroundUiDirty = false
   renderRuntime.wallColumns = []
   renderRuntime.wallNodeMaps = []
   renderRuntime.wallPlacementsByColumn = []
@@ -5016,6 +5296,14 @@ function mergePlaylistPatch(playlists, { done = false } = {}) {
 
   window.clearTimeout(renderRuntime.patchFlushTimer)
   if (renderRuntime.pendingPatchDone) {
+    if (shouldDeferBackgroundWorkForInteraction()) {
+      renderRuntime.patchDeferredForPlayback = true
+      renderRuntime.patchFlushTimer = window.setTimeout(() => {
+        flushPlaylistPatches()
+      }, PATCH_PLAYBACK_DEFER_MS)
+      return
+    }
+
     flushPlaylistPatches()
     return
   }
@@ -5026,8 +5314,18 @@ function mergePlaylistPatch(playlists, { done = false } = {}) {
 }
 
 function flushPlaylistPatches() {
+  if (shouldDeferBackgroundWorkForInteraction()) {
+    renderRuntime.patchDeferredForPlayback = true
+    window.clearTimeout(renderRuntime.patchFlushTimer)
+    renderRuntime.patchFlushTimer = window.setTimeout(() => {
+      flushPlaylistPatches()
+    }, PATCH_PLAYBACK_DEFER_MS)
+    return
+  }
+
   window.clearTimeout(renderRuntime.patchFlushTimer)
   renderRuntime.patchFlushTimer = 0
+  renderRuntime.patchDeferredForPlayback = false
 
   if (!renderRuntime.pendingPlaylistPatches.length) {
     renderRuntime.pendingPatchDone = false
@@ -5587,6 +5885,11 @@ async function setActiveTab(tab) {
     await loadConcertPlaylists()
     return
   }
+  if (tab === 'artists') {
+    for (const playlist of state.artistPlaylists) {
+      queueArtistPlaylistHydration(playlist.id, { includeCollapsed: true, force: true })
+    }
+  }
   applyFilters()
 }
 
@@ -5823,6 +6126,7 @@ function closeDirectSongSearchPanel({ reset = false } = {}) {
     refs.directSongPanel.classList.add('hidden')
   }
   renderSearchInput()
+  scheduleDeferredPlaybackWorkFlush()
 }
 
 async function openDirectSongSearchFromInput() {
@@ -7276,7 +7580,12 @@ function queueArtistPlaylistHydration(playlistId, options = {}) {
   const playlist = getPlaylistById(playlistId)
   const includeCollapsed = options.includeCollapsed === true
   const force = options.force === true
+  const silent = options.silent === true
   if (!playlist?.isArtist || (!includeCollapsed && isPlaylistCollapsed(playlist))) {
+    return
+  }
+
+  if (silent && shouldDeferBackgroundWorkForInteraction()) {
     return
   }
 
@@ -7432,9 +7741,17 @@ async function hydrateArtistPlaylistTracks(artistKey, sessionId) {
 
 function primeVisibleRecommendations() {
   if (!state.settings.showPlaylistRecommendations) {
+    renderRuntime.recommendationPrimePending = false
     return
   }
 
+  if (shouldDeferBackgroundWorkForInteraction()) {
+    renderRuntime.recommendationPrimePending = true
+    scheduleDeferredPlaybackWorkFlush()
+    return
+  }
+
+  renderRuntime.recommendationPrimePending = false
   for (const playlistId of renderRuntime.renderedPlaylistIds) {
     queuePlaylistRecommendationLoad(playlistId)
   }
@@ -8133,6 +8450,7 @@ function closeContextMenu() {
   refs.contextMenu.classList.add('hidden')
   refs.contextMenu.classList.remove('context-menu--submenu-left')
   refs.contextMenu.replaceChildren()
+  scheduleDeferredPlaybackWorkFlush()
 }
 
 function shouldKeepContextMenuOpenOnScroll() {
@@ -9988,17 +10306,51 @@ function scheduleTrackDragStateRecovery() {
   scheduleTrackDragStateCleanup(48)
 }
 
+function cancelFocusRefresh() {
+  if (renderRuntime.focusRefreshTimer) {
+    window.clearTimeout(renderRuntime.focusRefreshTimer)
+    renderRuntime.focusRefreshTimer = 0
+  }
+}
+
+function markWindowBackgrounded() {
+  renderRuntime.windowWasBackgrounded = true
+}
+
+function handleWindowForegrounded() {
+  if (document.hidden) {
+    return
+  }
+
+  const wasBackgrounded = renderRuntime.windowWasBackgrounded
+  renderRuntime.windowWasBackgrounded = false
+  if (!wasBackgrounded) {
+    return
+  }
+
+  renderRuntime.foregroundedAt = getRuntimeNow()
+  scheduleDeferredPlaybackWorkFlush(WINDOW_RESUME_INTERACTION_GRACE_MS + BACKGROUND_UI_RESUME_FLUSH_MS)
+
+  if (canUseNeteaseFeatures()) {
+    cancelFocusRefresh()
+    renderRuntime.focusRefreshTimer = window.setTimeout(() => {
+      renderRuntime.focusRefreshTimer = 0
+      void refreshLibraryFromServer({ reason: 'focus', silent: true })
+    }, WINDOW_FOCUS_REFRESH_DELAY_MS)
+  }
+}
+
 function handleDocumentVisibilityChange() {
   if (document.hidden) {
+    markWindowBackgrounded()
+    cancelFocusRefresh()
     clearPlaylistDragState()
     clearTrackDragState()
     clearLibraryRefreshTimer()
     return
   }
 
-  if (canUseNeteaseFeatures()) {
-    void refreshLibraryFromServer({ reason: 'focus', silent: true })
-  }
+  handleWindowForegrounded()
 }
 
 function clearTrackDragState() {
@@ -10537,6 +10889,7 @@ function handleWallDragEnd() {
 
 function clearCurrentPlayback() {
   refs.audio.pause()
+  cancelDeferredPauseRecord()
   refs.audio.removeAttribute('src')
   refs.audio.load()
   state.queue = []
@@ -11360,6 +11713,39 @@ function maybeRecordCurrentTrackPlay(options = {}) {
   })
 }
 
+function cancelDeferredPauseRecord() {
+  if (renderRuntime.playRecordPauseTimer) {
+    window.clearTimeout(renderRuntime.playRecordPauseTimer)
+    renderRuntime.playRecordPauseTimer = 0
+  }
+}
+
+function schedulePausePlayRecord() {
+  cancelDeferredPauseRecord()
+  renderRuntime.playRecordPauseTimer = window.setTimeout(() => {
+    renderRuntime.playRecordPauseTimer = 0
+    maybeRecordCurrentTrackPlay()
+    scheduleDeferredPlaybackWorkFlush()
+  }, PLAY_RECORD_PAUSE_DEFER_MS)
+}
+
+function schedulePlaybackStatsUiRefresh() {
+  if (renderRuntime.playbackStatsUiRefreshTimer) {
+    return
+  }
+
+  renderRuntime.playbackStatsUiRefreshTimer = window.setTimeout(() => {
+    renderRuntime.playbackStatsUiRefreshTimer = 0
+    if (markBackgroundUiDirty()) {
+      return
+    }
+
+    rebuildTrackPlayTiers()
+    renderWallViewport({ force: true })
+    updatePlaylistRecommendationNodesForVisible()
+  }, PLAYBACK_STATS_UI_REFRESH_DEFER_MS)
+}
+
 async function recordTrackPlay(trackId, options = {}) {
   if (!state.account?.userId || !appBridge || typeof appBridge.recordTrackPlay !== 'function') {
     return
@@ -11382,9 +11768,7 @@ async function recordTrackPlay(trackId, options = {}) {
     }
 
     state.localPlayCounts.set(normalizedTrackId, Number(result.localPlayCount || 0))
-    rebuildTrackPlayTiers()
-    renderWallViewport({ force: true })
-    updatePlaylistRecommendationNodesForVisible()
+    schedulePlaybackStatsUiRefresh()
   } catch (error) {
     console.warn('failed to record track play', error)
   }
@@ -11405,9 +11789,15 @@ function togglePlayback() {
   }
 
   if (refs.audio.paused) {
+    cancelDeferredPauseRecord()
     refs.audio.play().catch((error) => showToast(error.message || TEXT.playbackFailed, 'error'))
   } else {
     refs.audio.pause()
+    state.isPlaying = false
+    syncPlayerButtonState(Boolean(getCurrentTrack()))
+    updateProgressUI({ force: true })
+    pushLyricsPlaybackTime({ force: true })
+    scheduleDeferredPlaybackWorkFlush()
   }
 }
 
@@ -11693,6 +12083,7 @@ function toggleSettingsPanel() {
 function closeSettingsPanel() {
   refs.settingsPanel.classList.remove('is-open')
   refs.settingsBackdrop.classList.add('hidden')
+  scheduleDeferredPlaybackWorkFlush()
 }
 
 function syncPlaylistEditorUi() {
@@ -11747,6 +12138,17 @@ function openPlaylistEditor(editorState) {
   refs.playlistEditorCoverInput.value = ''
   syncPlaylistEditorUi()
   window.requestAnimationFrame(() => {
+    if (renderRuntime.playlistEditorState !== editorState) {
+      return
+    }
+    const activeElement = document.activeElement
+    if (
+      activeElement
+      && refs.playlistEditor.contains(activeElement)
+      && activeElement !== refs.playlistEditorName
+    ) {
+      return
+    }
     refs.playlistEditorName.focus()
     refs.playlistEditorName.select()
   })
@@ -11766,6 +12168,7 @@ function closePlaylistEditor() {
   refs.playlistEditorCoverEmpty.classList.remove('hidden')
   refs.playlistEditorBackdrop.classList.add('hidden')
   refs.playlistEditor.classList.add('hidden')
+  scheduleDeferredPlaybackWorkFlush()
 }
 
 function openPlaylistEditorForCreate() {
@@ -12583,12 +12986,40 @@ function syncPlayerButtonState(hasTrack) {
   }
 }
 
-function updateProgressUI() {
+function scheduleProgressUIUpdate() {
+  if (renderRuntime.progressUserSeeking) {
+    return
+  }
+
+  const currentSecond = Number.isFinite(refs.audio.currentTime) ? Math.floor(refs.audio.currentTime) : 0
+  const totalSecond = Number.isFinite(refs.audio.duration) ? Math.floor(refs.audio.duration) : 0
+  if (
+    currentSecond === renderRuntime.progressUiLastSecond
+    && totalSecond === renderRuntime.progressUiLastTotalSecond
+  ) {
+    return
+  }
+
+  renderRuntime.progressUiLastSecond = currentSecond
+  renderRuntime.progressUiLastTotalSecond = totalSecond
+  if (renderRuntime.progressUiFrame) {
+    return
+  }
+
+  renderRuntime.progressUiFrame = window.requestAnimationFrame(() => {
+    renderRuntime.progressUiFrame = 0
+    updateProgressUI()
+  })
+}
+
+function updateProgressUI({ force = false } = {}) {
   const current = Number.isFinite(refs.audio.currentTime) ? refs.audio.currentTime : 0
   const total = Number.isFinite(refs.audio.duration) ? refs.audio.duration : 0
   refs.currentTime.textContent = formatTime(current)
   refs.totalTime.textContent = formatTime(total)
-  refs.progressRange.value = total > 0 ? String(Math.round((current / total) * 1000)) : '0'
+  if (force || !renderRuntime.progressUserSeeking) {
+    refs.progressRange.value = total > 0 ? String(Math.round((current / total) * 1000)) : '0'
+  }
 }
 
 function computeColumns() {
@@ -12926,6 +13357,7 @@ function closeQuickAddModal() {
   renderRuntime.quickAddState = null
   refs.quickAddBackdrop.classList.add('hidden')
   refs.quickAddModal.classList.add('hidden')
+  scheduleDeferredPlaybackWorkFlush()
 }
 
 function renderQuickAddModal() {
