@@ -489,7 +489,7 @@ async function bootstrapApp() {
   applyTheme(state.theme, { silent: true, persistLocal: false })
   renderSettings()
   void refreshAppUpdateStatus({ silent: true })
-  await fetchSpotifyImportState()
+  void fetchSpotifyImportState()
   bindEvents()
   wireBridge()
   silentlyPreloadExplorePlaylists()
@@ -3746,6 +3746,13 @@ async function init() {
   renderHeader()
   renderPlayer()
   applyFilters()
+
+  if (result.fromCache) {
+    // 主进程返回的是本地缓存秒开数据，立即在后台做一次静默全量刷新，
+    // 补齐账号校验、歌单变更和云端播放数（登录态失效会自动跳回扫码页）。
+    void refreshLibraryFromServer({ reason: 'bootstrap', silent: true, force: true })
+  }
+
   silentlyPreloadExplorePlaylists()
   silentlyPreloadConcertPlaylists()
 

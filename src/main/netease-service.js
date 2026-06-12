@@ -1,4 +1,99 @@
-const api = require('NeteaseCloudMusicApi')
+const fs = require('fs')
+const os = require('os')
+const path = require('path')
+
+// NeteaseCloudMusicApi 的包入口会在 require 时同步加载全部 366 个接口模块（共 900+ 文件，
+// 冷启动可达数秒）。这里改成按需加载：第一次用到某个接口才加载对应模块文件，
+// 第一次真正发请求才加载共享的 util/request 工具链（axios 等）。
+const API_NAME_PATTERN = /^[a-z0-9_]+$/i
+const apiModuleCache = new Map()
+let neteaseRequest = null
+let neteaseCookieToJson = null
+
+function ensureAnonymousTokenFile() {
+  // NeteaseCloudMusicApi/util/request 顶层会同步读取该文件，原包入口负责创建它
+  try {
+    const anonymousTokenPath = path.resolve(os.tmpdir(), 'anonymous_token')
+    if (!fs.existsSync(anonymousTokenPath)) {
+      fs.writeFileSync(anonymousTokenPath, '', 'utf-8')
+    }
+  } catch (error) {
+    console.warn('failed to ensure anonymous token file', error)
+  }
+}
+
+function callNeteaseRequest(...args) {
+  if (!neteaseRequest) {
+    ensureAnonymousTokenFile()
+    neteaseRequest = require('NeteaseCloudMusicApi/util/request')
+  }
+  return neteaseRequest(...args)
+}
+
+function loadApiModule(name) {
+  const normalizedName = String(name || '')
+  if (apiModuleCache.has(normalizedName)) {
+    return apiModuleCache.get(normalizedName)
+  }
+
+  let moduleFn = null
+  if (API_NAME_PATTERN.test(normalizedName)) {
+    try {
+      moduleFn = require(`NeteaseCloudMusicApi/module/${normalizedName}.js`)
+    } catch {
+      moduleFn = null
+    }
+  }
+
+  apiModuleCache.set(normalizedName, moduleFn)
+  return moduleFn
+}
+
+function invokeApi(moduleFn, data = {}) {
+  if (!neteaseCookieToJson) {
+    neteaseCookieToJson = require('NeteaseCloudMusicApi/util/index').cookieToJson
+  }
+
+  const cookie = typeof data.cookie === 'string'
+    ? neteaseCookieToJson(data.cookie)
+    : data.cookie || {}
+
+  return moduleFn({ ...data, cookie }, (...args) => callNeteaseRequest(...args))
+}
+
+let packageEntryPath
+
+function getLoadedPackageEntryExports() {
+  if (packageEntryPath === undefined) {
+    try {
+      packageEntryPath = require.resolve('NeteaseCloudMusicApi')
+    } catch {
+      packageEntryPath = null
+    }
+  }
+
+  if (!packageEntryPath) {
+    return null
+  }
+
+  return require.cache[packageEntryPath]?.exports || null
+}
+
+function resolveApiFunction(name) {
+  // 若完整包入口已被显式加载（例如测试先 require 整包并在其上打桩），
+  // 优先复用入口导出，保证打桩生效；入口函数自带 cookie 处理与 request 注入。
+  const entryExports = getLoadedPackageEntryExports()
+  if (entryExports && typeof entryExports[name] === 'function') {
+    return entryExports[name]
+  }
+
+  const moduleFn = loadApiModule(name)
+  if (typeof moduleFn !== 'function') {
+    return null
+  }
+
+  return (params) => invokeApi(moduleFn, params)
+}
 
 const PLAYLIST_PAGE_SIZE = 1000
 const EXPLORE_DETAIL_CONCURRENCY = 4
@@ -1446,7 +1541,7 @@ async function mapWithConcurrency(items, limit, mapper) {
 }
 
 async function callApi(name, params, options = {}) {
-  const fn = api[name]
+  const fn = resolveApiFunction(name)
   if (typeof fn !== 'function') {
     throw new Error(`Unknown API: ${name}`)
   }
@@ -1944,10 +2039,18 @@ class NeteaseService {
     let fallbackSource = null
 
     for (const level of levels) {
+      // 切歌是交互路径：网易偶发 ECONNRESET 时连接会挂十几秒，但立刻重试通常马上成功。
+      // 这里用“短超时 + 快速重试”，保证两次尝试都落在前端 10s 解析预算内，
+      // 而不是默认的 15s x 5 次（前端早已放弃，重试全部白跑）。
       const response = await callApi('song_url_v1', {
         cookie: this.cookie,
         id: songId,
         level,
+      }, {
+        timeoutMs: 4000,
+        maxAttempts: 2,
+        retryDelayMs: 500,
+        fallbackMessage: '获取播放地址失败',
       })
       const data = response.body?.data?.[0]
       if (data?.url) {

@@ -1,6 +1,12 @@
+const mainProcessStartedAt = Date.now()
+
 const { installSafeConsole } = require('./safe-console')
 
 installSafeConsole()
+
+function logStartupMilestone(label) {
+  console.log(`[startup] ${label} +${Date.now() - mainProcessStartedAt}ms`)
+}
 
 const fs = require('fs')
 const path = require('path')
@@ -1641,6 +1647,7 @@ function createWindow() {
   }
   win.loadFile(path.join(__dirname, '../renderer/index.html'))
   win.once('ready-to-show', () => {
+    logStartupMilestone('window shown')
     correctWindowPlacementIfNeeded(win, { persist: true })
     win.show()
     try {
@@ -1662,6 +1669,36 @@ function createWindow() {
   })
 }
 
+function buildBootstrapPayloadFromCache(bootstrap, session) {
+  if (!bootstrap?.account?.userId || !bootstrap.playlists?.length) {
+    return null
+  }
+
+  const account = normalizeAccount(bootstrap.account)
+  const playlists = sortPlaylistsForWall(bootstrap.playlists)
+    .filter((playlist) => !pendingSubscribedPlaylistRemovals.has(Number(playlist.id || 0)))
+    .map((playlist) => buildPlaylistSnapshot(playlist, loadPlaylistDetailCache(playlist.id)))
+
+  if (!playlists.length) {
+    return null
+  }
+
+  const localStats = getPlaybackStats(account.userId)
+
+  return {
+    ok: true,
+    fromCache: true,
+    account,
+    playlists,
+    playback: {
+      localPlayCounts: localStats.localPlayCounts || {},
+      cloudPlayCounts: localStats.cloudPlayCounts || {},
+    },
+    stats: buildStats(playlists),
+    sessionStorageMode: session.storageMode || '',
+  }
+}
+
 async function buildBootstrapPayload() {
   hydrationRunId += 1
   let bootstrap = loadBootstrapCache()
@@ -1676,6 +1713,16 @@ async function buildBootstrapPayload() {
   }
 
   svc = new NeteaseService(session.cookie)
+
+  // 本地缓存完整时直接秒开：先用缓存渲染歌单墙，账号校验、歌单与云端播放数
+  // 由渲染端随后的静默 refreshLibrary 在后台补齐（含登录态失效处理）。
+  const cachedPayload = buildBootstrapPayloadFromCache(bootstrap, session)
+  if (cachedPayload) {
+    send('progress', { message: TEXT.loadingBootstrapReady, pct: 100 })
+    void hydratePlaylistsInBackground(cachedPayload.account, cachedPayload.playlists)
+    return cachedPayload
+  }
+
   send('progress', { message: TEXT.loadingAccount, pct: 10 })
 
   let account = null
@@ -1833,10 +1880,13 @@ async function buildLibraryRefreshPayload() {
   saveBootstrapCache(account, playlists)
   void hydratePlaylistsInBackground(account, playlists)
 
+  const playback = await buildPlaybackPayload(account.userId)
+
   return {
     ok: true,
     account,
     playlists,
+    playback,
     stats: buildStats(playlists),
     sessionStorageMode: session.storageMode || '',
   }
@@ -1962,7 +2012,10 @@ function registerIpc() {
 
   ipcMain.handle('init', async () => {
     try {
-      return await buildBootstrapPayload()
+      logStartupMilestone('init invoked')
+      const payload = await buildBootstrapPayload()
+      logStartupMilestone(`init payload ready (${payload.fromCache ? 'cache' : payload.needsLogin ? 'login' : 'network'})`)
+      return payload
     } catch (error) {
       console.error('init error:', error)
       return { ok: false, error: error.message || String(error) }
@@ -2567,10 +2620,12 @@ function registerIpc() {
 }
 
 app.whenReady().then(() => {
-  cleanupLegacyWorkspaceCache()
   registerIpc()
   createWindow()
   updateVolumeAssistWheelListener()
+  setImmediate(() => {
+    cleanupLegacyWorkspaceCache()
+  })
 })
 
 app.on('before-quit', (event) => {
