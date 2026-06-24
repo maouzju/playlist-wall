@@ -1255,6 +1255,53 @@ test('audio quality settings affect playback requests and persist across reload'
 
 test('concerts tab loads event cards and filters by city picker or venue search', async ({ page }) => {
   await waitForWall(page)
+  await page.evaluate(() => {
+    window.__mockConcertRequestOptions = []
+    window.__mockConcertEventsResult = (options = {}) => {
+      window.__mockConcertRequestOptions.push(options)
+      return {
+        ok: true,
+        events: [
+          {
+            id: 801001,
+            eventId: 'mock-concert-1',
+            title: '艺术家 1 世界巡演',
+            name: '艺术家 1 世界巡演',
+            artists: ['艺术家 1'],
+            artistEntries: [{ id: 1, name: '艺术家 1' }],
+            city: '上海',
+            venue: '梅奔中心-主场馆',
+            startTime: Date.now() + 14 * 24 * 60 * 60 * 1000,
+            endTime: Date.now() + 14 * 24 * 60 * 60 * 1000 + 2 * 60 * 60 * 1000,
+            externalUrl: 'https://music.163.com/',
+            source: 'netease-calendar',
+            sourceLabel: '网易云',
+            ticketSources: [
+              { id: 'damai', name: '大麦', url: 'https://search.damai.cn/search.html?keyword=艺术家%201%20上海' },
+              { id: 'showstart', name: '秀动', url: 'https://www.showstart.com/event/list?keyword=艺术家%201' },
+            ],
+          },
+          {
+            id: 801002,
+            eventId: 'mock-concert-2',
+            title: '夏日音乐节',
+            name: '夏日音乐节',
+            artists: ['艺术家 2', '艺术家 5'],
+            artistEntries: [{ id: 2, name: '艺术家 2' }, { id: 5, name: '艺术家 5' }],
+            city: '北京',
+            venue: '凯迪拉克中心',
+            startTime: Date.now() + 46 * 24 * 60 * 60 * 1000,
+            externalUrl: 'https://music.163.com/',
+            source: 'showstart',
+            sourceLabel: '秀动',
+            ticketSources: [
+              { id: 'showstart', name: '秀动', url: 'https://www.showstart.com/event/list?keyword=夏日音乐节' },
+            ],
+          },
+        ],
+      }
+    }
+  })
 
   await expect(page.locator('#tab-concerts')).toBeHidden()
   await page.click('#settings-btn')
@@ -1262,6 +1309,7 @@ test('concerts tab loads event cards and filters by city picker or venue search'
   await closeSettingsPanel(page)
 
   await expect(page.locator('#tab-concerts')).toBeVisible()
+  await expect.poll(async () => page.evaluate(() => window.__mockConcertRequestOptions?.[0]?.artistEntries?.length || 0)).toBeGreaterThan(0)
   await expect(page.locator('#tab-concerts')).toBeEnabled()
   await page.click('#tab-concerts')
   const concertCards = page.locator('.playlist-card')

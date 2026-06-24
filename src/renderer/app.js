@@ -73,6 +73,7 @@ const VOLUME_ASSIST_DEFAULT_HOTKEY = 'Alt'
 const VOLUME_ASSIST_STEP = 0.2
 const VOLUME_ASSIST_SYSTEM_THROTTLE_MS = 80
 const CONCERT_ARTIST_TITLE_MATCH_MIN_LENGTH = 2
+const CONCERT_ARTIST_FILTER_LIMIT = 80
 const QUICK_ADD_SEARCH_LIMIT = 10
 
 const TEXT = {
@@ -1211,10 +1212,10 @@ function createMockBridge() {
 
       return { ok: true, playlists: source }
     },
-    getConcertEvents: async () => {
+    getConcertEvents: async (options = {}) => {
       if (window.__mockConcertEventsResult) {
         return typeof window.__mockConcertEventsResult === 'function'
-          ? window.__mockConcertEventsResult()
+          ? window.__mockConcertEventsResult(options)
           : window.__mockConcertEventsResult
       }
 
@@ -4062,6 +4063,33 @@ function getConcertArtistMatchEntries(event) {
   return matched
 }
 
+function getConcertFavoriteArtistEntries() {
+  return [...state.artistPlaylistEntriesByKey.values()]
+    .filter((entry) => entry?.trackMap?.size)
+    .map((entry) => {
+      const trackStats = getArtistTrackStats(entry)
+      const artistStats = computeArtistImportance(entry, trackStats)
+      return {
+        id: Number(entry.artistId || 0),
+        name: entry.name || '',
+        importance: Number(artistStats.importance || 0),
+        likedTrackCount: Number(artistStats.likedTrackCount || 0),
+        ownedTrackCount: Number(artistStats.ownedTrackCount || 0),
+        playScore: Number(artistStats.playScore || 0),
+        trackCount: Number(entry.trackMap?.size || 0),
+      }
+    })
+    .filter((artist) => artist.name)
+    .sort((left, right) =>
+      Number(right.importance || 0) - Number(left.importance || 0)
+      || Number(right.likedTrackCount || 0) - Number(left.likedTrackCount || 0)
+      || Number(right.ownedTrackCount || 0) - Number(left.ownedTrackCount || 0)
+      || String(left.name || '').localeCompare(String(right.name || ''), 'zh-CN')
+    )
+    .slice(0, CONCERT_ARTIST_FILTER_LIMIT)
+    .map(({ id, name }) => ({ id, name }))
+}
+
 function buildConcertRelatedTracks(event) {
   const seenTrackIds = new Set()
   return getConcertArtistMatchEntries(event)
@@ -4193,7 +4221,9 @@ async function loadConcertPlaylists({ force = false } = {}) {
       if (!appBridge || typeof appBridge.getConcertEvents !== 'function') {
         throw new Error(TEXT.concertsFailed)
       }
-      result = await appBridge.getConcertEvents({})
+      result = await appBridge.getConcertEvents({
+        artistEntries: getConcertFavoriteArtistEntries(),
+      })
     } catch (error) {
       result = { ok: false, error: error?.message || String(error), events: [] }
     }

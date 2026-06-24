@@ -920,6 +920,35 @@ test('adds external ticket source search links to concert events', () => {
   assert.equal(events[0].ticketSourceCount, events[0].ticketSources.length)
 })
 
+test('filters concert events to library artists before display', () => {
+  const events = [
+    {
+      eventId: 'favorite-id',
+      title: '乱写标题',
+      artists: [{ id: 5, name: '收藏歌手' }],
+      startTime: 1700100000000,
+    },
+    {
+      eventId: 'favorite-title',
+      title: '收藏歌手 2026 巡演',
+      artists: [],
+      startTime: 1700200000000,
+    },
+    {
+      eventId: 'noise',
+      title: '完全不相关音乐节',
+      artists: [{ id: 99, name: '路人歌手' }],
+      startTime: 1700300000000,
+    },
+  ]
+
+  const filtered = __testing.filterConcertEventsByArtists(events, {
+    artistEntries: [{ id: 5, name: '收藏歌手' }],
+  })
+
+  assert.deepEqual(filtered.map((event) => event.eventId), ['favorite-id', 'favorite-title'])
+})
+
 test('normalizes external ticket events and merges duplicates by event identity', () => {
   const ticketSource = {
     id: 'showstart',

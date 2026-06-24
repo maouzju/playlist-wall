@@ -607,6 +607,77 @@ function normalizeConcertLookupText(input) {
   return normalizeArtistLookupText(stripHtml(input))
 }
 
+function normalizeConcertArtistNameForMatch(input) {
+  return normalizeConcertLookupText(input)
+    .replace(/[\s\u3000"'“”‘’·・•._\-—–:：,，;；/\\|、!?！？()[\]（）【】{}《》<>]+/g, '')
+}
+
+function normalizeConcertFilterArtistEntries(options = {}) {
+  const rawArtists = [
+    ...asArray(options?.artistEntries),
+    ...asArray(options?.artists),
+    ...asArray(options?.favoriteArtistEntries),
+    ...asArray(options?.favoriteArtists),
+    ...asArray(options?.libraryArtistEntries),
+    ...asArray(options?.libraryArtists),
+  ]
+
+  const seen = new Set()
+  return rawArtists.flatMap((artist) => {
+    const name = typeof artist === 'string'
+      ? artist.trim()
+      : firstNonEmptyString(artist?.name, artist?.artistName)
+    const id = Number(typeof artist === 'object' ? (artist?.id || artist?.artistId || 0) : 0)
+    const key = id > 0 ? `id:${Math.trunc(id)}` : `name:${normalizeConcertArtistNameForMatch(name)}`
+    if ((!name && id <= 0) || seen.has(key)) {
+      return []
+    }
+    seen.add(key)
+    return [{
+      id: Number.isFinite(id) && id > 0 ? Math.trunc(id) : 0,
+      name,
+      normalizedName: normalizeConcertArtistNameForMatch(name),
+    }]
+  })
+}
+
+function concertEventMatchesFilterArtist(event, artist) {
+  if (!event || !artist) {
+    return false
+  }
+
+  const eventArtists = normalizeCalendarArtistEntries(event)
+  if (artist.id > 0 && eventArtists.some((entry) => Number(entry.id || 0) === artist.id)) {
+    return true
+  }
+
+  const artistName = String(artist.normalizedName || normalizeConcertArtistNameForMatch(artist.name || '')).trim()
+  if (!artistName || artistName.length < 2) {
+    return false
+  }
+
+  const eventArtistNames = eventArtists
+    .map((entry) => normalizeConcertArtistNameForMatch(entry.name))
+    .filter((name) => name.length >= 2)
+  if (eventArtistNames.some((name) => name === artistName || name.includes(artistName) || artistName.includes(name))) {
+    return true
+  }
+
+  const titleText = normalizeConcertArtistNameForMatch([event.title, event.name].join(' '))
+  return Boolean(titleText && titleText.includes(artistName))
+}
+
+function filterConcertEventsByArtists(events, options = {}) {
+  const artists = normalizeConcertFilterArtistEntries(options)
+  if (!artists.length) {
+    return asArray(events)
+  }
+
+  return asArray(events).filter((event) =>
+    artists.some((artist) => concertEventMatchesFilterArtist(event, artist))
+  )
+}
+
 function normalizeCalendarTargetUrl(input) {
   const raw = String(input || '').trim()
   if (!raw) {
@@ -1837,6 +1908,7 @@ class NeteaseService {
       cookie: this.cookie,
       uid: userId,
       limit: 1000,
+      timestamp: Date.now(),
     })
 
     const playlists = asArray(response.body?.playlist)
@@ -1853,6 +1925,7 @@ class NeteaseService {
       cookie: this.cookie,
       id: normalizedPlaylistId,
       s: 0,
+      timestamp: Date.now(),
     }, {
       fallbackMessage: '\u83b7\u53d6\u6b4c\u5355\u8be6\u60c5\u5931\u8d25',
       codeMessages: {
@@ -1939,6 +2012,7 @@ class NeteaseService {
         id: playlistId,
         limit: PLAYLIST_PAGE_SIZE,
         offset,
+        timestamp: Date.now(),
       })
 
       const songs = normalizeSongs(response.body)
@@ -2873,7 +2947,10 @@ class NeteaseService {
       301: '\u83b7\u53d6\u6f14\u51fa\u65e5\u5386\u9700\u8981\u6709\u6548\u7684\u7f51\u6613\u4e91\u767b\u5f55\u6001\uff0c\u8bf7\u5237\u65b0\u767b\u5f55\u540e\u518d\u8bd5\u3002',
     })
 
-    const calendarEvents = normalizeConcertEvents(response.body, { startTime, endTime })
+    const calendarEvents = filterConcertEventsByArtists(
+      normalizeConcertEvents(response.body, { startTime, endTime }),
+      options
+    )
     const hydratedEvents = await this.hydrateConcertEventDetails(calendarEvents)
     const withTicketSources = addTicketSourcesToConcertEvents(hydratedEvents)
 
@@ -2891,12 +2968,12 @@ class NeteaseService {
     const fallbackKeywords = asArray(options?.keywords).map(stripHtml).filter(Boolean)
     fallbackKeywords.forEach((keyword) => keywordSet.add(keyword))
 
-    const externalEvents = await this.searchExternalTicketEvents({
+    const externalEvents = filterConcertEventsByArtists(await this.searchExternalTicketEvents({
       ...options,
       startTime,
       endTime,
       keywords: [...keywordSet],
-    })
+    }), options)
 
     return addTicketSourcesToConcertEvents(mergeConcertEventLists(withTicketSources, externalEvents))
   }
@@ -2957,6 +3034,8 @@ module.exports = {
     normalizeExternalTicketEvents,
     extractShowstartNuxtListData,
     mergeConcertEventLists,
+    filterConcertEventsByArtists,
+    normalizeConcertFilterArtistEntries,
     withTimeout,
   },
 }
