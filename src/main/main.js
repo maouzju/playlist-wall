@@ -18,6 +18,9 @@ const { getPlaybackStats, incrementLocalPlayCount, writeCloudPlayCounts } = requ
 const { readPreferences, writePreferences } = require('./preferences-store')
 const { clearSession, getUserDataFilePath, readSession, writeSession } = require('./session-store')
 const { NeteaseService } = require('./netease-service')
+const { detectAiCli, listOllamaModels } = require('./ai/cli-detect')
+const agentRuntime = require('./ai/agent-runtime')
+const { runOllamaPlaylist } = require('./ai/ollama-runtime')
 const {
   WINDOW_DEFAULT_MIN_HEIGHT,
   WINDOW_DEFAULT_MIN_WIDTH,
@@ -2615,6 +2618,103 @@ function registerIpc() {
   ipcMain.handle('closeLyricsWindow', async () => {
     destroyLyricsWindow()
     return { ok: true }
+  })
+
+  ipcMain.handle('detectAiCli', async (_event, provider, cliPath = '') => {
+    try {
+      const result = await detectAiCli(provider, cliPath)
+      return { ok: true, ...result }
+    } catch (error) {
+      return { ok: false, available: false, error: error.message || String(error) }
+    }
+  })
+
+  ipcMain.handle('listOllamaModels', async (_event, cliPath = '') => {
+    try {
+      return await listOllamaModels(cliPath)
+    } catch (error) {
+      return { ok: false, error: error.message || String(error), models: [] }
+    }
+  })
+
+  // 启动一次 AI 对话 / 歌单生成。事件经 'ai-chat-event' 单向推回渲染层。
+  ipcMain.handle('aiChatStart', async (_event, payload = {}) => {
+    const sessionId = String(payload?.sessionId || '')
+    if (!sessionId) {
+      return { ok: false, error: '缺少会话 id' }
+    }
+    if (agentRuntime.isRunning(sessionId)) {
+      return { ok: false, error: '该会话已有正在进行的请求' }
+    }
+
+    let service
+    let session
+    try {
+      service = ensureServiceReady()
+      session = readSession()
+    } catch (error) {
+      return { ok: false, error: error.message || String(error) }
+    }
+
+    const prefs = readPreferences()
+    const ai = prefs.aiAssistant || {}
+    if (!ai.enabled) {
+      return { ok: false, error: 'AI 助手未启用，请先在设置中开启。' }
+    }
+
+    let userId = 0
+    try {
+      const account = await service.getAccount()
+      userId = Number(account?.userId || 0)
+    } catch {
+      userId = 0
+    }
+    if (!userId) {
+      return { ok: false, error: '无法获取账号信息，请确认已登录网易云。' }
+    }
+
+    const provider = ai.provider || 'claude'
+    const onEvent = (event) => send('ai-chat-event', { sessionId, ...event })
+
+    if (provider === 'ollama') {
+      const localStats = getPlaybackStats(userId)
+      // 异步执行，立即返回 ok；进度全程通过事件推送。
+      void runOllamaPlaylist(
+        { svc: service, userId, localCounts: localStats.localPlayCounts || {} },
+        {
+          cliPath: ai.cliPath || '',
+          model: ai.model || ai.ollamaModel || '',
+          prompt: String(payload?.prompt || ''),
+          permissions: ai.permissions || {},
+          playlistCount: Number(ai.playlistCount || 30),
+          onEvent,
+        }
+      )
+      return { ok: true, provider }
+    }
+
+    // Claude / Codex：原生 MCP 工具循环。
+    void agentRuntime.startChat(sessionId, {
+      provider,
+      cliPath: ai.cliPath || '',
+      model: ai.model || '',
+      prompt: String(payload?.prompt || ''),
+      history: Array.isArray(payload?.history) ? payload.history : [],
+      permissions: ai.permissions || {},
+      context: {
+        cookie: session?.cookie || '',
+        userId,
+        userDataDir: app.getPath('userData'),
+        playlistCount: Number(ai.playlistCount || 30),
+      },
+      onEvent,
+    })
+    return { ok: true, provider }
+  })
+
+  ipcMain.handle('aiChatCancel', async (_event, sessionId) => {
+    const cancelled = agentRuntime.cancelChat(String(sessionId || ''))
+    return { ok: true, cancelled }
   })
 
 }

@@ -1341,6 +1341,29 @@ test('concerts tab loads event cards and filters by city picker or venue search'
   await expect(page.locator('#wall-empty .empty-copy')).toContainText('\u6362\u4e2a\u827a\u4eba\u3001\u57ce\u5e02\u6216\u573a\u9986\u8bd5\u8bd5')
 })
 
+test('concerts empty state explains logged-in account with no matched events', async ({ page }) => {
+  await waitForWall(page)
+  await page.evaluate(() => {
+    window.__mockConcertRequestOptions = []
+    window.__mockConcertEventsResult = (options = {}) => {
+      window.__mockConcertRequestOptions.push(options)
+      return { ok: true, events: [] }
+    }
+  })
+
+  await page.click('#settings-btn')
+  await setCheckbox(page, '#concerts-enabled-toggle', true)
+  await closeSettingsPanel(page)
+
+  await expect(page.locator('#tab-concerts')).toBeVisible()
+  await page.click('#tab-concerts')
+
+  await expect(page.locator('#wall-empty .empty-title')).toContainText('\u8fd1\u671f\u6ca1\u6709\u5339\u914d\u5230\u76f8\u5173\u6f14\u51fa')
+  await expect(page.locator('#wall-empty .empty-copy')).toContainText('\u4f60\u5df2\u767b\u5f55\u7f51\u6613\u4e91')
+  await expect(page.locator('#wall-empty .empty-copy')).not.toContainText('\u767b\u5f55\u7f51\u6613\u4e91\u540e')
+  await expect.poll(async () => page.evaluate(() => window.__mockConcertRequestOptions?.[0]?.keywords?.length || 0)).toBeGreaterThan(0)
+})
+
 test('playback reports listened tracks with NetEase source and listened seconds', async ({ page }) => {
   await waitForWall(page)
 
@@ -2857,4 +2880,113 @@ test('settings show configurable cache directory outside updater-covered app fol
   await page.click('#settings-cache-directory-reset-btn')
   await expect(page.locator('#settings-cache-directory-value')).toContainText('C:')
   await expect(page.locator('#settings-cache-directory-status')).toContainText('default')
+})
+
+// 打开 AI 聊天面板（启用 AI 助手 + 已登录后入口才出现）。
+async function openAiChatPanel(page) {
+  await page.click('#settings-btn')
+  await expect(page.locator('#settings-panel')).toHaveClass(/is-open/)
+  await setCheckbox(page, '#ai-enabled-toggle', true)
+  await page.keyboard.press('Escape')
+  await expect(page.locator('#ai-chat-btn')).toBeVisible()
+  await page.click('#ai-chat-btn')
+  await expect(page.locator('#ai-chat-panel')).not.toHaveClass(/hidden/)
+}
+
+test('AI chat shows a persistent running indicator with elapsed time', async ({ page }) => {
+  await page.clock.install()
+  await waitForWall(page, AUTH_PAGE_URL)
+  await openAiChatPanel(page)
+
+  // 发送消息 -> 立刻出现常驻运行指示器（转圈 + 已运行 0s + 启动文案）。
+  await page.fill('#ai-chat-input', '帮我分析品味')
+  await page.keyboard.press('Enter')
+
+  const running = page.locator('#ai-running-line')
+  await expect(running).toBeVisible()
+  await expect(running.locator('.ai-status-line__spinner')).toBeVisible()
+  await expect(running.locator('.ai-running__text')).toContainText('正在启动 AI')
+  // 发送/停止按钮切换。
+  await expect(page.locator('#ai-chat-send-btn')).toBeHidden()
+  await expect(page.locator('#ai-chat-stop-btn')).toBeVisible()
+
+  // 推进 3 秒 -> 计时增加。
+  await page.clock.runFor(3000)
+  await expect(running.locator('.ai-running__text')).toContainText('已运行 3s')
+
+  // 长时间无任何事件（>8s）-> 出现「仍在处理中」。
+  await page.clock.runFor(6000)
+  await expect(running.locator('.ai-running__text')).toContainText('仍在处理中')
+
+  // 后端心跳到达 -> 刷新活动时间，「仍在处理中」消失（但指示器仍在、仍在计时）。
+  await page.evaluate(() => window.__emitAiChatEvent({ type: 'heartbeat' }))
+  await expect(running.locator('.ai-running__text')).not.toContainText('仍在处理中')
+  await expect(running).toBeVisible()
+
+  // 工具事件 -> 阶段文案更新为该工具的中文描述。
+  await page.evaluate(() => window.__emitAiChatEvent({ type: 'tool', name: 'get_taste_profile', input: {} }))
+  await expect(running.locator('.ai-running__text')).toContainText('分析你的音乐品味')
+
+  // token 事件 -> 阶段变「正在回复」，助手消息开始流式。
+  await page.evaluate(() => window.__emitAiChatEvent({ type: 'token', text: '你好' }))
+  await expect(running.locator('.ai-running__text')).toContainText('正在回复')
+  await expect(page.locator('.ai-msg--assistant').last()).toContainText('你好')
+
+  // done 事件 -> 运行指示器消失，发送按钮恢复。
+  await page.evaluate(() => window.__emitAiChatEvent({ type: 'done', text: '你好，我来帮你' }))
+  await expect(page.locator('#ai-running-line')).toHaveCount(0)
+  await expect(page.locator('#ai-chat-send-btn')).toBeVisible()
+  await expect(page.locator('#ai-chat-stop-btn')).toBeHidden()
+})
+
+
+test('AI generated playlist is pinned to front and flashes after refresh', async ({ page }) => {
+  await waitForWall(page, AUTH_PAGE_URL)
+  await openAiChatPanel(page)
+
+  await page.evaluate(() => {
+    window.__mockNextLibraryPlaylist = {
+      id: 909,
+      name: 'AI Generated Mix',
+      trackCount: 2,
+      creatorId: 1,
+      creatorName: 'Mock User',
+      tracks: [
+        { id: 909001, name: 'AI Song 1', artists: ['AI Artist'], album: 'AI Album', position: 1 },
+        { id: 909002, name: 'AI Song 2', artists: ['AI Artist'], album: 'AI Album', position: 2 },
+      ],
+      hydrated: true,
+    }
+  })
+
+  await page.fill('#ai-chat-input', 'generate ai playlist')
+  await page.keyboard.press('Enter')
+  await page.evaluate(() => window.__emitAiChatEvent({
+    type: 'done',
+    text: 'done',
+    playlist: { id: 909, name: 'AI Generated Mix', trackCount: 2 },
+  }))
+
+  const firstCard = page.locator('.playlist-card[data-playlist-id]').first()
+  await expect(firstCard).toHaveAttribute('data-playlist-id', '909')
+  await expect(page.locator('.playlist-card[data-playlist-id="909"]')).toHaveClass(/is-playlist-focus-flash/)
+  await expect.poll(async () => page.evaluate(() => window.__mockRefreshLibraryReasons)).toContain('ai-generated')
+})
+
+test('track context menu can send a song to AI for similar recommendations', async ({ page }) => {
+  await waitForWall(page, AUTH_PAGE_URL)
+  await page.click('#settings-btn')
+  await expect(page.locator('#settings-panel')).toHaveClass(/is-open/)
+  await setCheckbox(page, '#ai-enabled-toggle', true)
+  await page.keyboard.press('Escape')
+  await expect(page.locator('#ai-chat-btn')).toBeVisible()
+
+  await page.locator('.playlist-card[data-playlist-id="102"] .track-row[data-track-id="102001"]').click({ button: 'right' })
+  await expect(page.locator('#context-send-to-ai-similar-songs-btn')).toBeVisible()
+  await page.click('#context-send-to-ai-similar-songs-btn')
+
+  await expect(page.locator('#ai-chat-panel')).not.toHaveClass(/hidden/)
+  await expect(page.locator('.ai-msg--user').last()).toContainText('\u63a8\u8350\u76f8\u4f3c')
+  await expect(page.locator('.ai-msg--user').last()).toContainText('\u81ea\u5efa\u7535\u5b50 1')
+  await expect(page.locator('#ai-running-line')).toBeVisible()
 })

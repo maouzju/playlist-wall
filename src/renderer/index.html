@@ -142,6 +142,12 @@
             <path d="M18.5 12h3"></path>
           </svg>
         </button>
+        <button class="top-action-btn top-action-btn--icon hidden" id="ai-chat-btn" type="button" aria-label="AI 歌单助手" title="AI 歌单助手">
+          <svg class="icon-stroke" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 3l1.8 4.2L18 9l-4.2 1.8L12 15l-1.8-4.2L6 9l4.2-1.8L12 3z"></path>
+            <path d="M18 14l.9 2.1L21 17l-2.1.9L18 20l-.9-2.1L15 17l2.1-.9L18 14z"></path>
+          </svg>
+        </button>
         <button class="top-action-btn top-action-btn--icon" id="settings-btn" type="button" aria-label="设置" title="设置">
           <svg class="icon-stroke" viewBox="0 0 24 24" aria-hidden="true">
             <path d="M4 7h8"></path>
@@ -190,6 +196,28 @@
       <div class="direct-song-panel__body" id="direct-song-body">
         <div class="direct-song-panel__status" id="direct-song-status">输入关键词后点击“直接查找歌曲”</div>
         <div class="direct-song-list" id="direct-song-list"></div>
+      </div>
+    </section>
+
+    <section id="ai-chat-panel" class="hidden" role="dialog" aria-modal="false" aria-labelledby="ai-chat-title">
+      <div class="ai-chat-panel__header" id="ai-chat-drag-handle">
+        <div class="ai-chat-panel__copy">
+          <div class="ai-chat-panel__kicker">AI 歌单助手</div>
+          <h2 class="ai-chat-panel__title" id="ai-chat-title">和 AI 聊聊你的口味</h2>
+          <div class="ai-chat-panel__meta" id="ai-chat-meta">让我分析你的收藏，生成你可能会喜欢的歌单</div>
+        </div>
+        <button class="ai-chat-panel__close" id="ai-chat-close-btn" type="button" aria-label="关闭" title="关闭">&times;</button>
+      </div>
+      <div class="ai-chat-messages" id="ai-chat-messages"></div>
+      <div class="ai-chat-input-area">
+        <div class="ai-chat-quick" id="ai-chat-quick">
+          <button class="ai-chat-quick__btn" type="button" data-ai-quick="根据我的全部收藏分析我的音乐品味，并生成一个我大概率会喜欢、但还没收藏过的新歌单。">分析品味并生成歌单</button>
+        </div>
+        <div class="ai-chat-input-row">
+          <textarea id="ai-chat-input" class="ai-chat-input" rows="1" placeholder="说说你想要什么样的歌单…（Enter 发送，Shift+Enter 换行）"></textarea>
+          <button class="ai-chat-send-btn" id="ai-chat-send-btn" type="button">发送</button>
+          <button class="ai-chat-send-btn ai-chat-send-btn--stop hidden" id="ai-chat-stop-btn" type="button">停止</button>
+        </div>
       </div>
     </section>
 
@@ -430,6 +458,78 @@
             <button class="settings-action-btn" id="settings-update-check-btn" type="button">检查更新</button>
             <button class="settings-action-btn settings-action-btn--primary hidden" id="settings-update-install-btn" type="button">一键更新</button>
           </div>
+        </div>
+      </div>
+
+      <div class="settings-section-label">AI 助手</div>
+      <label class="settings-row" for="ai-enabled-toggle">
+        <div class="settings-copy">
+          <div class="settings-label">启用 AI 歌单助手</div>
+          <div class="settings-hint">依赖本机的 Claude / Codex / Ollama CLI。开启后主页会出现 AI 聊天入口，可交互式分析品味、生成歌单。</div>
+        </div>
+        <div class="settings-toggle">
+          <input id="ai-enabled-toggle" type="checkbox" class="settings-toggle-input">
+          <div class="settings-toggle-track"><div class="settings-toggle-thumb"></div></div>
+        </div>
+      </label>
+      <div class="settings-row settings-row--stack ai-settings-block hidden" id="ai-settings-block">
+        <div class="settings-copy">
+          <div class="settings-label">AI 引擎</div>
+          <div class="settings-hint">选择本机已安装的 CLI。不同引擎能力不同：Claude / Codex 支持工具调用，效果最好；Ollama 为本地离线模型。</div>
+        </div>
+        <div class="settings-inline-actions">
+          <select id="ai-provider-select" class="settings-select">
+            <option value="claude">Claude CLI</option>
+            <option value="codex">Codex CLI</option>
+            <option value="ollama">Ollama（本地）</option>
+          </select>
+          <button class="settings-action-btn" id="ai-detect-btn" type="button">检测可用性</button>
+        </div>
+        <div class="settings-status" id="ai-detect-status">尚未检测</div>
+
+        <div class="ai-settings-field">
+          <label class="settings-mini-label" for="ai-cli-path-input">CLI 路径（可选）</label>
+          <input id="ai-cli-path-input" class="settings-text-input" type="text" placeholder="留空则使用 PATH 中的默认命令">
+        </div>
+
+        <div class="ai-settings-field" id="ai-model-field">
+          <label class="settings-mini-label" for="ai-model-input">模型（可选）</label>
+          <input id="ai-model-input" class="settings-text-input" type="text" placeholder="留空使用默认模型">
+          <select id="ai-ollama-model-select" class="settings-select hidden"></select>
+        </div>
+
+        <div class="ai-settings-field">
+          <label class="settings-mini-label" for="ai-playlist-count-range">生成歌单默认歌曲数</label>
+          <div class="settings-scale-control">
+            <output class="settings-scale-value" id="ai-playlist-count-value" for="ai-playlist-count-range">30</output>
+            <input id="ai-playlist-count-range" class="settings-range" type="range" min="5" max="100" step="5" value="30">
+          </div>
+        </div>
+
+        <div class="ai-settings-field">
+          <div class="settings-mini-label">AI 权限</div>
+          <div class="settings-hint">控制 AI 能对你的网易云账号做什么。未授予的操作 AI 无法执行。</div>
+          <label class="ai-perm-row" for="ai-perm-generate">
+            <span>生成新歌单（新建并加歌）</span>
+            <div class="settings-toggle">
+              <input id="ai-perm-generate" type="checkbox" class="settings-toggle-input" checked>
+              <div class="settings-toggle-track"><div class="settings-toggle-thumb"></div></div>
+            </div>
+          </label>
+          <label class="ai-perm-row" for="ai-perm-modify">
+            <span>修改已有歌单（增删歌曲、重命名）</span>
+            <div class="settings-toggle">
+              <input id="ai-perm-modify" type="checkbox" class="settings-toggle-input">
+              <div class="settings-toggle-track"><div class="settings-toggle-thumb"></div></div>
+            </div>
+          </label>
+          <label class="ai-perm-row" for="ai-perm-delete">
+            <span>删除歌单（不可恢复）</span>
+            <div class="settings-toggle">
+              <input id="ai-perm-delete" type="checkbox" class="settings-toggle-input">
+              <div class="settings-toggle-track"><div class="settings-toggle-thumb"></div></div>
+            </div>
+          </label>
         </div>
       </div>
 

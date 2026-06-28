@@ -23,6 +23,14 @@ const ARTIST_TRACK_DISPLAY_LIMIT_MIN = 20
 const ARTIST_TRACK_DISPLAY_LIMIT_MAX = 1000
 const ARTIST_TRACK_DISPLAY_LIMIT_DEFAULT = 100
 
+const AI_PROVIDER_CLAUDE = 'claude'
+const AI_PROVIDER_CODEX = 'codex'
+const AI_PROVIDER_OLLAMA = 'ollama'
+const AI_PLAYLIST_COUNT_MIN = 5
+const AI_PLAYLIST_COUNT_MAX = 100
+const AI_PLAYLIST_COUNT_DEFAULT = 30
+const AI_OLLAMA_MODEL_DEFAULT = 'qwen2.5:7b'
+
 const LYRICS_FONT_SIZE_MIN = 16
 const LYRICS_FONT_SIZE_MAX = 80
 const LYRICS_FONT_SIZE_DEFAULT = 36
@@ -145,6 +153,50 @@ function normalizeArtistTrackDisplayLimit(input) {
   )
 }
 
+function normalizeAiProvider(input) {
+  if (input === AI_PROVIDER_CODEX) {
+    return AI_PROVIDER_CODEX
+  }
+  if (input === AI_PROVIDER_OLLAMA) {
+    return AI_PROVIDER_OLLAMA
+  }
+  return AI_PROVIDER_CLAUDE
+}
+
+function normalizeAiPlaylistCount(input) {
+  const numeric = Number(input)
+  if (!Number.isFinite(numeric)) {
+    return AI_PLAYLIST_COUNT_DEFAULT
+  }
+  return Math.min(
+    AI_PLAYLIST_COUNT_MAX,
+    Math.max(AI_PLAYLIST_COUNT_MIN, Math.round(numeric))
+  )
+}
+
+function normalizeAiAssistantSettings(input = {}) {
+  const raw = input && typeof input === 'object' ? input : {}
+  const permissions = raw.permissions && typeof raw.permissions === 'object' ? raw.permissions : {}
+  return {
+    enabled: Boolean(raw.enabled),
+    provider: normalizeAiProvider(raw.provider),
+    // CLI 可执行文件路径（留空表示用 PATH 中的同名命令）。
+    cliPath: typeof raw.cliPath === 'string' ? raw.cliPath.trim() : '',
+    // 模型名：claude/codex 留空走各自默认；ollama 必须指定本地模型名。
+    model: typeof raw.model === 'string' ? raw.model.trim() : '',
+    ollamaModel: typeof raw.ollamaModel === 'string' && raw.ollamaModel.trim()
+      ? raw.ollamaModel.trim()
+      : AI_OLLAMA_MODEL_DEFAULT,
+    playlistCount: normalizeAiPlaylistCount(raw.playlistCount),
+    permissions: {
+      // 生成（新建歌单并加歌）默认允许；修改/删除现有歌单默认关闭，避免误伤。
+      generate: permissions.generate !== false,
+      modify: Boolean(permissions.modify),
+      delete: Boolean(permissions.delete),
+    },
+  }
+}
+
 function normalizeCollapsedPlaylistIds(input) {
   if (!Array.isArray(input)) {
     return []
@@ -256,6 +308,7 @@ function normalizePreferences(input = {}) {
     uiScale: normalizeUiScale(input?.uiScale),
     windowState: normalizeWindowState(input?.windowState, getDefaultWindowState()),
     lyrics: normalizeLyricsPrefs(input?.lyrics),
+    aiAssistant: normalizeAiAssistantSettings(input?.aiAssistant),
   }
 }
 
@@ -288,6 +341,19 @@ function writePreferences(input = {}) {
         ? currentLyrics.bounds
         : { ...(currentLyrics.bounds || getDefaultLyricsBounds()), ...(inputLyrics.bounds || {}) },
     }
+  const inputAi = input?.aiAssistant && typeof input.aiAssistant === 'object' ? input.aiAssistant : null
+  const mergedAi = inputAi === null
+    ? current.aiAssistant
+    : {
+      ...(current.aiAssistant || {}),
+      ...inputAi,
+      permissions: inputAi.permissions === undefined
+        ? (current.aiAssistant && current.aiAssistant.permissions) || {}
+        : {
+          ...((current.aiAssistant && current.aiAssistant.permissions) || {}),
+          ...(inputAi.permissions || {}),
+        },
+    }
   const next = normalizePreferences({
     ...current,
     ...input,
@@ -298,6 +364,7 @@ function writePreferences(input = {}) {
         ...(input.windowState && typeof input.windowState === 'object' ? input.windowState : {}),
       },
     lyrics: mergedLyrics,
+    aiAssistant: mergedAi,
   })
 
   try {
@@ -321,4 +388,5 @@ module.exports = {
   normalizePlaylistOrderIds,
   normalizeLyricsPrefs,
   getDefaultLyricsPrefs,
+  normalizeAiAssistantSettings,
 }

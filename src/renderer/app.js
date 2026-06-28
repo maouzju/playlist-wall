@@ -31,6 +31,7 @@ const PLAYLIST_UNDO_NOTICE_MS = 20000
 const PLAYLIST_DRAG_CLICK_SUPPRESS_MS = 280
 const CONTEXT_MENU_SCROLL_GUARD_MS = 150
 const TRACK_FOCUS_FLASH_MS = 1800
+const PLAYLIST_FOCUS_FLASH_MS = 2400
 const UI_SCALE_MIN = 80
 const UI_SCALE_MAX = 125
 const UI_SCALE_STEP = 5
@@ -196,6 +197,8 @@ const TEXT = {
   goToArtistPlaylistFailed: '\u6ca1\u627e\u5230\u5bf9\u5e94\u7684\u827a\u4eba\u6b4c\u5355',
   searchArtistCommunityPlaylists: '\u641c\u7d22\u5305\u542b\u672c\u827a\u4eba\u6b4c\u66f2\u7684\u6b4c\u5355',
   searchArtistCommunityPlaylistsFailed: '\u672a\u627e\u5230\u53ef\u7528\u4e8e\u641c\u7d22\u7684\u827a\u4eba',
+  sendToAiSimilarSongs: '\u53d1\u9001\u7ed9 AI \u63a8\u8350\u76f8\u4f3c\u6b4c\u66f2',
+  sendToAiSimilarSongsFailed: '\u53d1\u9001\u7ed9 AI \u5931\u8d25',
   reorderPlaylistDone: '\u5df2\u540c\u6b65\u6b4c\u5355\u987a\u5e8f',
   reorderPlaylistFailed: '\u8c03\u6574\u6b4c\u5355\u987a\u5e8f\u5931\u8d25',
   noMoveTarget: '\u6682\u65f6\u6ca1\u6709\u66f4\u5408\u9002\u7684\u6b4c\u5355',
@@ -281,6 +284,26 @@ const state = {
     tracks: [],
     status: 'idle',
     message: '输入关键词后点击“直接查找歌曲”',
+  },
+  ai: {
+    enabled: false,
+    provider: 'claude',
+    cliPath: '',
+    model: '',
+    ollamaModel: 'qwen2.5:7b',
+    playlistCount: 30,
+    permissions: { generate: true, modify: false, delete: false },
+  },
+  aiChat: {
+    open: false,
+    busy: false,
+    sessionId: '',
+    messages: [],
+    streamingId: 0,
+    runningSince: 0,
+    lastActivityAt: 0,
+    phaseText: '',
+    tickTimer: null,
   },
   exploreLoaded: false,
   exploreLoading: false,
@@ -457,6 +480,8 @@ const renderRuntime = {
   playlistUndoTimer: 0,
   focusFlashTrackKey: '',
   focusFlashTimer: 0,
+  focusFlashPlaylistId: 0,
+  playlistFocusFlashTimer: 0,
   libraryRefreshTimer: 0,
   libraryRefreshInFlight: false,
   libraryRefreshQueued: false,
@@ -546,6 +571,7 @@ function createMockBridge() {
   const patchListeners = new Set()
   const subscribedPlaylistRemovalFailureListeners = new Set()
   const volumeAssistWheelListeners = new Set()
+  const aiChatEventListeners = new Set()
   const account = { userId: 1, nickname: '\u793a\u4f8b\u8d26\u53f7' }
   let loggedIn = !authRequired
   let qrChecks = 0
@@ -703,7 +729,7 @@ function createMockBridge() {
     }
   }
 
-  return {
+  const bridge = {
     getSpotifyImportState: async () => ({
       ok: true,
       connected: mockSpotifyConnected,
@@ -1025,6 +1051,7 @@ function createMockBridge() {
         if (normalizedNextPlaylist.id > 0 && !basePlaylists.some((playlist) => Number(playlist.id || 0) === normalizedNextPlaylist.id)) {
           basePlaylists.push(normalizedNextPlaylist)
         }
+        window.__mockNextLibraryPlaylist = null
       }
 
       updateMockStats()
@@ -1434,7 +1461,27 @@ function createMockBridge() {
       volumeAssistWheelListeners.add(callback)
       return () => volumeAssistWheelListeners.delete(callback)
     },
+    detectAiCli: async (provider) => ({ ok: true, available: false, error: '模拟环境无 CLI', version: '', provider }),
+    listOllamaModels: async () => ({ ok: true, models: [] }),
+    aiChatStart: async ({ sessionId } = {}) => {
+      // 记下最近一次会话 id，供测试钩子派发事件时回填。
+      window.__mockAiChatSessionId = sessionId || ''
+      return { ok: true }
+    },
+    aiChatCancel: async () => ({ ok: true, cancelled: false }),
+    onAiChatEvent: (callback) => {
+      aiChatEventListeners.add(callback)
+      return () => aiChatEventListeners.delete(callback)
+    },
   }
+  // 测试钩子：向所有监听器派发一条 AI 聊天事件（自动回填当前 sessionId）。
+  window.__emitAiChatEvent = (payload = {}) => {
+    const event = { sessionId: window.__mockAiChatSessionId || '', ...payload }
+    for (const cb of aiChatEventListeners) {
+      cb(event)
+    }
+  }
+  return bridge
 }
 
 function buildMockQrImage() {
@@ -2340,6 +2387,31 @@ function cacheRefs() {
   refs.totalTime = document.getElementById('player-time-total')
   refs.volumeRange = document.getElementById('volume-range')
   refs.toastWrap = document.getElementById('toast-wrap')
+  // AI 助手：设置区控件
+  refs.aiEnabledToggle = document.getElementById('ai-enabled-toggle')
+  refs.aiSettingsBlock = document.getElementById('ai-settings-block')
+  refs.aiProviderSelect = document.getElementById('ai-provider-select')
+  refs.aiDetectBtn = document.getElementById('ai-detect-btn')
+  refs.aiDetectStatus = document.getElementById('ai-detect-status')
+  refs.aiCliPathInput = document.getElementById('ai-cli-path-input')
+  refs.aiModelField = document.getElementById('ai-model-field')
+  refs.aiModelInput = document.getElementById('ai-model-input')
+  refs.aiOllamaModelSelect = document.getElementById('ai-ollama-model-select')
+  refs.aiPlaylistCountRange = document.getElementById('ai-playlist-count-range')
+  refs.aiPlaylistCountValue = document.getElementById('ai-playlist-count-value')
+  refs.aiPermGenerate = document.getElementById('ai-perm-generate')
+  refs.aiPermModify = document.getElementById('ai-perm-modify')
+  refs.aiPermDelete = document.getElementById('ai-perm-delete')
+  // AI 助手：主页聊天面板
+  refs.aiChatBtn = document.getElementById('ai-chat-btn')
+  refs.aiChatPanel = document.getElementById('ai-chat-panel')
+  refs.aiChatDragHandle = document.getElementById('ai-chat-drag-handle')
+  refs.aiChatCloseBtn = document.getElementById('ai-chat-close-btn')
+  refs.aiChatMessages = document.getElementById('ai-chat-messages')
+  refs.aiChatQuick = document.getElementById('ai-chat-quick')
+  refs.aiChatInput = document.getElementById('ai-chat-input')
+  refs.aiChatSendBtn = document.getElementById('ai-chat-send-btn')
+  refs.aiChatStopBtn = document.getElementById('ai-chat-stop-btn')
   syncSpotifyImportActionLabels()
 }
 
@@ -2605,6 +2677,7 @@ function bindEvents() {
   document.addEventListener('drop', scheduleTrackDragStateCleanup)
   document.addEventListener('visibilitychange', handleDocumentVisibilityChange)
   refs.audio.volume = Number(refs.volumeRange.value) / 100
+  bindAiEvents()
 }
 
 function wireBridge() {
@@ -2635,6 +2708,9 @@ function wireBridge() {
         void pushLyricsForCurrentTrack()
       }
     })
+  }
+  if (appBridge && typeof appBridge.onAiChatEvent === 'function') {
+    appBridge.onAiChatEvent((payload) => handleAiChatEvent(payload))
   }
 }
 
@@ -3745,6 +3821,7 @@ async function init() {
   await revealApp()
   renderTabs()
   renderHeader()
+  syncAiEntryVisibility()
   renderPlayer()
   applyFilters()
 
@@ -4221,8 +4298,10 @@ async function loadConcertPlaylists({ force = false } = {}) {
       if (!appBridge || typeof appBridge.getConcertEvents !== 'function') {
         throw new Error(TEXT.concertsFailed)
       }
+      const favoriteArtistEntries = getConcertFavoriteArtistEntries()
       result = await appBridge.getConcertEvents({
-        artistEntries: getConcertFavoriteArtistEntries(),
+        artistEntries: favoriteArtistEntries,
+        keywords: favoriteArtistEntries.map((artist) => artist.name).filter(Boolean),
       })
     } catch (error) {
       result = { ok: false, error: error?.message || String(error), events: [] }
@@ -5777,6 +5856,59 @@ function setPlaylistWallLayoutForTab(tab, layout, { persist = true } = {}) {
   return true
 }
 
+function movePlaylistToFrontInWallLayoutForTab(tab, playlistId, { persist = true } = {}) {
+  const normalizedPlaylistId = Number(playlistId || 0)
+  const currentLayout = getPlaylistWallLayoutForTab(tab)
+  if (normalizedPlaylistId <= 0 || !currentLayout.columns) {
+    return false
+  }
+
+  const columnPlaylistIds = currentLayout.columnPlaylistIds.map((ids) => {
+    return (ids || []).filter((id) => Number(id || 0) !== normalizedPlaylistId)
+  })
+  columnPlaylistIds[0] = [normalizedPlaylistId, ...(columnPlaylistIds[0] || [])]
+
+  const nextLayout = normalizePlaylistWallLayout({
+    columns: currentLayout.columns,
+    columnPlaylistIds,
+  })
+  return setPlaylistWallLayoutForTab(tab, nextLayout, { persist })
+}
+
+function buildOwnedPlaylistOrderWithFirst(playlistId, playlists = state.playlists) {
+  const normalizedPlaylistId = Number(playlistId || 0)
+  if (normalizedPlaylistId <= 0) {
+    return []
+  }
+
+  const ownedIds = applyStoredPlaylistOrder(
+    (playlists || []).filter((playlist) => isOwnedPlaylist(playlist)),
+    'owned'
+  )
+    .map((playlist) => Number(playlist.id || 0))
+    .filter((id) => id > 0 && id !== normalizedPlaylistId)
+
+  return normalizePlaylistOrderIds([normalizedPlaylistId, ...ownedIds])
+}
+
+function pinOwnedPlaylistToFront(playlistId, { playlists = state.playlists, persist = true, syncServer = true } = {}) {
+  const normalizedPlaylistId = Number(playlistId || 0)
+  const targetPlaylist = (playlists || []).find((playlist) => Number(playlist?.id || 0) === normalizedPlaylistId)
+  if (!targetPlaylist || !isOwnedPlaylist(targetPlaylist) || isLikedPlaylist(targetPlaylist)) {
+    return false
+  }
+
+  const nextOrderIds = buildOwnedPlaylistOrderWithFirst(normalizedPlaylistId, playlists)
+  const orderChanged = setPlaylistOrderIdsForTab('owned', nextOrderIds, { persist })
+  const layoutChanged = movePlaylistToFrontInWallLayoutForTab('owned', normalizedPlaylistId, { persist })
+
+  if (orderChanged && syncServer) {
+    void syncPlaylistOrderToServer(nextOrderIds)
+  }
+
+  return orderChanged || layoutChanged
+}
+
 function getCollapsedPlaylistIdsForTab(tab) {
   return shouldPersistCollapsedStateForTab(tab)
     ? normalizeCollapsedPlaylistIds(state.settings.collapsedPlaylistIds)
@@ -6556,7 +6688,9 @@ function renderEmptyState(sourcePlaylists) {
         : state.activeTab === 'artists'
           ? TEXT.emptyArtists
           : state.activeTab === 'concerts'
-            ? TEXT.emptyConcerts
+            ? canUseNeteaseFeatures()
+              ? '\u8fd1\u671f\u6ca1\u6709\u5339\u914d\u5230\u76f8\u5173\u6f14\u51fa'
+              : TEXT.emptyConcerts
             : TEXT.emptyTab
     refs.wallEmpty.querySelector('.empty-copy').textContent = state.activeTab === 'explore'
       ? '\u53ef\u4ee5\u76f4\u63a5\u641c\u7d22\u793e\u533a\u6b4c\u5355\uff0c\u6216\u7a0d\u540e\u518d\u8bd5\u3002'
@@ -6565,7 +6699,9 @@ function renderEmptyState(sourcePlaylists) {
         : state.activeTab === 'artists'
           ? '\u8fd9\u91cc\u4f1a\u81ea\u52a8\u6309\u4f60\u5df2\u52a0\u8f7d\u7684\u66f2\u5e93\u805a\u5408\u51fa\u827a\u4eba\u6b4c\u5355\u3002'
           : state.activeTab === 'concerts'
-            ? '\u767b\u5f55\u7f51\u6613\u4e91\u540e\uff0c\u8fd9\u91cc\u4f1a\u663e\u793a\u8fd1\u671f\u6f14\u51fa\u65e5\u5386\u3002'
+            ? canUseNeteaseFeatures()
+              ? '\u4f60\u5df2\u767b\u5f55\u7f51\u6613\u4e91\uff0c\u4f46\u6700\u8fd1\u4e00\u5e74\u6ca1\u6709\u5339\u914d\u5230\u66f2\u5e93\u827a\u4eba\u7684\u6f14\u51fa\uff1b\u4e5f\u53ef\u80fd\u662f\u6f14\u51fa\u65e5\u5386\u63a5\u53e3\u6682\u65f6\u6ca1\u6709\u8fd4\u56de\u3002'
+              : '\u767b\u5f55\u7f51\u6613\u4e91\u540e\uff0c\u8fd9\u91cc\u4f1a\u663e\u793a\u8fd1\u671f\u6f14\u51fa\u65e5\u5386\u3002'
             : '\u8fd9\u4e2a\u5206\u533a\u8fd8\u6ca1\u6709\u6b4c\u5355\u3002'
     return
   }
@@ -6900,6 +7036,7 @@ function updatePlaylistCardNode(node, placement, { force = false } = {}) {
 
   node.classList.toggle('is-current', state.queuePlaylistId === playlist.id)
   node.classList.toggle('is-collapsed', collapsed)
+  node.classList.toggle('is-playlist-focus-flash', Number(renderRuntime.focusFlashPlaylistId || 0) === Number(playlist.id || 0))
   node.style.top = `${Math.round(placement.top)}px`
   node.style.setProperty('contain-intrinsic-size', `auto ${intrinsicHeight}px`)
 
@@ -6930,7 +7067,7 @@ function renderPlaylistCard(placement, rowWindow) {
 
   return `
     <article
-      class="playlist-card${state.queuePlaylistId === playlist.id ? ' is-current' : ''}${isPlaylistCollapsed(playlist) ? ' is-collapsed' : ''}"
+      class="playlist-card${state.queuePlaylistId === playlist.id ? ' is-current' : ''}${isPlaylistCollapsed(playlist) ? ' is-collapsed' : ''}${Number(renderRuntime.focusFlashPlaylistId || 0) === Number(playlist.id || 0) ? ' is-playlist-focus-flash' : ''}"
       data-playlist-id="${playlist.id}"
       data-header-key="${escapeHtml(headerKey)}"
       data-row-window-key="${rowWindow.key}"
@@ -8596,6 +8733,7 @@ function renderContextMenu() {
 
 function buildContextMenuItems(context) {
   const pinToTopPlan = getContextMenuPinToTopPlan(context)
+  const canSendToAi = canSendContextTrackToAi(context)
   const transferItems = (context.transferTargets || []).length
     ? context.transferTargets.map((target) => ({
       action: 'transfer-track',
@@ -8633,9 +8771,17 @@ function buildContextMenuItems(context) {
     })
   }
 
-  if (pinToTopPlan || context.canRemove) {
+  if (canSendToAi || pinToTopPlan || context.canRemove) {
     if (items.length) {
       items.push({ type: 'divider' })
+    }
+    if (canSendToAi) {
+      items.push({
+        action: 'send-to-ai-similar-songs',
+        id: 'context-send-to-ai-similar-songs-btn',
+        label: TEXT.sendToAiSimilarSongs,
+        type: 'button',
+      })
     }
     if (pinToTopPlan) {
       items.push({
@@ -8713,6 +8859,44 @@ function buildContextMenuItems(context) {
   }
 
   return items
+}
+
+function canSendContextTrackToAi(context) {
+  const track = context?.track || null
+  return Boolean(
+    state.ai.enabled
+    && canUseNeteaseFeatures()
+    && !state.aiChat.busy
+    && track
+    && Number(track.id || 0) > 0
+    && String(track?.sourcePlatform || '').trim() !== 'spotify'
+  )
+}
+
+function buildAiSimilarSongsPrompt(track) {
+  const artists = Array.isArray(track?.artists) ? track.artists.join(' / ') : ''
+  const album = String(track?.album || '').trim()
+  const parts = [track?.name || '', artists].filter(Boolean).join(' - ')
+  const albumText = album ? `，专辑《${album}》` : ''
+  return `以这首歌《${parts}》${albumText}为参考，结合我的听歌品味，推荐相似但不要重复的歌曲，并创建一张歌单。`
+}
+
+async function sendTrackToAiSimilarSongsFromContextMenu() {
+  const context = renderRuntime.contextMenuTrack
+  const track = context?.track || null
+  closeContextMenu()
+
+  if (!state.ai.enabled || !canUseNeteaseFeatures() || !track || Number(track.id || 0) <= 0) {
+    showToast(TEXT.sendToAiSimilarSongsFailed, 'error')
+    return
+  }
+  if (String(track?.sourcePlatform || '').trim() === 'spotify') {
+    showToast(TEXT.sendToAiSimilarSongsFailed, 'error')
+    return
+  }
+
+  openAiChatPanel()
+  await sendAiMessage(buildAiSimilarSongsPrompt(track))
 }
 
 function getContextMenuPinToTopPlan(context) {
@@ -9016,6 +9200,58 @@ async function focusTrackRowInPlaylist(playlistId, trackId) {
   return row
 }
 
+function updatePlaylistFocusFlashState(playlistId, isFlashing, { restart = false } = {}) {
+  const normalizedPlaylistId = Number(playlistId || 0)
+  if (normalizedPlaylistId <= 0) {
+    return
+  }
+
+  const card = refs.wallColumns?.querySelector?.(`.playlist-card[data-playlist-id="${normalizedPlaylistId}"]`)
+  if (!card) {
+    return
+  }
+
+  if (restart) {
+    card.classList.remove('is-playlist-focus-flash')
+    void card.offsetWidth
+  }
+
+  card.classList.toggle('is-playlist-focus-flash', isFlashing)
+}
+
+function flashPlaylistFocus(playlistId) {
+  const normalizedPlaylistId = Number(playlistId || 0)
+  if (normalizedPlaylistId <= 0) {
+    return
+  }
+
+  window.clearTimeout(renderRuntime.playlistFocusFlashTimer)
+  renderRuntime.playlistFocusFlashTimer = 0
+
+  if (renderRuntime.focusFlashPlaylistId) {
+    updatePlaylistFocusFlashState(renderRuntime.focusFlashPlaylistId, false)
+  }
+
+  renderRuntime.focusFlashPlaylistId = normalizedPlaylistId
+  updatePlaylistFocusFlashState(normalizedPlaylistId, true, { restart: true })
+
+  renderRuntime.playlistFocusFlashTimer = window.setTimeout(() => {
+    updatePlaylistFocusFlashState(normalizedPlaylistId, false)
+    if (Number(renderRuntime.focusFlashPlaylistId || 0) === normalizedPlaylistId) {
+      renderRuntime.focusFlashPlaylistId = 0
+    }
+    renderRuntime.playlistFocusFlashTimer = 0
+  }, PLAYLIST_FOCUS_FLASH_MS)
+}
+
+async function focusAndFlashPlaylist(tab, playlistId, options = {}) {
+  const focused = await focusPlaylistCardInTab(tab, playlistId, options)
+  if (focused) {
+    flashPlaylistFocus(playlistId)
+  }
+  return focused
+}
+
 async function focusPlaylistCardInTab(tab, playlistId, options = {}) {
   const normalizedPlaylistId = Number(playlistId || 0)
   if (normalizedPlaylistId === 0) {
@@ -9212,6 +9448,11 @@ function handleContextMenuClick(event) {
 
   if (action === 'pin-track-to-top') {
     void pinTracksToTopFromContextMenu()
+    return
+  }
+
+  if (action === 'send-to-ai-similar-songs') {
+    void sendTrackToAiSimilarSongsFromContextMenu()
     return
   }
 
@@ -12075,6 +12316,7 @@ function renderSettings() {
   )
   refs.autoAdjustAudioQualityToggle.checked = state.settings.autoAdjustAudioQuality !== false
   refs.concertsEnabledToggle.checked = Boolean(state.settings.concertsEnabled)
+  hydrateAiSettings()
   renderVolumeAssistSettings()
   refs.lyricsButtonToggle.checked = shouldShowLyricsButton()
   syncLyricsButtonVisibility()
@@ -12410,10 +12652,7 @@ async function submitPlaylistEditor() {
       }
 
       setPlaylists(upsertPlaylistIntoLibrary(state.playlists, result.playlist))
-      const ownedIds = getOwnedPlaylists()
-        .filter((playlist) => Number(playlist.id || 0) !== Number(result.playlist.id || 0))
-        .map((playlist) => playlist.id)
-      setPlaylistOrderIdsForTab('owned', [Number(result.playlist.id || 0), ...ownedIds], { persist: true })
+      pinOwnedPlaylistToFront(result.playlist.id, { persist: true, syncServer: true })
       editorState.saving = false
       closePlaylistEditor()
       refreshUiAfterOwnedPlaylistMutation()
@@ -12892,6 +13131,7 @@ async function hydrateStoredPreferences() {
   )
   state.settings.uiScale = normalizeUiScale(result.preferences.uiScale)
   state.settings.concertsEnabled = Boolean(result.preferences.concertsEnabled)
+  applyAiPreferences(result.preferences.aiAssistant)
 
   try {
     window.localStorage.setItem(THEME_STORAGE_KEY, state.theme)
@@ -12920,6 +13160,19 @@ async function persistPreferences() {
     ownedPlaylistOrderIds: normalizePlaylistOrderIds(state.settings.ownedPlaylistOrderIds),
     uiScale: normalizeUiScale(state.settings.uiScale),
     concertsEnabled: Boolean(state.settings.concertsEnabled),
+    aiAssistant: {
+      enabled: Boolean(state.ai.enabled),
+      provider: state.ai.provider,
+      cliPath: state.ai.cliPath,
+      model: state.ai.model,
+      ollamaModel: state.ai.ollamaModel,
+      playlistCount: Number(state.ai.playlistCount) || 30,
+      permissions: {
+        generate: state.ai.permissions.generate !== false,
+        modify: Boolean(state.ai.permissions.modify),
+        delete: Boolean(state.ai.permissions.delete),
+      },
+    },
   })
 }
 
@@ -13589,4 +13842,529 @@ async function openQuickAddFromClipboard() {
   renderRuntime.quickAddState.tracks = tracks
   renderRuntime.quickAddState.selectedTrackId = Number(tracks[0]?.id || 0)
   renderQuickAddModal()
+}
+
+/* ===================== AI 歌单助手 ===================== */
+
+const AI_PROVIDER_LABELS = { claude: 'Claude CLI', codex: 'Codex CLI', ollama: 'Ollama' }
+
+// 把主进程偏好里的 aiAssistant 读进 state.ai，并刷新所有与 AI 启用状态相关的 UI。
+function applyAiPreferences(raw) {
+  const ai = raw && typeof raw === 'object' ? raw : {}
+  const perms = ai.permissions && typeof ai.permissions === 'object' ? ai.permissions : {}
+  state.ai.enabled = Boolean(ai.enabled)
+  state.ai.provider = ['claude', 'codex', 'ollama'].includes(ai.provider) ? ai.provider : 'claude'
+  state.ai.cliPath = typeof ai.cliPath === 'string' ? ai.cliPath : ''
+  state.ai.model = typeof ai.model === 'string' ? ai.model : ''
+  state.ai.ollamaModel = typeof ai.ollamaModel === 'string' && ai.ollamaModel ? ai.ollamaModel : 'qwen2.5:7b'
+  state.ai.playlistCount = Number(ai.playlistCount) || 30
+  state.ai.permissions = {
+    generate: perms.generate !== false,
+    modify: Boolean(perms.modify),
+    delete: Boolean(perms.delete),
+  }
+  syncAiEntryVisibility()
+  hydrateAiSettings()
+}
+
+// AI 入口按钮：仅在启用且已登录网易云时显示。
+function syncAiEntryVisibility() {
+  if (!refs.aiChatBtn) {
+    return
+  }
+  const visible = Boolean(state.ai.enabled) && canUseNeteaseFeatures()
+  refs.aiChatBtn.classList.toggle('hidden', !visible)
+  if (!visible && state.aiChat.open) {
+    closeAiChatPanel()
+  }
+}
+
+// 把 state.ai 写回设置控件。
+function hydrateAiSettings() {
+  if (!refs.aiEnabledToggle) {
+    return
+  }
+  refs.aiEnabledToggle.checked = Boolean(state.ai.enabled)
+  refs.aiSettingsBlock.classList.toggle('hidden', !state.ai.enabled)
+  refs.aiProviderSelect.value = state.ai.provider
+  refs.aiCliPathInput.value = state.ai.cliPath
+  refs.aiPlaylistCountRange.value = String(state.ai.playlistCount)
+  refs.aiPlaylistCountValue.textContent = String(state.ai.playlistCount)
+  refs.aiPermGenerate.checked = state.ai.permissions.generate !== false
+  refs.aiPermModify.checked = Boolean(state.ai.permissions.modify)
+  refs.aiPermDelete.checked = Boolean(state.ai.permissions.delete)
+  syncAiModelField()
+}
+
+// Ollama 用下拉选模型，Claude/Codex 用文本框填模型名。
+function syncAiModelField() {
+  const isOllama = state.ai.provider === 'ollama'
+  refs.aiOllamaModelSelect.classList.toggle('hidden', !isOllama)
+  refs.aiModelInput.classList.toggle('hidden', isOllama)
+  if (isOllama) {
+    refs.aiModelInput.value = state.ai.ollamaModel
+  } else {
+    refs.aiModelInput.value = state.ai.model
+  }
+}
+
+function readAiSettingsFromControls() {
+  state.ai.enabled = refs.aiEnabledToggle.checked
+  state.ai.provider = refs.aiProviderSelect.value
+  state.ai.cliPath = refs.aiCliPathInput.value.trim()
+  state.ai.playlistCount = Number(refs.aiPlaylistCountRange.value) || 30
+  state.ai.permissions = {
+    generate: refs.aiPermGenerate.checked,
+    modify: refs.aiPermModify.checked,
+    delete: refs.aiPermDelete.checked,
+  }
+  if (state.ai.provider === 'ollama') {
+    const selected = refs.aiOllamaModelSelect.value || refs.aiModelInput.value.trim()
+    if (selected) {
+      state.ai.ollamaModel = selected
+    }
+  } else {
+    state.ai.model = refs.aiModelInput.value.trim()
+  }
+}
+
+async function handleAiSettingsChange() {
+  readAiSettingsFromControls()
+  refs.aiSettingsBlock.classList.toggle('hidden', !state.ai.enabled)
+  syncAiModelField()
+  syncAiEntryVisibility()
+  await persistPreferences()
+}
+
+async function detectAiProvider() {
+  if (!appBridge || typeof appBridge.detectAiCli !== 'function') {
+    return
+  }
+  const provider = refs.aiProviderSelect.value
+  refs.aiDetectStatus.textContent = '正在检测…'
+  refs.aiDetectStatus.classList.remove('is-ok', 'is-error')
+  const result = await appBridge.detectAiCli(provider, refs.aiCliPathInput.value.trim())
+  if (result?.available) {
+    refs.aiDetectStatus.textContent = `可用：${result.version || AI_PROVIDER_LABELS[provider]}`
+    refs.aiDetectStatus.classList.add('is-ok')
+    if (provider === 'ollama') {
+      await refreshOllamaModels()
+    }
+  } else {
+    refs.aiDetectStatus.textContent = `不可用：${result?.error || '未找到该 CLI'}`
+    refs.aiDetectStatus.classList.add('is-error')
+  }
+}
+
+async function refreshOllamaModels() {
+  if (!appBridge || typeof appBridge.listOllamaModels !== 'function') {
+    return
+  }
+  const result = await appBridge.listOllamaModels(refs.aiCliPathInput.value.trim())
+  const models = result?.ok ? result.models : []
+  refs.aiOllamaModelSelect.innerHTML = ''
+  if (!models.length) {
+    const opt = document.createElement('option')
+    opt.value = state.ai.ollamaModel
+    opt.textContent = `${state.ai.ollamaModel}（未检测到已安装模型）`
+    refs.aiOllamaModelSelect.appendChild(opt)
+  } else {
+    for (const name of models) {
+      const opt = document.createElement('option')
+      opt.value = name
+      opt.textContent = name
+      refs.aiOllamaModelSelect.appendChild(opt)
+    }
+    if (models.includes(state.ai.ollamaModel)) {
+      refs.aiOllamaModelSelect.value = state.ai.ollamaModel
+    } else {
+      state.ai.ollamaModel = models[0]
+    }
+  }
+}
+
+// ---------- 聊天面板 ----------
+
+function openAiChatPanel() {
+  if (!state.ai.enabled || !canUseNeteaseFeatures()) {
+    showToast('请先在设置中启用 AI 助手', 'error')
+    return
+  }
+  state.aiChat.open = true
+  refs.aiChatPanel.classList.remove('hidden')
+  if (!state.aiChat.messages.length) {
+    appendAiMessage('assistant', `你好，我是你的网易云歌单助手（当前引擎：${AI_PROVIDER_LABELS[state.ai.provider]}）。\n点下面的快捷按钮，或直接告诉我你想要什么样的歌单。`)
+  }
+  refs.aiChatInput.focus()
+}
+
+function closeAiChatPanel() {
+  state.aiChat.open = false
+  refs.aiChatPanel.classList.add('hidden')
+}
+
+function toggleAiChatPanel() {
+  if (state.aiChat.open) {
+    closeAiChatPanel()
+  } else {
+    openAiChatPanel()
+  }
+}
+
+function appendAiMessage(role, text) {
+  const id = ++state.aiChat.streamingId
+  state.aiChat.messages.push({ id, role, text: text || '', tools: [], streaming: false })
+  renderAiMessages()
+  return id
+}
+
+function getAiMessage(id) {
+  return state.aiChat.messages.find((m) => m.id === id)
+}
+
+function renderAiMessages() {
+  const html = state.aiChat.messages.map((msg) => {
+    if (msg.role === 'status') {
+      return `<div class="ai-status-line"><span class="ai-status-line__spinner"></span><span>${escapeHtml(msg.text)}</span></div>`
+    }
+    if (msg.role === 'tool') {
+      const detail = msg.text ? `<div class="ai-tool-card__detail">${escapeHtml(msg.text)}</div>` : ''
+      return `<div class="ai-tool-card"><div class="ai-tool-card__name">${escapeHtml(msg.toolLabel || msg.text)}</div>${detail}</div>`
+    }
+    const cls = msg.role === 'user' ? 'ai-msg--user' : msg.role === 'error' ? 'ai-msg--error' : 'ai-msg--assistant'
+    const cursor = msg.streaming ? '<span class="ai-msg__cursor">▋</span>' : ''
+    return `<div class="ai-msg ${cls}">${escapeHtml(msg.text)}${cursor}</div>`
+  }).join('')
+  // 只要 AI 在运行，就在消息流末尾常驻一个「运行中」指示器，
+  // 它独立于 status 角色消息，不会被 removeAiStatus() 删掉。
+  const running = state.aiChat.busy
+    ? `<div class="ai-running" id="ai-running-line"><span class="ai-status-line__spinner"></span><span class="ai-running__text">${escapeHtml(aiRunningText())}</span></div>`
+    : ''
+  refs.aiChatMessages.innerHTML = html + running
+  refs.aiChatMessages.scrollTop = refs.aiChatMessages.scrollHeight
+}
+
+// 组装运行指示器文案：阶段 · 已运行 Xs（长时间无输出时追加「仍在处理中」）。
+function aiRunningText() {
+  const now = Date.now()
+  const elapsed = Math.max(0, Math.floor((now - (state.aiChat.runningSince || now)) / 1000))
+  const phase = state.aiChat.phaseText || '正在处理'
+  const idle = now - (state.aiChat.lastActivityAt || now) > 8000
+  return `${phase} · 已运行 ${elapsed}s${idle ? '（仍在处理中…）' : ''}`
+}
+
+// 每秒只更新运行行的文字，避免整块重渲染打断用户选中文本。
+function renderAiRunningLine() {
+  const line = document.getElementById('ai-running-line')
+  if (!line) {
+    if (state.aiChat.busy) {
+      renderAiMessages()
+    }
+    return
+  }
+  const textEl = line.querySelector('.ai-running__text')
+  if (textEl) {
+    textEl.textContent = aiRunningText()
+  }
+}
+
+function startAiTick() {
+  stopAiTick()
+  state.aiChat.tickTimer = setInterval(renderAiRunningLine, 1000)
+}
+
+function stopAiTick() {
+  if (state.aiChat.tickTimer) {
+    clearInterval(state.aiChat.tickTimer)
+    state.aiChat.tickTimer = null
+  }
+}
+
+// 工具名 -> 中文动作描述
+function describeAiTool(name, input) {
+  const map = {
+    get_taste_profile: '分析你的音乐品味',
+    list_my_playlists: '查看你的歌单列表',
+    get_playlist_tracks: '读取歌单内容',
+    search_songs: `搜索歌曲${input?.keywords ? `：${input.keywords}` : ''}`,
+    create_playlist: `创建歌单${input?.name ? `《${input.name}》` : ''}`,
+    add_tracks: '向歌单添加歌曲',
+    remove_tracks: '从歌单移除歌曲',
+    rename_playlist: '重命名歌单',
+    delete_playlist: '删除歌单',
+  }
+  return map[name] || `调用工具 ${name}`
+}
+
+function setAiBusy(busy) {
+  state.aiChat.busy = busy
+  refs.aiChatSendBtn.classList.toggle('hidden', busy)
+  refs.aiChatStopBtn.classList.toggle('hidden', !busy)
+  refs.aiChatInput.disabled = busy
+  if (busy) {
+    const now = Date.now()
+    state.aiChat.runningSince = now
+    state.aiChat.lastActivityAt = now
+    state.aiChat.phaseText = '正在启动 AI'
+    startAiTick()
+  } else {
+    stopAiTick()
+    state.aiChat.phaseText = ''
+  }
+  renderAiMessages()
+}
+
+async function sendAiMessage(text) {
+  const content = String(text || '').trim()
+  if (!content || state.aiChat.busy) {
+    return
+  }
+  appendAiMessage('user', content)
+  refs.aiChatInput.value = ''
+  autoSizeAiInput()
+
+  // 组装历史（只取 user/assistant 文本）。
+  const history = state.aiChat.messages
+    .filter((m) => (m.role === 'user' || m.role === 'assistant') && m.text)
+    .slice(-10)
+    .map((m) => ({ role: m.role, content: m.text }))
+
+  const sessionId = `ai-${Date.now()}`
+  state.aiChat.sessionId = sessionId
+  setAiBusy(true)
+  // 「正在启动 AI」由常驻运行指示器（setAiBusy 中启动）显示，无需再插 status 消息。
+
+  const result = await appBridge.aiChatStart({ sessionId, prompt: content, history })
+  if (!result?.ok) {
+    removeAiStatus()
+    appendAiMessage('error', result?.error || 'AI 启动失败')
+    setAiBusy(false)
+  }
+}
+
+function removeAiStatus() {
+  state.aiChat.messages = state.aiChat.messages.filter((m) => m.role !== 'status')
+}
+
+function ensureStreamingAssistant() {
+  let msg = [...state.aiChat.messages].reverse().find((m) => m.role === 'assistant' && m.streaming)
+  if (!msg) {
+    removeAiStatus()
+    const id = appendAiMessage('assistant', '')
+    msg = getAiMessage(id)
+    msg.streaming = true
+  }
+  return msg
+}
+
+// 处理主进程推来的流式事件。
+function handleAiChatEvent(payload) {
+  if (!payload || payload.sessionId !== state.aiChat.sessionId) {
+    return
+  }
+  const { type } = payload
+  // 任何事件都刷新「最近活动时间」，证明后端进程还活着。
+  state.aiChat.lastActivityAt = Date.now()
+  if (type === 'heartbeat') {
+    // 心跳仅用于保活计时，不改阶段文案、不增删消息。
+    renderAiRunningLine()
+    return
+  }
+  if (type === 'status') {
+    state.aiChat.phaseText = payload.message || '正在处理'
+    removeAiStatus()
+    state.aiChat.messages.push({ id: ++state.aiChat.streamingId, role: 'status', text: payload.message || '处理中…' })
+    renderAiMessages()
+  } else if (type === 'token') {
+    state.aiChat.phaseText = '正在回复'
+    const msg = ensureStreamingAssistant()
+    msg.text += payload.text || ''
+    renderAiMessages()
+  } else if (type === 'tool') {
+    const label = describeAiTool(payload.name, payload.input)
+    state.aiChat.phaseText = label
+    removeAiStatus()
+    const detail = payload.output?.matched ? `→ ${payload.output.matched}` : ''
+    state.aiChat.messages.push({ id: ++state.aiChat.streamingId, role: 'tool', toolLabel: label, text: detail })
+    renderAiMessages()
+  } else if (type === 'done') {
+    removeAiStatus()
+    const msg = [...state.aiChat.messages].reverse().find((m) => m.role === 'assistant' && m.streaming)
+    if (msg) {
+      msg.streaming = false
+      if (payload.text && payload.text.length > msg.text.length) {
+        msg.text = payload.text
+      }
+    } else if (payload.text) {
+      appendAiMessage('assistant', payload.text)
+    }
+    setAiBusy(false)
+    if (payload.playlist) {
+      showToast(`已生成歌单《${payload.playlist.name}》`, 'success')
+      void refreshLibraryAfterAi(payload.playlist)
+    } else {
+      void refreshLibraryAfterAi()
+    }
+    renderAiMessages()
+  } else if (type === 'error') {
+    removeAiStatus()
+    const streaming = state.aiChat.messages.find((m) => m.role === 'assistant' && m.streaming)
+    if (streaming) {
+      streaming.streaming = false
+    }
+    appendAiMessage('error', payload.message || 'AI 运行出错')
+    setAiBusy(false)
+  }
+}
+
+function resolveAiGeneratedPlaylistId(payloadPlaylist, refreshedPlaylists, previousPlaylists) {
+  const explicitId = Number(payloadPlaylist?.id || 0)
+  if (explicitId > 0 && refreshedPlaylists.some((playlist) => Number(playlist.id || 0) === explicitId)) {
+    return explicitId
+  }
+
+  const previousIds = new Set((previousPlaylists || [])
+    .map((playlist) => Number(playlist?.id || 0))
+    .filter((playlistId) => playlistId > 0))
+  const newOwned = (refreshedPlaylists || []).filter((playlist) => {
+    const playlistId = Number(playlist?.id || 0)
+    return playlistId > 0 && !previousIds.has(playlistId) && isOwnedPlaylist(playlist)
+  })
+
+  if (newOwned.length === 1) {
+    return Number(newOwned[0].id || 0)
+  }
+
+  const payloadName = normalizeQuery(payloadPlaylist?.name || '')
+  if (payloadName) {
+    const named = newOwned.find((playlist) => normalizeQuery(playlist?.name || '') === payloadName)
+      || refreshedPlaylists.find((playlist) => normalizeQuery(playlist?.name || '') === payloadName)
+    if (named) {
+      return Number(named.id || 0)
+    }
+  }
+
+  return explicitId > 0 ? explicitId : 0
+}
+
+// AI 改动了歌单后，静默刷新一次曲库让新歌单出现。
+async function refreshLibraryAfterAi(payloadPlaylist = null) {
+  try {
+    if (appBridge && typeof appBridge.refreshLibrary === 'function') {
+      const previousPlaylists = state.playlists.slice()
+      const result = await appBridge.refreshLibrary({ reason: 'ai-generated' })
+      if (result?.ok && Array.isArray(result.playlists)) {
+        const refreshedPlaylists = sortWallPlaylists(result.playlists.map(normalizePlaylist))
+        const generatedPlaylistId = resolveAiGeneratedPlaylistId(payloadPlaylist, refreshedPlaylists, previousPlaylists)
+        setPlaylists(refreshedPlaylists)
+        if (generatedPlaylistId > 0) {
+          pinOwnedPlaylistToFront(generatedPlaylistId, { playlists: state.playlists, persist: true, syncServer: true })
+          await focusAndFlashPlaylist('owned', generatedPlaylistId)
+        } else {
+          applyFilters({ syncAll: true })
+        }
+      }
+    }
+  } catch {
+    // ignore：刷新失败不影响对话
+  }
+}
+
+function autoSizeAiInput() {
+  const el = refs.aiChatInput
+  el.style.height = 'auto'
+  el.style.height = `${Math.min(el.scrollHeight, 120)}px`
+}
+
+// AI 面板拖拽（复用 direct-song 的范式）。
+function handleAiChatPointerDown(event) {
+  if (event.button !== 0 || !refs.aiChatPanel || event.target?.closest?.('.ai-chat-panel__close')) {
+    return
+  }
+  const rect = refs.aiChatPanel.getBoundingClientRect()
+  renderRuntime.aiChatDragState = {
+    pointerId: event.pointerId,
+    offsetX: event.clientX - rect.left,
+    offsetY: event.clientY - rect.top,
+  }
+  refs.aiChatDragHandle.classList.add('is-dragging')
+  refs.aiChatDragHandle.setPointerCapture?.(event.pointerId)
+  event.preventDefault()
+}
+
+function handleAiChatPointerMove(event) {
+  const dragState = renderRuntime.aiChatDragState
+  if (!dragState || dragState.pointerId !== event.pointerId || !refs.aiChatPanel) {
+    return
+  }
+  const padding = 12
+  const width = refs.aiChatPanel.offsetWidth
+  const height = refs.aiChatPanel.offsetHeight
+  const left = clamp(Math.round(event.clientX - dragState.offsetX), padding, Math.max(padding, window.innerWidth - width - padding))
+  const top = clamp(Math.round(event.clientY - dragState.offsetY), padding, Math.max(padding, window.innerHeight - height - padding))
+  refs.aiChatPanel.style.left = `${left}px`
+  refs.aiChatPanel.style.top = `${top}px`
+  refs.aiChatPanel.style.right = 'auto'
+  event.preventDefault()
+}
+
+function handleAiChatPointerUp(event) {
+  const dragState = renderRuntime.aiChatDragState
+  if (!dragState || dragState.pointerId !== event.pointerId) {
+    return
+  }
+  renderRuntime.aiChatDragState = null
+  refs.aiChatDragHandle?.classList.remove('is-dragging')
+  refs.aiChatDragHandle?.releasePointerCapture?.(event.pointerId)
+}
+
+// 绑定所有 AI 相关事件（在 bindEvents 末尾调用一次）。
+function bindAiEvents() {
+  if (!refs.aiEnabledToggle) {
+    return
+  }
+  refs.aiEnabledToggle.addEventListener('change', handleAiSettingsChange)
+  refs.aiProviderSelect.addEventListener('change', () => {
+    readAiSettingsFromControls()
+    syncAiModelField()
+    refs.aiDetectStatus.textContent = '尚未检测'
+    refs.aiDetectStatus.classList.remove('is-ok', 'is-error')
+    void handleAiSettingsChange()
+  })
+  refs.aiDetectBtn.addEventListener('click', () => void detectAiProvider())
+  refs.aiCliPathInput.addEventListener('change', handleAiSettingsChange)
+  refs.aiModelInput.addEventListener('change', handleAiSettingsChange)
+  refs.aiOllamaModelSelect.addEventListener('change', handleAiSettingsChange)
+  refs.aiPlaylistCountRange.addEventListener('input', () => {
+    refs.aiPlaylistCountValue.textContent = String(refs.aiPlaylistCountRange.value)
+  })
+  refs.aiPlaylistCountRange.addEventListener('change', handleAiSettingsChange)
+  refs.aiPermGenerate.addEventListener('change', handleAiSettingsChange)
+  refs.aiPermModify.addEventListener('change', handleAiSettingsChange)
+  refs.aiPermDelete.addEventListener('change', handleAiSettingsChange)
+
+  refs.aiChatBtn.addEventListener('click', toggleAiChatPanel)
+  refs.aiChatCloseBtn.addEventListener('click', closeAiChatPanel)
+  refs.aiChatDragHandle.addEventListener('pointerdown', handleAiChatPointerDown)
+  window.addEventListener('pointermove', handleAiChatPointerMove)
+  window.addEventListener('pointerup', handleAiChatPointerUp)
+  refs.aiChatSendBtn.addEventListener('click', () => void sendAiMessage(refs.aiChatInput.value))
+  refs.aiChatStopBtn.addEventListener('click', () => {
+    if (state.aiChat.sessionId && appBridge.aiChatCancel) {
+      void appBridge.aiChatCancel(state.aiChat.sessionId)
+    }
+  })
+  refs.aiChatInput.addEventListener('input', autoSizeAiInput)
+  refs.aiChatInput.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault()
+      void sendAiMessage(refs.aiChatInput.value)
+    }
+  })
+  refs.aiChatQuick.addEventListener('click', (event) => {
+    const btn = event.target?.closest?.('[data-ai-quick]')
+    if (btn) {
+      void sendAiMessage(btn.dataset.aiQuick)
+    }
+  })
 }

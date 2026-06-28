@@ -1903,12 +1903,16 @@ class NeteaseService {
     }
   }
 
-  async listPlaylists(userId) {
+  async listPlaylists(userId, options = {}) {
     const response = await callApi('user_playlist', {
       cookie: this.cookie,
       uid: userId,
       limit: 1000,
       timestamp: Date.now(),
+    }, {
+      maxAttempts: options.maxAttempts,
+      timeoutMs: options.timeoutMs,
+      retryDelayMs: options.retryDelayMs,
     })
 
     const playlists = asArray(response.body?.playlist)
@@ -1937,7 +1941,7 @@ class NeteaseService {
     return normalizePlaylistSummary(response.body?.playlist || { id: normalizedPlaylistId })
   }
 
-  async getUserPlayCounts(userId) {
+  async getUserPlayCounts(userId, options = {}) {
     const response = await callApi('user_record', {
       cookie: this.cookie,
       uid: userId,
@@ -1947,6 +1951,9 @@ class NeteaseService {
       codeMessages: {
         301: '\u542c\u6b4c\u6392\u884c\u9700\u8981\u6709\u6548\u7684\u7f51\u6613\u4e91\u767b\u5f55\u6001\uff0c\u8bf7\u5237\u65b0\u767b\u5f55\u540e\u518d\u8bd5\u3002',
       },
+      maxAttempts: options.maxAttempts,
+      timeoutMs: options.timeoutMs,
+      retryDelayMs: options.retryDelayMs,
     })
 
     const body = response.body || {}
@@ -2002,17 +2009,26 @@ class NeteaseService {
     return true
   }
 
-  async getPlaylistTracks(playlistId, expectedCount = 0) {
+  async getPlaylistTracks(playlistId, expectedCount = 0, options = {}) {
     const tracks = []
     let offset = 0
+    const normalizedExpectedCount = Math.max(0, Math.trunc(Number(expectedCount || 0)))
 
     while (true) {
+      const remaining = normalizedExpectedCount > 0
+        ? Math.max(1, normalizedExpectedCount - tracks.length)
+        : PLAYLIST_PAGE_SIZE
+      const limit = Math.min(PLAYLIST_PAGE_SIZE, remaining)
       const response = await callApi('playlist_track_all', {
         cookie: this.cookie,
         id: playlistId,
-        limit: PLAYLIST_PAGE_SIZE,
+        limit,
         offset,
         timestamp: Date.now(),
+      }, {
+        maxAttempts: options.maxAttempts,
+        timeoutMs: options.timeoutMs,
+        retryDelayMs: options.retryDelayMs,
       })
 
       const songs = normalizeSongs(response.body)
@@ -2027,12 +2043,14 @@ class NeteaseService {
       }
 
       offset += songs.length
-      if (expectedCount > 0 && tracks.length >= expectedCount) {
+      if (normalizedExpectedCount > 0 && tracks.length >= normalizedExpectedCount) {
         break
       }
     }
 
-    return tracks.map((track, index) => ({
+    const limitedTracks = normalizedExpectedCount > 0 ? tracks.slice(0, normalizedExpectedCount) : tracks
+
+    return limitedTracks.map((track, index) => ({
       ...track,
       position: index + 1,
     }))
