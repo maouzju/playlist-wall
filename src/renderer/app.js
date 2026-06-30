@@ -1461,7 +1461,18 @@ function createMockBridge() {
       volumeAssistWheelListeners.add(callback)
       return () => volumeAssistWheelListeners.delete(callback)
     },
-    detectAiCli: async (provider) => ({ ok: true, available: false, error: '模拟环境无 CLI', version: '', provider }),
+    detectAiCli: async (provider, cliPath = '') => {
+      window.__mockDetectAiCliCalls = Array.isArray(window.__mockDetectAiCliCalls)
+        ? window.__mockDetectAiCliCalls
+        : []
+      window.__mockDetectAiCliCalls.push({ provider, cliPath })
+      if (window.__mockDetectAiCliResult) {
+        return typeof window.__mockDetectAiCliResult === 'function'
+          ? window.__mockDetectAiCliResult(provider, cliPath)
+          : window.__mockDetectAiCliResult
+      }
+      return { ok: true, available: false, error: '模拟环境无 CLI', version: '', provider }
+    },
     listOllamaModels: async () => ({ ok: true, models: [] }),
     aiChatStart: async ({ sessionId } = {}) => {
       // 记下最近一次会话 id，供测试钩子派发事件时回填。
@@ -5505,6 +5516,32 @@ function syncQueueWithPlaylists() {
   if (state.queueIndex >= queueTracks.length) {
     state.queueIndex = queueTracks.length - 1
   }
+}
+
+function switchCurrentPlaybackQueueToPlaylist(playlistId) {
+  if (state.queueMode !== 'playlist' || !state.currentTrackId) {
+    syncQueueWithPlaylists()
+    return false
+  }
+
+  const playlist = getPlaylistById(playlistId)
+  if (!playlist || getPlaylistSourcePlatform(playlist) === 'spotify') {
+    syncQueueWithPlaylists()
+    return false
+  }
+
+  const queueTracks = (playlist.tracks || []).map((track) => normalizePlaylistTrack(track))
+  const nextIndex = queueTracks.findIndex((track) => Number(track.id) === Number(state.currentTrackId))
+  if (nextIndex < 0) {
+    syncQueueWithPlaylists()
+    return false
+  }
+
+  state.queue = queueTracks
+  state.queuePlaylistId = playlist.id
+  state.queueContextLabel = ''
+  state.queueIndex = nextIndex
+  return true
 }
 
 function getOwnedPlaylists() {
@@ -10087,7 +10124,7 @@ function applyTrackMovePlan(plan) {
     && state.queuePlaylistId === plan.sourcePlaylist.id
     && (plan.trackIds || []).includes(Number(state.currentTrackId || 0))
   ) {
-    clearCurrentPlayback()
+    switchCurrentPlaybackQueueToPlaylist(plan.targetPlaylist.id)
   } else {
     syncQueueWithPlaylists()
   }
@@ -10172,7 +10209,16 @@ function rollbackTrackMovePlan(plan) {
   })
 
   setPlaylists(sortWallPlaylists(nextPlaylists))
-  syncQueueWithPlaylists()
+  if (
+    !plan.samePlaylist
+    && !plan.keepSource
+    && state.queuePlaylistId === plan.targetPlaylist.id
+    && movedTrackIds.includes(Number(state.currentTrackId || 0))
+  ) {
+    switchCurrentPlaybackQueueToPlaylist(plan.sourcePlaylist.id)
+  } else {
+    syncQueueWithPlaylists()
+  }
   renderTabs()
   renderHeader()
   renderPlayer()
@@ -13936,23 +13982,70 @@ async function handleAiSettingsChange() {
   await persistPreferences()
 }
 
-async function detectAiProvider() {
-  if (!appBridge || typeof appBridge.detectAiCli !== 'function') {
+function resetAiDetectStatus(message = '尚未检测', cancelActive = false) {
+  if (cancelActive) {
+    renderRuntime.aiDetectToken = (renderRuntime.aiDetectToken || 0) + 1
+    setAiDetectBusy(false)
+  }
+  if (!refs.aiDetectStatus) {
     return
   }
-  const provider = refs.aiProviderSelect.value
-  refs.aiDetectStatus.textContent = '正在检测…'
+  refs.aiDetectStatus.textContent = message
   refs.aiDetectStatus.classList.remove('is-ok', 'is-error')
-  const result = await appBridge.detectAiCli(provider, refs.aiCliPathInput.value.trim())
-  if (result?.available) {
-    refs.aiDetectStatus.textContent = `可用：${result.version || AI_PROVIDER_LABELS[provider]}`
-    refs.aiDetectStatus.classList.add('is-ok')
-    if (provider === 'ollama') {
-      await refreshOllamaModels()
+}
+
+function setAiDetectBusy(busy, provider = refs.aiProviderSelect?.value || state.ai.provider) {
+  if (refs.aiDetectBtn) {
+    refs.aiDetectBtn.disabled = Boolean(busy)
+    refs.aiDetectBtn.textContent = busy ? '检测中…' : '检测可用性'
+    refs.aiDetectBtn.setAttribute('aria-busy', String(Boolean(busy)))
+  }
+  if (refs.aiDetectStatus && busy) {
+    refs.aiDetectStatus.textContent = `正在检测 ${AI_PROVIDER_LABELS[provider] || provider}…`
+    refs.aiDetectStatus.classList.remove('is-ok', 'is-error')
+  }
+}
+
+async function detectAiProvider() {
+  if (!appBridge || typeof appBridge.detectAiCli !== 'function') {
+    if (refs.aiDetectStatus) {
+      refs.aiDetectStatus.textContent = '不可用：当前环境不支持 CLI 检测'
+      refs.aiDetectStatus.classList.add('is-error')
     }
-  } else {
-    refs.aiDetectStatus.textContent = `不可用：${result?.error || '未找到该 CLI'}`
-    refs.aiDetectStatus.classList.add('is-error')
+    return
+  }
+
+  const provider = refs.aiProviderSelect.value
+  const cliPath = refs.aiCliPathInput.value.trim()
+  const token = (renderRuntime.aiDetectToken || 0) + 1
+  renderRuntime.aiDetectToken = token
+  setAiDetectBusy(true, provider)
+
+  try {
+    const result = await appBridge.detectAiCli(provider, cliPath)
+    if (renderRuntime.aiDetectToken !== token) {
+      return
+    }
+    refs.aiDetectStatus.classList.remove('is-ok', 'is-error')
+    if (result?.available) {
+      refs.aiDetectStatus.textContent = `可用：${result.version || AI_PROVIDER_LABELS[provider]}`
+      refs.aiDetectStatus.classList.add('is-ok')
+      if (provider === 'ollama') {
+        await refreshOllamaModels()
+      }
+    } else {
+      refs.aiDetectStatus.textContent = `不可用：${result?.error || '未找到该 CLI'}`
+      refs.aiDetectStatus.classList.add('is-error')
+    }
+  } catch (error) {
+    if (renderRuntime.aiDetectToken === token) {
+      refs.aiDetectStatus.textContent = `检测失败：${error?.message || String(error)}`
+      refs.aiDetectStatus.classList.add('is-error')
+    }
+  } finally {
+    if (renderRuntime.aiDetectToken === token) {
+      setAiDetectBusy(false, provider)
+    }
   }
 }
 
@@ -14327,11 +14420,11 @@ function bindAiEvents() {
   refs.aiProviderSelect.addEventListener('change', () => {
     readAiSettingsFromControls()
     syncAiModelField()
-    refs.aiDetectStatus.textContent = '尚未检测'
-    refs.aiDetectStatus.classList.remove('is-ok', 'is-error')
+    resetAiDetectStatus('\u5c1a\u672a\u68c0\u6d4b', true)
     void handleAiSettingsChange()
   })
   refs.aiDetectBtn.addEventListener('click', () => void detectAiProvider())
+  refs.aiCliPathInput.addEventListener('input', () => resetAiDetectStatus('\u5c1a\u672a\u68c0\u6d4b', true))
   refs.aiCliPathInput.addEventListener('change', handleAiSettingsChange)
   refs.aiModelInput.addEventListener('change', handleAiSettingsChange)
   refs.aiOllamaModelSelect.addEventListener('change', handleAiSettingsChange)

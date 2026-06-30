@@ -1,4 +1,4 @@
-const { spawn } = require('child_process')
+const { spawnCli } = require('./cli-spawn')
 
 // AI 助手依赖的本地 CLI。每个 provider 给出默认命令名与版本探测参数；
 // 实际可执行路径可由用户在设置里覆盖（cliPath）。
@@ -26,15 +26,7 @@ function runProbe(command, args) {
 
     let child
     try {
-      // Windows 上 npm 安装的 CLI 是 .cmd 包装脚本，需要 shell:true 才能直接按命令名拉起。
-      // args 为写死的版本探测参数（无用户输入），shell 模式下整体拼成命令行字符串以避开 DEP0190。
-      const useShell = process.platform === 'win32'
-      const spawnTarget = useShell ? [command, ...args].join(' ') : command
-      const spawnArgs = useShell ? [] : args
-      child = spawn(spawnTarget, spawnArgs, {
-        shell: useShell,
-        windowsHide: true,
-      })
+      child = spawnCli(command, args)
     } catch (error) {
       finish({ available: false, error: error.message || String(error) })
       return
@@ -88,11 +80,7 @@ async function listOllamaModels(overridePath = '') {
     let stdout = ''
     let child
     try {
-      const useShell = process.platform === 'win32'
-      child = spawn(useShell ? `${command} list` : command, useShell ? [] : ['list'], {
-        shell: useShell,
-        windowsHide: true,
-      })
+      child = spawnCli(command, ['list'])
     } catch (error) {
       resolve({ ok: false, error: error.message || String(error), models: [] })
       return

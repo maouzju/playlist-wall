@@ -1,4 +1,4 @@
-﻿const { spawn } = require('child_process')
+const { spawnCli } = require('./cli-spawn')
 
 const OLLAMA_TIMEOUT_MS = 900000
 const FAST_API_OPTIONS = {
@@ -34,10 +34,13 @@ function runOllama(cliPath, model, promptText, onToken) {
     if (String(model || '').trim()) {
       args.push(String(model).trim())
     }
-    const child = spawn(command, args, {
-      shell: process.platform === 'win32',
-      windowsHide: true,
-    })
+    let child
+    try {
+      child = spawnCli(command, args)
+    } catch (error) {
+      reject(error)
+      return
+    }
 
     let stdout = ''
     let stderr = ''

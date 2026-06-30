@@ -21,7 +21,7 @@
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
-const { spawn } = require('child_process')
+const { spawnCli } = require('./cli-spawn')
 
 const MCP_SERVER_PATH = path.join(__dirname, 'netease-mcp-server.js')
 const MCP_SERVER_NAME = 'netease-music'
@@ -317,11 +317,7 @@ async function startChat(sessionId, options = {}) {
 
   let child
   try {
-    // Windows 上 npm 安装的 CLI 是 .cmd 包装，需要 shell:true。提示词走 stdin，不进命令行。
-    const useShell = process.platform === 'win32'
-    child = spawn(invocation.command, invocation.args, {
-      shell: useShell,
-      windowsHide: true,
+    child = spawnCli(invocation.command, invocation.args, {
       env: { ...process.env },
     })
   } catch (error) {

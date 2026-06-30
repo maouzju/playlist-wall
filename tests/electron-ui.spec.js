@@ -2531,6 +2531,46 @@ test('tracks can be dragged into another playlist at a chosen position', async (
   await expect(targetCard.locator('.playlist-meta')).toContainText(String(targetCountBefore + 1))
 })
 
+test('moving the currently playing track to another playlist keeps playback alive', async ({ page }) => {
+  await waitForWall(page, `${PAGE_URL}&trackMoveDelay=80`)
+  await mockPlayableSongUrl(page, 160)
+
+  const sourceCard = page.locator('.playlist-card[data-playlist-id="102"]')
+  const targetCard = page.locator('.playlist-card[data-playlist-id="103"]')
+
+  await sourceCard.locator('.track-row[data-track-id="102001"]').click()
+  await expect.poll(async () => {
+    return page.evaluate(() => document.getElementById('play-btn')?.dataset.state || '')
+  }).toBe('playing')
+
+  await dragTrack(
+    page,
+    '.playlist-card[data-playlist-id="102"] .track-row[data-track-id="102001"]',
+    '.playlist-card[data-playlist-id="103"] .track-row[data-track-id="103002"]',
+    'before'
+  )
+
+  await expect(targetCard.locator('.track-row[data-track-id="102001"]')).toHaveCount(1)
+  await expect(sourceCard.locator('.track-row[data-track-id="102001"]')).toHaveCount(0)
+  await expect(page.locator('#play-btn')).toHaveAttribute('data-state', 'playing')
+
+  await expect.poll(async () => {
+    return page.evaluate(() => {
+      const audio = document.getElementById('audio')
+      return {
+        paused: audio?.paused,
+        hasSrc: Boolean(audio?.getAttribute('src') || audio?.src),
+      }
+    })
+  }).toEqual({
+    paused: false,
+    hasSrc: true,
+  })
+  await expect(targetCard).toHaveClass(/is-current/)
+  await expect(sourceCard).not.toHaveClass(/is-current/)
+  await expect(targetCard.locator('.track-row[data-track-id="102001"]')).toHaveClass(/is-playing/)
+})
+
 test('track drag move applies immediately before async commit finishes', async ({ page }) => {
   await waitForWall(page, `${PAGE_URL}&trackMoveDelay=800`)
 
@@ -2880,6 +2920,37 @@ test('settings show configurable cache directory outside updater-covered app fol
   await page.click('#settings-cache-directory-reset-btn')
   await expect(page.locator('#settings-cache-directory-value')).toContainText('C:')
   await expect(page.locator('#settings-cache-directory-status')).toContainText('default')
+})
+
+test('AI CLI detection button shows progress, restores label, and resets stale status', async ({ page }) => {
+  await waitForWall(page, AUTH_PAGE_URL)
+  await page.click('#settings-btn')
+  await expect(page.locator('#settings-panel')).toHaveClass(/is-open/)
+  await setCheckbox(page, '#ai-enabled-toggle', true)
+
+  await page.evaluate(() => {
+    let resolveDetect
+    window.__mockDetectAiCliCalls = []
+    window.__mockDetectAiCliResult = new Promise((resolve) => {
+      resolveDetect = resolve
+    })
+    window.__resolveMockDetectAiCli = (payload) => resolveDetect(payload)
+  })
+
+  await page.click('#ai-detect-btn')
+  await expect(page.locator('#ai-detect-btn')).toBeDisabled()
+  await expect(page.locator('#ai-detect-btn')).toHaveText('\u68c0\u6d4b\u4e2d\u2026')
+  await expect(page.locator('#ai-detect-status')).toContainText('\u6b63\u5728\u68c0\u6d4b')
+
+  await page.evaluate(() => window.__resolveMockDetectAiCli({ available: true, version: 'codex-cli 0.139.0' }))
+  await expect(page.locator('#ai-detect-btn')).toBeEnabled()
+  await expect(page.locator('#ai-detect-btn')).toHaveText('\u68c0\u6d4b\u53ef\u7528\u6027')
+  await expect(page.locator('#ai-detect-status')).toContainText('\u53ef\u7528\uff1acodex-cli 0.139.0')
+  await expect(page.locator('#ai-detect-status')).toHaveClass(/is-ok/)
+
+  await page.fill('#ai-cli-path-input', 'C:\\Tools\\codex.cmd')
+  await expect(page.locator('#ai-detect-status')).toHaveText('\u5c1a\u672a\u68c0\u6d4b')
+  await expect(page.locator('#ai-detect-status')).not.toHaveClass(/is-ok/)
 })
 
 // 打开 AI 聊天面板（启用 AI 助手 + 已登录后入口才出现）。
